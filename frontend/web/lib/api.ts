@@ -22,10 +22,10 @@ export async function listTodos() {
   return request<{ items: Todo[] }>("/api/todos");
 }
 
-export async function createTodo(title: string) {
+export async function createTodo(title: string, options?: { deadlineAt?: string | null }) {
   return request<Todo>("/api/todos", {
     method: "POST",
-    body: JSON.stringify({ title }),
+    body: JSON.stringify({ title, deadlineAt: options?.deadlineAt ?? null }),
   });
 }
 
@@ -33,6 +33,36 @@ export async function setTodoStatus(id: string, status: "pending" | "done") {
   return request<Todo>(`/api/todos/${id}`, {
     method: "PATCH",
     body: JSON.stringify({ status }),
+  });
+}
+
+export async function updateTodo(
+  id: string,
+  patch: Partial<{
+    title: string;
+    context: string;
+    status: "pending" | "done";
+    indent: number;
+    deadlineAt: string | null;
+    archived: boolean;
+  }>,
+) {
+  return request<Todo>(`/api/todos/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteTodo(id: string) {
+  return request<{ deleted: true }>(`/api/todos/${id}`, {
+    method: "DELETE",
+  });
+}
+
+export async function reorderTodos(orderedTodoIds: string[]) {
+  return request<{ items: Todo[] }>("/api/todos/reorder", {
+    method: "PUT",
+    body: JSON.stringify({ orderedTodoIds }),
   });
 }
 

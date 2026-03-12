@@ -11,8 +11,9 @@ import {
   listOverlayState,
   listTodos,
   listZones,
+  reorderTodos,
   setZoneRequirements,
-  updateTodoStatus,
+  updateTodo,
   updateZone,
 } from "./store.js";
 import { errorLogger, requestLogger } from "./logger.js";
@@ -64,25 +65,95 @@ app.get("/api/todos", (_req, res) => {
 
 app.post("/api/todos", (req, res) => {
   const title = req.body?.title;
-  if (typeof title !== "string" || !title.trim()) {
+  const deadlineAt = req.body?.deadlineAt;
+  if (typeof title !== "string") {
     return badRequest(res, "title is required");
   }
-  const created = createTodo(title.trim());
+  if (deadlineAt !== undefined && deadlineAt !== null && typeof deadlineAt !== "string") {
+    return badRequest(res, "deadlineAt must be a string or null");
+  }
+  const created = createTodo(title, { deadlineAt: deadlineAt ?? null });
   ok(res, created);
   broadcastOverlayState();
 });
 
 app.patch("/api/todos/:id", (req, res) => {
   const status = req.body?.status;
-  if (status !== "pending" && status !== "done") {
+  const title = req.body?.title;
+  const context = req.body?.context;
+  const indent = req.body?.indent;
+  const archived = req.body?.archived;
+  const deadlineAt = req.body?.deadlineAt;
+  const parsedStatus = status === undefined ? undefined : status === "pending" || status === "done" ? status : null;
+  if (parsedStatus === null) {
     return badRequest(res, "status must be pending or done");
   }
-  const updated = updateTodoStatus(req.params.id, status);
+  if (title !== undefined && typeof title !== "string") {
+    return badRequest(res, "title must be a string");
+  }
+  if (context !== undefined && typeof context !== "string") {
+    return badRequest(res, "context must be a string");
+  }
+  const parsedIndent =
+    indent === undefined
+      ? undefined
+      : typeof indent === "number" && Number.isInteger(indent) && indent >= 0
+        ? indent
+        : null;
+  if (parsedIndent === null) {
+    return badRequest(res, "indent must be a non-negative integer");
+  }
+  const parsedArchived =
+    archived === undefined ? undefined : typeof archived === "boolean" ? archived : null;
+  if (parsedArchived === null) {
+    return badRequest(res, "archived must be a boolean");
+  }
+  const parsedDeadlineAt =
+    deadlineAt === undefined
+      ? undefined
+      : deadlineAt === null || typeof deadlineAt === "string"
+        ? deadlineAt
+        : null;
+  if (parsedDeadlineAt === null) {
+    return badRequest(res, "deadlineAt must be a string or null");
+  }
+  if (
+    parsedStatus === undefined &&
+    title === undefined &&
+    context === undefined &&
+    parsedIndent === undefined &&
+    parsedArchived === undefined &&
+    parsedDeadlineAt === undefined
+  ) {
+    return badRequest(res, "no valid todo fields provided");
+  }
+  const updated = updateTodo(req.params.id, {
+    status: parsedStatus,
+    title,
+    context: context === undefined ? undefined : context.trim(),
+    indent: parsedIndent,
+    deadlineAt: parsedDeadlineAt,
+    archivedAt: parsedArchived === undefined ? undefined : parsedArchived ? new Date().toISOString() : null,
+  });
   if (!updated) {
     return res.status(404).json({ error: "todo not found" });
   }
   ok(res, updated);
   broadcastOverlayState();
+});
+
+app.put("/api/todos/reorder", (req, res) => {
+  const orderedTodoIds = req.body?.orderedTodoIds;
+  if (!Array.isArray(orderedTodoIds) || orderedTodoIds.some((id) => typeof id !== "string")) {
+    return badRequest(res, "orderedTodoIds must be an array of todo ids");
+  }
+  try {
+    const items = reorderTodos(orderedTodoIds);
+    ok(res, { items });
+    broadcastOverlayState();
+  } catch (error) {
+    return badRequest(res, `invalid reorder payload: ${(error as Error).message}`);
+  }
 });
 
 app.delete("/api/todos/:id", (req, res) => {
