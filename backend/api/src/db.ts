@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS todos (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
   context TEXT,
-  status TEXT NOT NULL CHECK(status IN ('pending', 'done')),
+  status TEXT NOT NULL CHECK(status IN ('active', 'done')),
   indent INTEGER NOT NULL DEFAULT 0,
   sort_order INTEGER NOT NULL DEFAULT 0,
   deadline_at TEXT,
@@ -54,6 +54,84 @@ CREATE TABLE IF NOT EXISTS lock_zone_requirements (
   FOREIGN KEY(todo_id) REFERENCES todos(id) ON DELETE CASCADE
 );
 `);
+
+function migrateTodoStatusToActive() {
+  const tableSqlRow = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'todos' LIMIT 1")
+    .get() as { sql: string } | undefined;
+  const tableSql = tableSqlRow?.sql ?? "";
+  if (!tableSql.includes("CHECK(status IN ('pending', 'done'))")) {
+    // New schema already in place.
+    return;
+  }
+
+  db.pragma("foreign_keys = OFF");
+  const tx = db.transaction(() => {
+    db.exec(`
+      CREATE TABLE lock_zone_requirements_backup AS
+      SELECT zone_id, todo_id FROM lock_zone_requirements;
+
+      DROP TABLE lock_zone_requirements;
+
+      ALTER TABLE todos RENAME TO todos_legacy_status;
+
+      CREATE TABLE todos (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        context TEXT,
+        status TEXT NOT NULL CHECK(status IN ('active', 'done')),
+        indent INTEGER NOT NULL DEFAULT 0,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        deadline_at TEXT,
+        archived_at TEXT,
+        completed_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      INSERT INTO todos (id, title, context, status, indent, sort_order, deadline_at, archived_at, completed_at, created_at, updated_at)
+      SELECT
+        id,
+        title,
+        context,
+        CASE status WHEN 'pending' THEN 'active' ELSE status END,
+        indent,
+        sort_order,
+        deadline_at,
+        archived_at,
+        completed_at,
+        created_at,
+        updated_at
+      FROM todos_legacy_status;
+
+      DROP TABLE todos_legacy_status;
+
+      CREATE TABLE lock_zone_requirements (
+        zone_id TEXT NOT NULL,
+        todo_id TEXT NOT NULL,
+        PRIMARY KEY(zone_id, todo_id),
+        FOREIGN KEY(zone_id) REFERENCES lock_zones(id) ON DELETE CASCADE,
+        FOREIGN KEY(todo_id) REFERENCES todos(id) ON DELETE CASCADE
+      );
+
+      INSERT INTO lock_zone_requirements (zone_id, todo_id)
+      SELECT backup.zone_id, backup.todo_id
+      FROM lock_zone_requirements_backup backup
+      INNER JOIN lock_zones zones ON zones.id = backup.zone_id
+      INNER JOIN todos todos ON todos.id = backup.todo_id;
+
+      DROP TABLE lock_zone_requirements_backup;
+    `);
+  });
+
+  try {
+    tx();
+  } finally {
+    db.pragma("foreign_keys = ON");
+  }
+}
+
+migrateTodoStatusToActive();
 
 ensureTodoColumn("context", "TEXT");
 ensureTodoColumn("indent", "INTEGER NOT NULL DEFAULT 0");

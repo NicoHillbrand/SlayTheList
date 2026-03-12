@@ -13,7 +13,7 @@
 - Create a todo in the web app and confirm it appears in list after refresh/reload.
 - Create a lock zone and assign that todo as a requirement.
 - Confirm overlay shows a red locked rectangle over game.
-- Confirm clicks in that area are blocked while todo is pending.
+- Confirm clicks in that area are blocked while todo is active.
 - Mark todo done in web app and verify zone unlocks within 1 second.
 - Restart API and ensure todos + zones + requirements persist.
 

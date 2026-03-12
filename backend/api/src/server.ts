@@ -55,6 +55,57 @@ function pruneUndefined<T extends Record<string, unknown>>(input: T): Partial<T>
   return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined)) as Partial<T>;
 }
 
+function parseDeadlineAt(
+  deadlineAt: unknown,
+  deadlineTime: unknown,
+  options: { allowUndefined: boolean },
+): { value: string | null | undefined; error?: string } {
+  if (deadlineAt === undefined) {
+    if (deadlineTime !== undefined) {
+      return { value: undefined, error: "deadlineTime requires deadlineAt" };
+    }
+    return { value: options.allowUndefined ? undefined : null };
+  }
+
+  if (deadlineAt === null) {
+    if (deadlineTime !== undefined) {
+      return { value: undefined, error: "deadlineTime cannot be used when deadlineAt is null" };
+    }
+    return { value: null };
+  }
+
+  if (typeof deadlineAt !== "string") {
+    return { value: undefined, error: "deadlineAt must be a string or null" };
+  }
+  if (deadlineTime !== undefined && typeof deadlineTime !== "string") {
+    return { value: undefined, error: "deadlineTime must be a string in HH:mm format" };
+  }
+
+  const baseInput = deadlineAt.trim();
+  if (!baseInput) {
+    return { value: undefined, error: "deadlineAt cannot be empty" };
+  }
+
+  const dateOnlyMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(baseInput);
+  const baseDate = dateOnlyMatch ? new Date(`${baseInput}T00:00:00`) : new Date(baseInput);
+  if (!Number.isFinite(baseDate.getTime())) {
+    return { value: undefined, error: "deadlineAt must be a valid date or ISO datetime string" };
+  }
+
+  if (typeof deadlineTime === "string") {
+    const timeInput = deadlineTime.trim();
+    const timeMatch = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(timeInput);
+    if (!timeMatch) {
+      return { value: undefined, error: "deadlineTime must be in HH:mm format (24-hour)" };
+    }
+    const withTime = new Date(baseDate);
+    withTime.setHours(Number(timeMatch[1]), Number(timeMatch[2]), 0, 0);
+    return { value: withTime.toISOString() };
+  }
+
+  return { value: baseDate.toISOString() };
+}
+
 app.get("/health", (_req, res) => {
   ok(res, { status: "ok", timestamp: new Date().toISOString() });
 });
@@ -66,13 +117,15 @@ app.get("/api/todos", (_req, res) => {
 app.post("/api/todos", (req, res) => {
   const title = req.body?.title;
   const deadlineAt = req.body?.deadlineAt;
+  const deadlineTime = req.body?.deadlineTime;
   if (typeof title !== "string") {
     return badRequest(res, "title is required");
   }
-  if (deadlineAt !== undefined && deadlineAt !== null && typeof deadlineAt !== "string") {
-    return badRequest(res, "deadlineAt must be a string or null");
+  const parsedDeadline = parseDeadlineAt(deadlineAt, deadlineTime, { allowUndefined: false });
+  if (parsedDeadline.error) {
+    return badRequest(res, parsedDeadline.error);
   }
-  const created = createTodo(title, { deadlineAt: deadlineAt ?? null });
+  const created = createTodo(title, { deadlineAt: parsedDeadline.value ?? null });
   ok(res, created);
   broadcastOverlayState();
 });
@@ -84,9 +137,10 @@ app.patch("/api/todos/:id", (req, res) => {
   const indent = req.body?.indent;
   const archived = req.body?.archived;
   const deadlineAt = req.body?.deadlineAt;
-  const parsedStatus = status === undefined ? undefined : status === "pending" || status === "done" ? status : null;
+  const deadlineTime = req.body?.deadlineTime;
+  const parsedStatus = status === undefined ? undefined : status === "active" || status === "done" ? status : null;
   if (parsedStatus === null) {
-    return badRequest(res, "status must be pending or done");
+    return badRequest(res, "status must be active or done");
   }
   if (title !== undefined && typeof title !== "string") {
     return badRequest(res, "title must be a string");
@@ -108,14 +162,9 @@ app.patch("/api/todos/:id", (req, res) => {
   if (parsedArchived === null) {
     return badRequest(res, "archived must be a boolean");
   }
-  const parsedDeadlineAt =
-    deadlineAt === undefined
-      ? undefined
-      : deadlineAt === null || typeof deadlineAt === "string"
-        ? deadlineAt
-        : null;
-  if (parsedDeadlineAt === null) {
-    return badRequest(res, "deadlineAt must be a string or null");
+  const parsedDeadline = parseDeadlineAt(deadlineAt, deadlineTime, { allowUndefined: true });
+  if (parsedDeadline.error) {
+    return badRequest(res, parsedDeadline.error);
   }
   if (
     parsedStatus === undefined &&
@@ -123,7 +172,7 @@ app.patch("/api/todos/:id", (req, res) => {
     context === undefined &&
     parsedIndent === undefined &&
     parsedArchived === undefined &&
-    parsedDeadlineAt === undefined
+    parsedDeadline.value === undefined
   ) {
     return badRequest(res, "no valid todo fields provided");
   }
@@ -132,7 +181,7 @@ app.patch("/api/todos/:id", (req, res) => {
     title,
     context: context === undefined ? undefined : context.trim(),
     indent: parsedIndent,
-    deadlineAt: parsedDeadlineAt,
+    deadlineAt: parsedDeadline.value,
     archivedAt: parsedArchived === undefined ? undefined : parsedArchived ? new Date().toISOString() : null,
   });
   if (!updated) {

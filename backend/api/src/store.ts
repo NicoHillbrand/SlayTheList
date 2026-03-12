@@ -6,7 +6,7 @@ type TodoRow = {
   id: string;
   title: string;
   context: string | null;
-  status: "pending" | "done";
+  status: "active" | "done";
   indent: number;
   sort_order: number;
   deadline_at: string | null;
@@ -80,7 +80,7 @@ export function createTodo(title: string, options?: { deadlineAt?: string | null
     id: randomUUID(),
     title,
     context: undefined,
-    status: "pending",
+    status: "active",
     indent: 0,
     sortOrder: nextSortOrder.next,
     deadlineAt: options?.deadlineAt ?? null,
@@ -108,7 +108,7 @@ export function updateTodo(
   const now = new Date().toISOString();
   const nextStatus = patch.status ?? current.status;
   const shouldSetCompleted = patch.status !== undefined && nextStatus === "done" && !current.completedAt;
-  const shouldClearCompleted = patch.status !== undefined && nextStatus === "pending";
+  const shouldClearCompleted = patch.status !== undefined && nextStatus === "active";
   const next: Todo = {
     ...current,
     ...patch,
@@ -147,6 +147,10 @@ export function updateTodo(
     next.updatedAt,
     id,
   );
+  if (next.archivedAt) {
+    // Keep requirement rows tidy: archived todos should not stay bound to lock zones.
+    db.prepare("DELETE FROM lock_zone_requirements WHERE todo_id = ?").run(id);
+  }
   return next;
 }
 
@@ -243,16 +247,22 @@ export function listOverlayState(): LockZoneState[] {
   const requiredRows = db
     .prepare("SELECT zone_id, todo_id FROM lock_zone_requirements")
     .all() as Array<{ zone_id: string; todo_id: string }>;
-  const todoRows = db.prepare("SELECT id, title, status FROM todos").all() as Array<{
+  const todoRows = db.prepare("SELECT id, title, status, archived_at FROM todos").all() as Array<{
     id: string;
     title: string;
-    status: "pending" | "done";
+    status: "active" | "done";
+    archived_at: string | null;
   }>;
 
-  const statusByTodo = new Map(todoRows.map((t) => [t.id, t.status]));
-  const titleByTodo = new Map(todoRows.map((t) => [t.id, t.title]));
+  const activeTodoRows = todoRows.filter(
+    (row) => !row.archived_at && row.title.trim().length > 0,
+  );
+  const activeTodoIds = new Set(activeTodoRows.map((row) => row.id));
+  const statusByTodo = new Map(activeTodoRows.map((t) => [t.id, t.status]));
+  const titleByTodo = new Map(activeTodoRows.map((t) => [t.id, t.title]));
   const requiredByZone = new Map<string, string[]>();
   for (const row of requiredRows) {
+    if (!activeTodoIds.has(row.todo_id)) continue;
     const existing = requiredByZone.get(row.zone_id) ?? [];
     existing.push(row.todo_id);
     requiredByZone.set(row.zone_id, existing);

@@ -210,7 +210,6 @@ export default function Page() {
   const templateRef = useRef<HTMLDivElement | null>(null);
   const templateHostRef = useRef<HTMLDivElement | null>(null);
   const todoInputRefs = useRef<Map<string, HTMLInputElement>>(new Map());
-  const ensuringEmptyActiveTodoRef = useRef(false);
   const [focusTodoId, setFocusTodoId] = useState<string | null>(null);
 
   async function refresh(showLoader = false) {
@@ -370,7 +369,7 @@ export default function Page() {
   }
 
   function toggleTodo(todo: Todo) {
-    const next = todo.status === "done" ? "pending" : "done";
+    const next = todo.status === "done" ? "active" : "done";
     const nowIso = new Date().toISOString();
     setTodos((previous) =>
       previous.map((item) =>
@@ -800,7 +799,7 @@ export default function Page() {
   const filteredTodos = useMemo(() => {
     const statusFiltered = todos.filter((todo) => {
       if (todoFilter === "archived") return !!todo.archivedAt;
-      if (todoFilter === "active") return !todo.archivedAt && todo.status === "pending";
+      if (todoFilter === "active") return !todo.archivedAt && todo.status === "active";
       if (todoFilter === "completed") return !todo.archivedAt && todo.status === "done";
       return true;
     });
@@ -852,31 +851,6 @@ export default function Page() {
     }, 0);
   }, [focusTodoId, todos]);
 
-  useEffect(() => {
-    if (activeTab !== "goals" || todoMode !== "list") return;
-    if (todoFilter === "completed" || todoFilter === "archived") return;
-    const hasActiveItem = todos.some((todo) => !todo.archivedAt && todo.status === "pending");
-    if (hasActiveItem || ensuringEmptyActiveTodoRef.current) return;
-    ensuringEmptyActiveTodoRef.current = true;
-    void (async () => {
-      try {
-        const created = await createTodo("", { deadlineAt: getDefaultDeadline(todoRange) });
-        const orderedIds = todos.map((item) => item.id).filter((id) => id !== created.id);
-        orderedIds.push(created.id);
-        const map = new Map([...todos, created].map((todo) => [todo.id, todo] as const));
-        const optimistic = orderedIds.map((id) => map.get(id)).filter((todo): todo is Todo => !!todo);
-        setTodos(optimistic);
-        const reordered = await reorderTodos(orderedIds);
-        setTodos(reordered.items);
-        setFocusTodoId(created.id);
-      } catch (err) {
-        setError(toErrorMessage(err));
-      } finally {
-        ensuringEmptyActiveTodoRef.current = false;
-      }
-    })();
-  }, [activeTab, todoFilter, todoMode, todoRange, todos]);
-
   const requiredByZone = useMemo(() => {
     const map = new Map<string, Set<string>>();
     for (const zoneState of overlayState?.zones ?? []) {
@@ -884,6 +858,18 @@ export default function Page() {
     }
     return map;
   }, [overlayState]);
+  const lockableTodos = useMemo(
+    () => todos.filter((todo) => !todo.archivedAt && todo.title.trim().length > 0),
+    [todos],
+  );
+  const titleByTodoId = useMemo(
+    () => new Map(lockableTodos.map((todo) => [todo.id, todo.title] as const)),
+    [lockableTodos],
+  );
+  const statusByTodoId = useMemo(
+    () => new Map(lockableTodos.map((todo) => [todo.id, todo.status] as const)),
+    [lockableTodos],
+  );
 
   const selectedImageValue = useMemo(() => {
     if (selectedZoneIds.length === 0) return "__auto__";
@@ -1217,8 +1203,14 @@ export default function Page() {
             {canvasZones.map((zone) => {
               const zoneState = overlayState?.zones.find((entry) => entry.zone.id === zone.id);
               const isSelected = selectedZoneIds.includes(zone.id);
-              const isLocked = !!zoneState?.isLocked;
-              const requiredTitles = zoneState?.requiredTodoTitles ?? [];
+              const requiredTodoIds = zoneState?.requiredTodoIds ?? [];
+              const requiredTitles = requiredTodoIds
+                .map((todoId) => titleByTodoId.get(todoId))
+                .filter((title): title is string => !!title);
+              const isLocked =
+                zone.enabled &&
+                requiredTodoIds.length > 0 &&
+                requiredTodoIds.some((todoId) => statusByTodoId.get(todoId) !== "done");
               const lockText = lockMessage(requiredTitles);
               const lockTextStyle = lockTextStyleForZone(zone.width, zone.height);
               const zoneImage = imageForZone(zone.id);
@@ -1302,7 +1294,10 @@ export default function Page() {
             <div style={{ display: "grid", gap: "0.75rem" }}>
               {zones.map((zone) => {
                 const required = requiredByZone.get(zone.id) ?? new Set<string>();
-                const zoneState = overlayState?.zones.find((entry) => entry.zone.id === zone.id);
+                const isLocked =
+                  zone.enabled &&
+                  required.size > 0 &&
+                  [...required].some((todoId) => statusByTodoId.get(todoId) !== "done");
                 return (
                   <article
                     key={zone.id}
@@ -1346,16 +1341,16 @@ export default function Page() {
                       ))}
                     </div>
 
-                    <p style={{ margin: 0, color: zoneState?.isLocked ? "#fca5a5" : "#86efac" }}>
-                      {zoneState?.isLocked ? "Locked in game" : "Unlocked in game"}
+                    <p style={{ margin: 0, color: isLocked ? "#fca5a5" : "#86efac" }}>
+                      {isLocked ? "Locked in game" : "Unlocked in game"}
                     </p>
 
                     <div style={{ display: "grid", gap: "0.25rem" }}>
                       <strong>Required todos</strong>
-                      {todos.length === 0 ? (
+                      {lockableTodos.length === 0 ? (
                         <small>Create todos first.</small>
                       ) : (
-                        todos.map((todo) => (
+                        lockableTodos.map((todo) => (
                           <label key={`${zone.id}:${todo.id}`} style={{ display: "flex", gap: "0.4rem" }}>
                             <input
                               type="checkbox"

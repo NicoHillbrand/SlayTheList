@@ -41,6 +41,12 @@ If you want a single executable instead of running terminals, see:
 
 - `docs/desktop-launcher.md`
 
+## API usage from CLI/agents
+
+For command-line usage patterns (including PowerShell examples suitable for Claude Code), see:
+
+- `docs/agent-api-usage.md`
+
 ## MVP constraints
 
 - Supports windowed/borderless game modes.

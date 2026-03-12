@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const todoStatusSchema = z.enum(["pending", "done"]);
+export const todoStatusSchema = z.enum(["active", "done"]);
 export type TodoStatus = z.infer<typeof todoStatusSchema>;
 
 export const todoSchema = z.object({

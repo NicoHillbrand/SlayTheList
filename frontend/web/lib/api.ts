@@ -22,14 +22,21 @@ export async function listTodos() {
   return request<{ items: Todo[] }>("/api/todos");
 }
 
-export async function createTodo(title: string, options?: { deadlineAt?: string | null }) {
+export async function createTodo(
+  title: string,
+  options?: { deadlineAt?: string | null; deadlineTime?: string },
+) {
   return request<Todo>("/api/todos", {
     method: "POST",
-    body: JSON.stringify({ title, deadlineAt: options?.deadlineAt ?? null }),
+    body: JSON.stringify({
+      title,
+      deadlineAt: options?.deadlineAt ?? null,
+      deadlineTime: options?.deadlineTime,
+    }),
   });
 }
 
-export async function setTodoStatus(id: string, status: "pending" | "done") {
+export async function setTodoStatus(id: string, status: "active" | "done") {
   return request<Todo>(`/api/todos/${id}`, {
     method: "PATCH",
     body: JSON.stringify({ status }),
@@ -41,9 +48,10 @@ export async function updateTodo(
   patch: Partial<{
     title: string;
     context: string;
-    status: "pending" | "done";
+    status: "active" | "done";
     indent: number;
     deadlineAt: string | null;
+    deadlineTime: string;
     archived: boolean;
   }>,
 ) {
