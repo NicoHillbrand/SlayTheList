@@ -1,0 +1,21 @@
+{
+  "name": "slay-the-list",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Todo-driven game overlay for productivity",
+  "workspaces": [
+    "frontend/*",
+    "backend/*",
+    "shared/*"
+  ],
+  "scripts": {
+    "dev:web": "npm --workspace @slaythelist/web run dev",
+    "dev:api": "npm --workspace @slaythelist/api run dev",
+    "build": "npm run build -ws --if-present",
+    "lint": "npm run lint -ws --if-present",
+    "typecheck": "npm run typecheck -ws --if-present"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,50 @@
+:root {
+  color-scheme: dark;
+  font-family: Inter, Segoe UI, Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #111826;
+  color: #e5e7eb;
+}
+
+main {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.panel {
+  background: #1f2937;
+  border: 1px solid #374151;
+  border-radius: 12px;
+  padding: 1rem;
+}
+
+button {
+  border-radius: 8px;
+  border: 1px solid #4b5563;
+  background: #374151;
+  color: #e5e7eb;
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+}
+
+input {
+  border-radius: 8px;
+  border: 1px solid #4b5563;
+  background: #0b1220;
+  color: #f9fafb;
+  padding: 0.5rem;
+}
