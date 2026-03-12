@@ -27,6 +27,13 @@ Default local port is `8788` for API/WebSocket.
 - Double-click `start-slaythelist.bat` from repo root.
 - It starts API + web in separate terminals, checks for port conflicts, and opens the browser.
 - To stop API + web + overlay together, run `stop-slaythelist.bat`.
+- To stop + rebuild + restart everything in one click, run `restart-slaythelist.bat`.
+
+## Blocked Area Images
+
+- Desktop/game overlay images: `assets/blocked-overlays`
+- Web test UI images: `frontend/web/public/blocked-overlays`
+- `start-slaythelist.bat` auto-copies common image files from `assets/blocked-overlays` into `frontend/web/public/blocked-overlays` on startup.
 
 ## One-Click Launcher
 

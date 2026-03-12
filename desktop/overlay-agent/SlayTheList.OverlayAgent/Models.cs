@@ -34,6 +34,9 @@ public sealed class ZoneState
     [JsonPropertyName("zone")]
     public Zone Zone { get; set; } = new();
 
+    [JsonPropertyName("requiredTodoTitles")]
+    public List<string> RequiredTodoTitles { get; set; } = [];
+
     [JsonPropertyName("isLocked")]
     public bool IsLocked { get; set; }
 }

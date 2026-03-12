@@ -6,7 +6,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Media;
-using System.Windows.Shapes;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 
 namespace SlayTheList.OverlayAgent;
@@ -28,6 +28,7 @@ public partial class MainWindow : Window
     private bool _isGameInForeground;
     private int _focusPositiveStreak;
     private int _focusNegativeStreak;
+    private readonly List<string> _overlayImagePaths = [];
 
     public MainWindow()
     {
@@ -40,6 +41,7 @@ public partial class MainWindow : Window
         _windowSyncTimer.Tick += (_, _) => SyncOverlayWindow();
         _windowSyncTimer.Start();
 
+        LoadOverlayImagePaths();
         SourceInitialized += (_, _) => AttachNoActivateWindowHook();
         Loaded += (_, _) => _ = RunWebSocketLoop();
         Closed += (_, _) => _windowSyncTimer.Stop();
@@ -165,26 +167,33 @@ public partial class MainWindow : Window
 
         foreach (var zoneState in lockedZones)
         {
+            var lockText = BuildLockText(zoneState.RequiredTodoTitles);
+            var lockFontSize = CalculateLockFontSize(zoneState.Zone.Width, zoneState.Zone.Height);
             var border = new Border
             {
                 Width = zoneState.Zone.Width,
                 Height = zoneState.Zone.Height,
-                Background = new SolidColorBrush(Color.FromArgb(95, 239, 68, 68)),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(220, 252, 165, 165)),
+                Background = CreateBlockedBackgroundBrush(zoneState.Zone.Id),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(220, 22, 101, 52)),
                 BorderThickness = new Thickness(2),
                 ToolTip = $"Locked: {zoneState.Zone.Name}",
                 IsHitTestVisible = !_visualOnlyOverlay,
-                Child = new TextBlock
+                Child = new Border
                 {
-                    Text = "This area is blocked",
-                    Foreground = new SolidColorBrush(Color.FromArgb(245, 254, 226, 226)),
-                    FontSize = 14,
-                    FontWeight = FontWeights.SemiBold,
-                    TextWrapping = TextWrapping.Wrap,
-                    TextAlignment = TextAlignment.Center,
+                    Background = Brushes.Transparent,
+                    Padding = new Thickness(6, 4, 6, 4),
                     HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(6),
+                    Child = new TextBlock
+                    {
+                        Text = lockText,
+                        Foreground = new SolidColorBrush(Color.FromArgb(248, 248, 250, 252)),
+                        FontSize = lockFontSize,
+                        FontWeight = FontWeights.Bold,
+                        TextWrapping = TextWrapping.Wrap,
+                        TextAlignment = TextAlignment.Center,
+                        FontFamily = new FontFamily("Georgia"),
+                    },
                     IsHitTestVisible = false,
                 },
             };
@@ -311,6 +320,132 @@ public partial class MainWindow : Window
         }
 
         StatusText.Text = $"Tracking {_titleHint} ({focusLabel}) | No locked zones | {(_visualOnlyOverlay ? "visual sign active" : "blocking armed")}";
+    }
+
+    private static string BuildLockText(IReadOnlyList<string> requiredTodoTitles)
+    {
+        if (requiredTodoTitles.Count == 0)
+        {
+            return "Unlock via\n\nto-do";
+        }
+
+        if (requiredTodoTitles.Count == 1)
+        {
+            return $"Unlock via\n\n{Truncate(requiredTodoTitles[0], 42)}";
+        }
+
+        return $"Unlock via\n\n{requiredTodoTitles.Count} to-dos";
+    }
+
+    private static string Truncate(string value, int maxLength)
+    {
+        if (string.IsNullOrEmpty(value) || value.Length <= maxLength)
+        {
+            return value;
+        }
+
+        return $"{value[..(maxLength - 1)]}…";
+    }
+
+    private static double CalculateLockFontSize(double width, double height)
+    {
+        var minDim = Math.Max(1, Math.Min(width, height));
+        var aspectRatio = width / Math.Max(1, height);
+        var narrowScale = Math.Clamp(aspectRatio * 1.2, 0.68, 1.0);
+        return Math.Clamp(minDim * 0.043 * narrowScale, 7, 13);
+    }
+
+    private Brush CreateBlockedBackgroundBrush(string zoneId)
+    {
+        var imagePath = GetImagePathForZone(zoneId);
+        if (imagePath is null)
+        {
+            return new SolidColorBrush(Color.FromArgb(95, 22, 101, 52));
+        }
+
+        try
+        {
+            var bitmap = new BitmapImage();
+            bitmap.BeginInit();
+            bitmap.CacheOption = BitmapCacheOption.OnLoad;
+            bitmap.UriSource = new Uri(imagePath, UriKind.Absolute);
+            bitmap.EndInit();
+            bitmap.Freeze();
+
+            return new ImageBrush(bitmap)
+            {
+                Stretch = Stretch.UniformToFill,
+                AlignmentX = AlignmentX.Center,
+                AlignmentY = AlignmentY.Center,
+                Opacity = 0.95,
+            };
+        }
+        catch
+        {
+            return new SolidColorBrush(Color.FromArgb(95, 22, 101, 52));
+        }
+    }
+
+    private string? GetImagePathForZone(string zoneId)
+    {
+        if (_overlayImagePaths.Count == 0)
+        {
+            return null;
+        }
+
+        var hash = 0;
+        foreach (var c in zoneId)
+        {
+            hash = (hash * 31 + c) & int.MaxValue;
+        }
+
+        return _overlayImagePaths[hash % _overlayImagePaths.Count];
+    }
+
+    private void LoadOverlayImagePaths()
+    {
+        _overlayImagePaths.Clear();
+        var directory = ResolveOverlayImageDirectory();
+        if (directory is null)
+        {
+            return;
+        }
+
+        var supportedExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".webp",
+            ".bmp",
+        };
+
+        foreach (var path in Directory.EnumerateFiles(directory))
+        {
+            if (!supportedExtensions.Contains(System.IO.Path.GetExtension(path)))
+            {
+                continue;
+            }
+
+            _overlayImagePaths.Add(path);
+        }
+    }
+
+    private static string? ResolveOverlayImageDirectory()
+    {
+        var current = new DirectoryInfo(AppContext.BaseDirectory);
+        while (current is not null)
+        {
+            var candidate = System.IO.Path.Combine(current.FullName, "assets", "blocked-overlays");
+            if (Directory.Exists(candidate))
+            {
+                return candidate;
+            }
+
+            current = current.Parent;
+        }
+
+        return null;
     }
 
     private static bool ReadVisualOnlySetting()
