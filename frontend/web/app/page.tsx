@@ -11,17 +11,28 @@ import {
   useRef,
   useState,
 } from "react";
-import type { LockZone, OverlayState, Todo } from "@slaythelist/contracts";
+import type {
+  Habit,
+  HabitStatus,
+  LockZone,
+  OverlayState,
+  Prediction,
+  PredictionOutcome,
+  ReflectionEntry,
+  Todo,
+} from "@slaythelist/contracts";
 import {
   createTodo,
   createZone,
   deleteTodo,
   deleteZone,
+  getAccountabilityState,
   getOverlayState,
   listTodos,
   listZones,
   overlayWebSocketUrl,
   reorderTodos,
+  saveAccountabilityState,
   setTodoStatus,
   setZoneRequirements,
   updateTodo,
@@ -44,10 +55,19 @@ type MoveState = {
   startZoneX: number;
   startZoneY: number;
 };
-type ViewTab = "goals" | "blocks";
+type ViewTab = "goals" | "habits" | "predictions" | "reflection" | "blocks";
 type TodoFilter = "active" | "completed" | "archived" | "all";
 type TodoRange = "daily" | "weekly" | "monthly" | "all" | "top";
 type TodoMode = "list" | "calendar";
+type HabitsView = "week" | "month";
+type ReflectionView = "today" | "history";
+type ReflectionQuestion = {
+  key: string;
+  label: string;
+  placeholder: string;
+  isMulti: boolean;
+};
+type ExpandProvider = "gemini-flash" | "openai-gpt-4o-mini";
 
 const TEMPLATE_WIDTH = 1280;
 const TEMPLATE_HEIGHT = 720;
@@ -66,6 +86,34 @@ const BLOCKED_IMAGE_CANDIDATES = [
   "/blocked-overlays/Locked3.jpg",
   "/blocked-overlays/Locked3.jpeg",
   "/blocked-overlays/Locked3.webp",
+];
+
+const DEFAULT_CORE_REFLECTION_QUESTIONS: ReflectionQuestion[] = [
+  { key: "wins", label: "What went well today?", placeholder: "Add a win...", isMulti: true },
+  { key: "problems", label: "What problems did you encounter?", placeholder: "Add a challenge...", isMulti: true },
+  {
+    key: "goalProgress",
+    label: "How did you get closer to your goals?",
+    placeholder: "Add progress...",
+    isMulti: true,
+  },
+];
+
+const DEFAULT_OPTIONAL_REFLECTION_QUESTIONS: ReflectionQuestion[] = [
+  { key: "learnings", label: "What did you learn today?", placeholder: "Add a learning...", isMulti: true },
+  { key: "gratitude", label: "What are you grateful for?", placeholder: "Add gratitude...", isMulti: true },
+  {
+    key: "outsideView",
+    label: "Outside-view advice for tomorrow",
+    placeholder: "If you were advising yourself...",
+    isMulti: true,
+  },
+  {
+    key: "fasterNext",
+    label: "How could you have done something faster?",
+    placeholder: "Add optimization idea...",
+    isMulti: true,
+  },
 ];
 
 function toErrorMessage(err: unknown) {
@@ -184,6 +232,123 @@ function dateInputToDeadline(value: string): string | null {
   return Number.isFinite(date.getTime()) ? date.toISOString() : null;
 }
 
+function tomorrowDateInputValue(): string {
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const year = tomorrow.getFullYear();
+  const month = `${tomorrow.getMonth() + 1}`.padStart(2, "0");
+  const day = `${tomorrow.getDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function extractJsonArray(text: string): string[] {
+  function parseNestedArray(raw: string, depth = 0): string[] {
+    if (depth > 3) return [];
+    const trimmed = raw.trim();
+    if (!trimmed) return [];
+    try {
+      const direct = JSON.parse(trimmed) as unknown;
+      if (Array.isArray(direct)) {
+        return direct
+          .filter((entry): entry is string => typeof entry === "string")
+          .map((entry) => entry.trim());
+      }
+      if (typeof direct === "string") {
+        return parseNestedArray(direct, depth + 1);
+      }
+    } catch {
+      // keep trying other strategies
+    }
+    const matched = trimmed.match(/\[[\s\S]*\]/);
+    if (!matched) return [];
+    if (matched[0] === trimmed) return [];
+    return parseNestedArray(matched[0], depth + 1);
+  }
+
+  const parsedNested = parseNestedArray(text);
+  if (parsedNested.length > 0) {
+    return parsedNested;
+  }
+
+  const unescaped = text.replace(/\\"/g, "\"");
+  const quotedItems = [...unescaped.matchAll(/"\[(?:2m|5m)\][^"\r\n]*"/gi)].map((match) =>
+    match[0].slice(1, -1).trim(),
+  );
+  if (quotedItems.length > 0) {
+    return quotedItems;
+  }
+
+  const lineBased = unescaped
+    .trim()
+    .split("\n")
+    .map((line) => line.trim())
+    .map((line) => line.replace(/^[\-\*\d\.\)\s]+/, ""))
+    .map((line) => line.replace(/^["'`]|["'`,]$/g, ""))
+    .filter((line) => line.length > 0 && !line.startsWith("[") && !line.startsWith("]"));
+  return lineBased;
+}
+
+function normalizeSubtasks(raw: string[]): string[] {
+  return [...new Set(raw.map((entry) => entry.trim()).filter((entry) => entry.length > 0))]
+    .map((entry) => (/^\[(2m|5m)\]\s/i.test(entry) ? entry : `[5m] ${entry}`))
+    .slice(0, 5);
+}
+
+function extractBracketTasks(text: string): string[] {
+  const unescaped = text.replace(/\\"/g, "\"");
+  return [...unescaped.matchAll(/\[(?:2m|5m)\]\s*[^"\r\n]+/gi)].map((match) => match[0].trim());
+}
+
+function shortPreview(text: string): string {
+  return text.replace(/\s+/g, " ").trim().slice(0, 220);
+}
+
+function fallbackSubtasksForTodo(todo: Todo): string[] {
+  const goal = todo.title.trim() || "this goal";
+  return [
+    `[2m] Define the concrete done-state for "${goal}" in one sentence.`,
+    `[5m] List the next physical action needed to move "${goal}" forward right now.`,
+    `[2m] Start that action and log one blocker or next step.`,
+  ];
+}
+
+function getDateKey(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function getLastNDays(n: number) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return Array.from({ length: n }).map((_, index) => {
+    const date = new Date(today);
+    date.setDate(today.getDate() - (n - 1 - index));
+    return {
+      key: getDateKey(date),
+      label: index === n - 1 ? "Today" : date.toLocaleDateString(undefined, { weekday: "short" }),
+      subLabel: `${date.getMonth() + 1}/${date.getDate()}`,
+    };
+  });
+}
+
+function getLastNWeeks(n: number) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const day = today.getDay();
+  const weekStart = new Date(today);
+  weekStart.setDate(today.getDate() - day);
+  return Array.from({ length: n }).map((_, index) => {
+    const start = new Date(weekStart);
+    start.setDate(weekStart.getDate() - (n - 1 - index) * 7);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 6);
+    return {
+      start,
+      end,
+      label: index === n - 1 ? "This week" : `${start.getMonth() + 1}/${start.getDate()}`,
+    };
+  });
+}
+
 export default function Page() {
   const [todos, setTodos] = useState<Todo[]>([]);
   const [zones, setZones] = useState<LockZone[]>([]);
@@ -199,17 +364,38 @@ export default function Page() {
   const [todoFilter, setTodoFilter] = useState<TodoFilter>("active");
   const [todoRange, setTodoRange] = useState<TodoRange>("daily");
   const [todoMode, setTodoMode] = useState<TodoMode>("list");
+  const [habitsView, setHabitsView] = useState<HabitsView>("week");
+  const [habits, setHabits] = useState<Habit[]>([]);
+  const [newHabitName, setNewHabitName] = useState("");
+  const [predictions, setPredictions] = useState<Prediction[]>([]);
+  const [newPredictionTitle, setNewPredictionTitle] = useState("");
+  const [newPredictionConfidence, setNewPredictionConfidence] = useState(70);
+  const [reflections, setReflections] = useState<ReflectionEntry[]>([]);
+  const [selectedReflectionDate, setSelectedReflectionDate] = useState(getDateKey(new Date()));
+  const [reflectionView, setReflectionView] = useState<ReflectionView>("today");
+  const [showOptionalReflectionQuestions, setShowOptionalReflectionQuestions] = useState(false);
+  const [expandedReflectionId, setExpandedReflectionId] = useState<string | null>(null);
   const [draggingTodoId, setDraggingTodoId] = useState<string | null>(null);
   const [justCopied, setJustCopied] = useState(false);
   const [editingTodoId, setEditingTodoId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
   const [editDeadline, setEditDeadline] = useState("");
+  const [expandingTodoId, setExpandingTodoId] = useState<string | null>(null);
+  const [showAiSettingsModal, setShowAiSettingsModal] = useState(false);
+  const [expandProvider, setExpandProvider] = useState<ExpandProvider>("gemini-flash");
+  const [geminiApiKey, setGeminiApiKey] = useState("");
+  const [openAiApiKey, setOpenAiApiKey] = useState("");
+  const [expandContextByTodoId, setExpandContextByTodoId] = useState<Record<string, string>>({});
+  const [expansionContextTodoId, setExpansionContextTodoId] = useState<string | null>(null);
+  const [expansionContextDraft, setExpansionContextDraft] = useState("");
   const [todoDrafts, setTodoDrafts] = useState<Record<string, string>>({});
   const [zoneImageOverrides, setZoneImageOverrides] = useState<Record<string, string>>({});
   const [blockedImages, setBlockedImages] = useState<string[]>([]);
   const templateRef = useRef<HTMLDivElement | null>(null);
   const templateHostRef = useRef<HTMLDivElement | null>(null);
   const todoInputRefs = useRef<Map<string, HTMLInputElement>>(new Map());
+  const accountabilityLoadedRef = useRef(false);
+  const accountabilitySaveTimerRef = useRef<number | null>(null);
   const [focusTodoId, setFocusTodoId] = useState<string | null>(null);
 
   async function refresh(showLoader = false) {
@@ -341,6 +527,72 @@ export default function Page() {
     const storageKey = "slaythelist.zoneImageOverrides";
     window.localStorage.setItem(storageKey, JSON.stringify(zoneImageOverrides));
   }, [zoneImageOverrides]);
+
+  useEffect(() => {
+    void runAction(async () => {
+      const state = await getAccountabilityState();
+      let nextHabits = state.habits;
+      let nextPredictions = state.predictions;
+      let nextReflections = state.reflections;
+
+      const isApiEmpty =
+        nextHabits.length === 0 && nextPredictions.length === 0 && nextReflections.length === 0;
+      if (isApiEmpty) {
+        try {
+          const rawHabits = window.localStorage.getItem("slaythelist.habits");
+          const rawPredictions = window.localStorage.getItem("slaythelist.predictions");
+          const rawReflections = window.localStorage.getItem("slaythelist.reflections");
+          if (rawHabits) {
+            const parsed = JSON.parse(rawHabits) as Habit[];
+            if (Array.isArray(parsed)) nextHabits = parsed;
+          }
+          if (rawPredictions) {
+            const parsed = JSON.parse(rawPredictions) as Prediction[];
+            if (Array.isArray(parsed)) nextPredictions = parsed;
+          }
+          if (rawReflections) {
+            const parsed = JSON.parse(rawReflections) as ReflectionEntry[];
+            if (Array.isArray(parsed)) nextReflections = parsed;
+          }
+          if (
+            nextHabits.length > 0 ||
+            nextPredictions.length > 0 ||
+            nextReflections.length > 0
+          ) {
+            await saveAccountabilityState({
+              habits: nextHabits,
+              predictions: nextPredictions,
+              reflections: nextReflections,
+            });
+          }
+        } catch {
+          // ignore invalid local storage migration values
+        }
+      }
+
+      setHabits(nextHabits.map((habit) => ({ ...habit, status: habit.status ?? "active" })));
+      setPredictions(nextPredictions);
+      setReflections(nextReflections);
+      accountabilityLoadedRef.current = true;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!accountabilityLoadedRef.current) return;
+    if (accountabilitySaveTimerRef.current !== null) {
+      window.clearTimeout(accountabilitySaveTimerRef.current);
+    }
+    accountabilitySaveTimerRef.current = window.setTimeout(() => {
+      void runAction(async () => {
+        await saveAccountabilityState({ habits, predictions, reflections });
+      });
+    }, 450);
+    return () => {
+      if (accountabilitySaveTimerRef.current !== null) {
+        window.clearTimeout(accountabilitySaveTimerRef.current);
+      }
+    };
+  }, [habits, predictions, reflections]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -506,6 +758,297 @@ export default function Page() {
       });
       closeEditModal();
       await refresh();
+    });
+  }
+
+  function saveAiSettings() {
+    try {
+      window.localStorage.setItem("slaythelist.ai.expandProvider", expandProvider);
+      window.localStorage.setItem("slaythelist.ai.geminiApiKey", geminiApiKey.trim());
+      window.localStorage.setItem("slaythelist.ai.openAiApiKey", openAiApiKey.trim());
+      setError(null);
+      setShowAiSettingsModal(false);
+    } catch {
+      setError("Failed to save AI settings.");
+    }
+  }
+
+  function openExpansionContextModal(todo: Todo) {
+    setExpansionContextTodoId(todo.id);
+    setExpansionContextDraft(expandContextByTodoId[todo.id] ?? "");
+  }
+
+  function closeExpansionContextModal() {
+    setExpansionContextTodoId(null);
+    setExpansionContextDraft("");
+  }
+
+  function saveExpansionContextModal() {
+    if (!expansionContextTodoId) return;
+    const trimmed = expansionContextDraft.trim();
+    setExpandContextByTodoId((previous) => {
+      const next = { ...previous };
+      if (trimmed) {
+        next[expansionContextTodoId] = trimmed;
+      } else {
+        delete next[expansionContextTodoId];
+      }
+      return next;
+    });
+    closeExpansionContextModal();
+  }
+
+  function expansionPromptForTodo(todo: Todo, index: number): string {
+    const parentContext: string[] = [];
+    const siblingContext: string[] = [];
+    for (let i = index - 1; i >= 0; i -= 1) {
+      const previous = todos[i];
+      if (previous.indent < todo.indent) {
+        parentContext.unshift(previous.title.trim());
+      } else if (previous.indent === todo.indent && previous.id !== todo.id) {
+        siblingContext.unshift(previous.title.trim());
+      }
+    }
+    const cleanParents = parentContext.filter((entry) => entry.length > 0);
+    const cleanSiblings = siblingContext.filter((entry) => entry.length > 0).slice(-8);
+    const userExpansionContext = expandContextByTodoId[todo.id]?.trim();
+    return [
+      "You are an execution coach for breaking one goal into tiny immediate actions.",
+      "",
+      `Goal to expand: "${todo.title.trim()}"`,
+      todo.context ? `Goal context: ${todo.context}` : "",
+      userExpansionContext ? `User-provided expansion context: ${userExpansionContext}` : "",
+      cleanParents.length > 0 ? `Higher-level parent goals: ${cleanParents.join(" > ")}` : "",
+      cleanSiblings.length > 0 ? `Sibling goals nearby: ${cleanSiblings.join(", ")}` : "",
+      "",
+      "Task design requirements:",
+      "1) Think through end state, intermediate states, and real physical actions needed.",
+      "2) Generate 3 to 5 subtasks that can each be done in 2 or 5 minutes.",
+      "3) Start each subtask with either [2m] or [5m].",
+      "4) Keep wording concrete and immediate (open, write, list, test, send, etc.).",
+      "5) Avoid abstract planning language.",
+      "",
+      "Output format is STRICT:",
+      "- Return ONLY a valid JSON array of strings",
+      "- No markdown, no code fences, no commentary",
+      "- If uncertain, still return exactly 3 strings in a JSON array",
+      "Example:",
+      "[\"[2m] Open the project and list the exact deliverable\", \"[5m] Draft the first tiny action and run it\"]",
+    ]
+      .filter((line) => line.length > 0)
+      .join("\n");
+  }
+
+  async function generateSubtodosWithGemini(todo: Todo): Promise<string[]> {
+    const apiKey = geminiApiKey.trim();
+    if (!apiKey) {
+      throw new Error("Gemini API key is missing. Add it in AI settings.");
+    }
+    const index = todos.findIndex((entry) => entry.id === todo.id);
+    if (index < 0) {
+      throw new Error("Could not find todo to expand.");
+    }
+    const prompt = expansionPromptForTodo(todo, index);
+    async function requestGemini(promptText: string) {
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: promptText }] }],
+            generationConfig: {
+              temperature: 0.45,
+              maxOutputTokens: 900,
+            },
+          }),
+        },
+      );
+      const payloadText = await response.text();
+      let data: {
+        error?: { message?: string };
+        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+      } = {};
+      try {
+        data = JSON.parse(payloadText) as typeof data;
+      } catch {
+        // handled by checks below
+      }
+      if (!response.ok) {
+        throw new Error(
+          `Gemini API failed (${response.status}). ${data.error?.message ?? "Unknown API error."}`,
+        );
+      }
+      return data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+    }
+
+    const firstText = await requestGemini(prompt);
+    if (!firstText.trim()) {
+      throw new Error("Gemini returned an empty response body.");
+    }
+    let normalized = normalizeSubtasks(extractJsonArray(firstText));
+    if (normalized.length < 3) {
+      normalized = normalizeSubtasks(extractBracketTasks(firstText));
+    }
+    if (normalized.length >= 3) {
+      return normalized.slice(0, 5);
+    }
+    const retryText = await requestGemini(
+      `${prompt}\n\nRETRY: Your previous output did not parse. Return ONLY a valid JSON array with 3-5 strings.`,
+    );
+    let retryNormalized = normalizeSubtasks(extractJsonArray(retryText));
+    if (retryNormalized.length < 3) {
+      retryNormalized = normalizeSubtasks(extractBracketTasks(retryText));
+    }
+    const merged = normalizeSubtasks([...normalized, ...retryNormalized]);
+    if (merged.length >= 3) {
+      return merged.slice(0, 5);
+    }
+    if (merged.length > 0) {
+      const completed = normalizeSubtasks([...merged, ...fallbackSubtasksForTodo(todo)]);
+      if (completed.length >= 3) {
+        return completed.slice(0, 5);
+      }
+    }
+    if (retryNormalized.length < 3) {
+      throw new Error(
+        `Gemini parse/format issue. First parse recovered ${normalized.length}; retry recovered ${retryNormalized.length}. ` +
+          `First preview: "${shortPreview(firstText)}" | Retry preview: "${shortPreview(retryText)}"`,
+      );
+    }
+    return retryNormalized.slice(0, 5);
+  }
+
+  async function generateSubtodosWithOpenAI(todo: Todo): Promise<string[]> {
+    const apiKey = openAiApiKey.trim();
+    if (!apiKey) {
+      throw new Error("OpenAI API key is missing. Add it in AI settings.");
+    }
+    const index = todos.findIndex((entry) => entry.id === todo.id);
+    if (index < 0) {
+      throw new Error("Could not find todo to expand.");
+    }
+    const prompt = expansionPromptForTodo(todo, index);
+    async function requestOpenAi(userPrompt: string) {
+      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          messages: [
+            {
+              role: "system",
+              content:
+                "Return only a valid JSON array of 3 to 5 strings. No markdown, no code fences, no explanations.",
+            },
+            {
+              role: "user",
+              content: userPrompt,
+            },
+          ],
+          temperature: 0.45,
+        }),
+      });
+      const payloadText = await response.text();
+      let data: {
+        error?: { message?: string };
+        choices?: Array<{ message?: { content?: string } }>;
+      } = {};
+      try {
+        data = JSON.parse(payloadText) as typeof data;
+      } catch {
+        // handled by checks below
+      }
+      if (!response.ok) {
+        throw new Error(
+          `OpenAI API failed (${response.status}). ${data.error?.message ?? "Unknown API error."}`,
+        );
+      }
+      return data.choices?.[0]?.message?.content ?? "";
+    }
+
+    const firstText = await requestOpenAi(prompt);
+    if (!firstText.trim()) {
+      throw new Error("OpenAI returned an empty response body.");
+    }
+    let normalized = normalizeSubtasks(extractJsonArray(firstText));
+    if (normalized.length < 3) {
+      normalized = normalizeSubtasks(extractBracketTasks(firstText));
+    }
+    if (normalized.length >= 3) {
+      return normalized.slice(0, 5);
+    }
+    const retryText = await requestOpenAi(
+      `${prompt}\n\nRETRY: Your previous output did not parse. Return ONLY a valid JSON array with 3-5 strings.`,
+    );
+    let retryNormalized = normalizeSubtasks(extractJsonArray(retryText));
+    if (retryNormalized.length < 3) {
+      retryNormalized = normalizeSubtasks(extractBracketTasks(retryText));
+    }
+    const merged = normalizeSubtasks([...normalized, ...retryNormalized]);
+    if (merged.length >= 3) {
+      return merged.slice(0, 5);
+    }
+    if (merged.length > 0) {
+      const completed = normalizeSubtasks([...merged, ...fallbackSubtasksForTodo(todo)]);
+      if (completed.length >= 3) {
+        return completed.slice(0, 5);
+      }
+    }
+    if (retryNormalized.length < 3) {
+      throw new Error(
+        `OpenAI parse/format issue. First parse recovered ${normalized.length}; retry recovered ${retryNormalized.length}. ` +
+          `First preview: "${shortPreview(firstText)}" | Retry preview: "${shortPreview(retryText)}"`,
+      );
+    }
+    return retryNormalized.slice(0, 5);
+  }
+
+  async function insertExpandedSubtodos(parentTodo: Todo, subtasks: string[]) {
+    const latestTodos = (await listTodos()).items;
+    const parentIndex = latestTodos.findIndex((entry) => entry.id === parentTodo.id);
+    if (parentIndex < 0) return;
+    let insertAt = parentIndex + 1;
+    while (insertAt < latestTodos.length && latestTodos[insertAt].indent > parentTodo.indent) {
+      insertAt += 1;
+    }
+    const parentDeadline = parentTodo.deadlineAt ?? getDefaultDeadline(todoRange);
+    const createdIds: string[] = [];
+    for (const title of subtasks) {
+      const created = await createTodo(title, { deadlineAt: parentDeadline });
+      createdIds.push(created.id);
+      await updateTodo(created.id, { indent: parentTodo.indent + 1 });
+    }
+    const baseOrder = latestTodos.map((entry) => entry.id).filter((id) => !createdIds.includes(id));
+    baseOrder.splice(insertAt, 0, ...createdIds);
+    const reordered = await reorderTodos(baseOrder);
+    setTodos(reordered.items);
+  }
+
+  function handleExpandTodo(todo: Todo) {
+    if (expandingTodoId) return;
+    if (expandProvider === "gemini-flash" && !geminiApiKey.trim()) {
+      setShowAiSettingsModal(true);
+      setError("Add a Gemini API key in AI settings to use expansion.");
+      return;
+    }
+    if (expandProvider === "openai-gpt-4o-mini" && !openAiApiKey.trim()) {
+      setShowAiSettingsModal(true);
+      setError("Add an OpenAI API key in AI settings to use expansion.");
+      return;
+    }
+    setExpandingTodoId(todo.id);
+    void runAction(async () => {
+      const generated =
+        expandProvider === "gemini-flash"
+          ? await generateSubtodosWithGemini(todo)
+          : await generateSubtodosWithOpenAI(todo);
+      await insertExpandedSubtodos(todo, generated);
+    }).finally(() => {
+      setExpandingTodoId(null);
     });
   }
 
@@ -840,6 +1383,43 @@ export default function Page() {
   }, [todos]);
 
   useEffect(() => {
+    try {
+      const providerRaw = window.localStorage.getItem("slaythelist.ai.expandProvider");
+      const storedGemini = window.localStorage.getItem("slaythelist.ai.geminiApiKey");
+      const storedOpenAi = window.localStorage.getItem("slaythelist.ai.openAiApiKey");
+      const storedExpandContext = window.localStorage.getItem("slaythelist.ai.expandContextByTodoId");
+      if (providerRaw === "gemini-flash" || providerRaw === "openai-gpt-4o-mini") {
+        setExpandProvider(providerRaw);
+      }
+      if (storedGemini) setGeminiApiKey(storedGemini);
+      if (storedOpenAi) setOpenAiApiKey(storedOpenAi);
+      if (storedExpandContext) {
+        const parsed = JSON.parse(storedExpandContext) as Record<string, unknown>;
+        const next: Record<string, string> = {};
+        for (const [todoId, value] of Object.entries(parsed)) {
+          if (typeof value === "string" && value.trim().length > 0) {
+            next[todoId] = value;
+          }
+        }
+        setExpandContextByTodoId(next);
+      }
+    } catch {
+      // ignore local storage access issues
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        "slaythelist.ai.expandContextByTodoId",
+        JSON.stringify(expandContextByTodoId),
+      );
+    } catch {
+      // ignore local storage save issues
+    }
+  }, [expandContextByTodoId]);
+
+  useEffect(() => {
     if (!focusTodoId) return;
     const input = todoInputRefs.current.get(focusTodoId);
     if (!input) return;
@@ -897,6 +1477,319 @@ export default function Page() {
     return zoneImageOverrides[zoneId] ?? blockedImageForZone(zoneId, blockedImages);
   }
 
+  const habitDays = useMemo(() => getLastNDays(7), []);
+  const habitWeeks = useMemo(() => getLastNWeeks(5), []);
+  const todayKey = getDateKey(new Date());
+
+  function addHabit() {
+    const nextName = newHabitName.trim();
+    if (!nextName) return;
+    setHabits((prev) => [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        name: nextName,
+        checks: [],
+        createdAt: Date.now(),
+        status: "active",
+      },
+    ]);
+    setNewHabitName("");
+  }
+
+  function toggleHabitDay(habitId: string, dateKey: string) {
+    setHabits((prev) =>
+      prev.map((habit) => {
+        if (habit.id !== habitId) return habit;
+        const hasCheck = habit.checks.some((check) => check.date === dateKey && check.done);
+        return {
+          ...habit,
+          checks: hasCheck
+            ? habit.checks.filter((check) => check.date !== dateKey)
+            : [...habit.checks.filter((check) => check.date !== dateKey), { date: dateKey, done: true }],
+        };
+      }),
+    );
+  }
+
+  function toggleHabitWeek(habitId: string, weekStart: Date, weekEnd: Date) {
+    setHabits((prev) =>
+      prev.map((habit) => {
+        if (habit.id !== habitId) return habit;
+        const doneInWeek = habit.checks.some((check) => {
+          if (!check.done) return false;
+          const checkDate = new Date(`${check.date}T00:00:00`);
+          return checkDate >= weekStart && checkDate <= weekEnd;
+        });
+        if (doneInWeek) {
+          return {
+            ...habit,
+            checks: habit.checks.filter((check) => {
+              const checkDate = new Date(`${check.date}T00:00:00`);
+              return checkDate < weekStart || checkDate > weekEnd;
+            }),
+          };
+        }
+        return {
+          ...habit,
+          checks: [...habit.checks, { date: getDateKey(weekEnd), done: true }],
+        };
+      }),
+    );
+  }
+
+  function deleteHabit(habitId: string) {
+    setHabits((prev) => prev.filter((habit) => habit.id !== habitId));
+  }
+
+  function setHabitStatus(habitId: string, status: HabitStatus) {
+    setHabits((prev) =>
+      prev.map((habit) => (habit.id === habitId ? { ...habit, status } : habit)),
+    );
+  }
+
+  const activeHabits = useMemo(
+    () => habits.filter((habit) => (habit.status ?? "active") === "active"),
+    [habits],
+  );
+  const ideaHabits = useMemo(
+    () => habits.filter((habit) => habit.status === "idea"),
+    [habits],
+  );
+  const archivedHabits = useMemo(
+    () => habits.filter((habit) => habit.status === "archived"),
+    [habits],
+  );
+
+  function addPrediction() {
+    const title = newPredictionTitle.trim();
+    if (!title) return;
+    setPredictions((prev) => [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        title,
+        confidence: Math.max(1, Math.min(99, newPredictionConfidence)),
+        outcome: "pending",
+        createdAt: Date.now(),
+        resolvedAt: null,
+      },
+    ]);
+    setNewPredictionTitle("");
+    setNewPredictionConfidence(70);
+  }
+
+  function setPredictionOutcome(predictionId: string, outcome: PredictionOutcome) {
+    setPredictions((prev) =>
+      prev.map((prediction) =>
+        prediction.id === predictionId
+          ? {
+              ...prediction,
+              outcome,
+              resolvedAt: outcome === "pending" ? null : Date.now(),
+            }
+          : prediction,
+      ),
+    );
+  }
+
+  function deletePrediction(predictionId: string) {
+    setPredictions((prev) => prev.filter((prediction) => prediction.id !== predictionId));
+  }
+
+  const resolvedPredictions = useMemo(
+    () => predictions.filter((prediction) => prediction.outcome !== "pending"),
+    [predictions],
+  );
+  const calibrationAccuracy = useMemo(() => {
+    if (resolvedPredictions.length === 0) return null;
+    const total = resolvedPredictions.length;
+    const hits = resolvedPredictions.filter((prediction) => prediction.outcome === "hit").length;
+    return Math.round((hits / total) * 100);
+  }, [resolvedPredictions]);
+  const averageConfidence = useMemo(() => {
+    if (resolvedPredictions.length === 0) return null;
+    const sum = resolvedPredictions.reduce((acc, prediction) => acc + prediction.confidence, 0);
+    return Math.round(sum / resolvedPredictions.length);
+  }, [resolvedPredictions]);
+
+  const coreReflectionQuestions = DEFAULT_CORE_REFLECTION_QUESTIONS;
+  const optionalReflectionQuestions = DEFAULT_OPTIONAL_REFLECTION_QUESTIONS;
+  const visibleReflectionQuestions = useMemo(
+    () => [
+      ...coreReflectionQuestions,
+      ...(showOptionalReflectionQuestions ? optionalReflectionQuestions : []),
+    ],
+    [showOptionalReflectionQuestions],
+  );
+
+  const activeReflection = useMemo(() => {
+    const existing = reflections.find((entry) => entry.date === selectedReflectionDate);
+    if (existing) return existing;
+    return {
+      id: crypto.randomUUID(),
+      date: selectedReflectionDate,
+      prompts: {
+        wins: "",
+        challenges: "",
+        learnings: "",
+        tomorrow: "",
+        gratitude: "",
+      },
+      items: {},
+      wins: "",
+      challenges: "",
+      notes: "",
+      tomorrow: "",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    } satisfies ReflectionEntry;
+  }, [reflections, selectedReflectionDate]);
+
+  function reflectionPrompt(entry: ReflectionEntry, key: string): string {
+    if (entry.prompts?.[key]) return entry.prompts[key] ?? "";
+    if (key === "wins") return entry.wins;
+    if (key === "challenges" || key === "problems") return entry.challenges;
+    if (key === "learnings") return entry.notes;
+    if (key === "tomorrow") return entry.tomorrow;
+    return "";
+  }
+
+  function upsertSelectedReflection(
+    updater: (entry: ReflectionEntry) => ReflectionEntry,
+  ) {
+    setReflections((prev) => {
+      const index = prev.findIndex((entry) => entry.date === selectedReflectionDate);
+      if (index < 0) {
+        return [...prev, updater(activeReflection)];
+      }
+      const next = [...prev];
+      next[index] = updater(next[index]);
+      return next;
+    });
+  }
+
+  function updateReflectionPrompt(key: string, value: string) {
+    const now = Date.now();
+    upsertSelectedReflection((entry) => {
+      const prompts = {
+        wins: "",
+        challenges: "",
+        learnings: "",
+        tomorrow: "",
+        gratitude: "",
+        ...(entry.prompts ?? {}),
+        [key]: value,
+      };
+      return {
+        ...entry,
+        prompts,
+        wins: key === "wins" ? value : entry.wins,
+        challenges: key === "challenges" || key === "problems" ? value : entry.challenges,
+        notes: key === "learnings" ? value : entry.notes,
+        tomorrow: key === "tomorrow" ? value : entry.tomorrow,
+        updatedAt: now,
+      };
+    });
+  }
+
+  function reflectionItems(entry: ReflectionEntry, key: string): string[] {
+    const fromItems = entry.items?.[key] ?? [];
+    if (fromItems.length > 0) return fromItems;
+    const fallback = reflectionPrompt(entry, key);
+    return fallback ? [fallback] : [];
+  }
+
+  function addReflectionItem(questionKey: string) {
+    const now = Date.now();
+    upsertSelectedReflection((entry) => {
+      const existing = reflectionItems(entry, questionKey);
+      return {
+        ...entry,
+        items: {
+          ...(entry.items ?? {}),
+          [questionKey]: [...existing, ""],
+        },
+        updatedAt: now,
+      };
+    });
+  }
+
+  function updateReflectionItem(questionKey: string, index: number, value: string) {
+    const now = Date.now();
+    upsertSelectedReflection((entry) => {
+      const existing = reflectionItems(entry, questionKey);
+      const nextItems = [...existing];
+      nextItems[index] = value;
+      const joined = nextItems.filter((item) => item.trim()).join("\n");
+      return {
+        ...entry,
+        items: {
+          ...(entry.items ?? {}),
+          [questionKey]: nextItems,
+        },
+        prompts: {
+          wins: "",
+          challenges: "",
+          learnings: "",
+          tomorrow: "",
+          gratitude: "",
+          ...(entry.prompts ?? {}),
+          [questionKey]: joined,
+        },
+        wins: questionKey === "wins" ? joined : entry.wins,
+        challenges: questionKey === "challenges" || questionKey === "problems" ? joined : entry.challenges,
+        notes: questionKey === "learnings" ? joined : entry.notes,
+        tomorrow: questionKey === "tomorrow" ? joined : entry.tomorrow,
+        updatedAt: now,
+      };
+    });
+  }
+
+  function removeReflectionItem(questionKey: string, index: number) {
+    const now = Date.now();
+    upsertSelectedReflection((entry) => {
+      const existing = reflectionItems(entry, questionKey);
+      const nextItems = existing.filter((_, i) => i !== index);
+      const joined = nextItems.filter((item) => item.trim()).join("\n");
+      return {
+        ...entry,
+        items: {
+          ...(entry.items ?? {}),
+          [questionKey]: nextItems,
+        },
+        prompts: {
+          wins: "",
+          challenges: "",
+          learnings: "",
+          tomorrow: "",
+          gratitude: "",
+          ...(entry.prompts ?? {}),
+          [questionKey]: joined,
+        },
+        wins: questionKey === "wins" ? joined : entry.wins,
+        challenges: questionKey === "challenges" || questionKey === "problems" ? joined : entry.challenges,
+        notes: questionKey === "learnings" ? joined : entry.notes,
+        tomorrow: questionKey === "tomorrow" ? joined : entry.tomorrow,
+        updatedAt: now,
+      };
+    });
+  }
+
+  const sortedReflections = useMemo(
+    () =>
+      [...reflections]
+        .sort((a, b) => (a.date < b.date ? 1 : -1))
+        .filter((entry) => {
+          const promptValues = Object.values(entry.prompts ?? {}).some((value) => value.trim().length > 0);
+          const itemValues = Object.values(entry.items ?? {}).some((items) =>
+            items.some((item) => item.trim().length > 0),
+          );
+          return promptValues || itemValues || entry.wins || entry.challenges || entry.notes || entry.tomorrow;
+        }),
+    [reflections],
+  );
+
   return (
     <main className="app-shell">
       <header className="app-header">
@@ -919,9 +1812,27 @@ export default function Page() {
                 >
                   Goals
                 </button>
-                <button type="button" className="goals-subtab" disabled>Habits</button>
-                <button type="button" className="goals-subtab" disabled>Predictions</button>
-                <button type="button" className="goals-subtab" disabled>Reflection</button>
+                <button
+                  type="button"
+                  className="goals-subtab"
+                  onClick={() => setActiveTab("habits")}
+                >
+                  Habits
+                </button>
+                <button
+                  type="button"
+                  className="goals-subtab"
+                  onClick={() => setActiveTab("predictions")}
+                >
+                  Predictions
+                </button>
+                <button
+                  type="button"
+                  className="goals-subtab"
+                  onClick={() => setActiveTab("reflection")}
+                >
+                  Reflection
+                </button>
                 <button
                   type="button"
                   className="goals-subtab"
@@ -938,6 +1849,15 @@ export default function Page() {
                   title={justCopied ? "Copied" : "Copy visible goals"}
                 >
                   {justCopied ? "✓" : "📋"}
+                </button>
+                <button
+                  type="button"
+                  className="goals-copy-btn"
+                  onClick={() => setShowAiSettingsModal(true)}
+                  title="AI settings"
+                  aria-label="AI settings"
+                >
+                  ⚙
                 </button>
                 <select value={todoFilter} onChange={(event) => setTodoFilter(event.target.value as TodoFilter)}>
                   <option value="active">Active</option>
@@ -1019,6 +1939,29 @@ export default function Page() {
                       />
                       <div className="goal-actions">
                         {!todo.archivedAt && (
+                          <button
+                            type="button"
+                            className="goal-expand-btn"
+                            onClick={() => handleExpandTodo(todo)}
+                            disabled={expandingTodoId === todo.id}
+                            title="AI expand into 3-5 subtasks"
+                            aria-label="AI expand into 3-5 subtasks"
+                          >
+                            {expandingTodoId === todo.id ? "…" : "+"}
+                          </button>
+                        )}
+                        {!todo.archivedAt && (
+                          <button
+                            type="button"
+                            className={`goal-context-btn ${expandContextByTodoId[todo.id] ? "has-context" : ""}`}
+                            onClick={() => openExpansionContextModal(todo)}
+                            title="Add expansion context"
+                            aria-label="Add expansion context"
+                          >
+                            🎤
+                          </button>
+                        )}
+                        {!todo.archivedAt && (
                           <button type="button" onClick={() => openEditModal(todo)}>Edit</button>
                         )}
                         {todo.archivedAt ? (
@@ -1048,6 +1991,390 @@ export default function Page() {
           </section>
           )}
 
+          {activeTab === "habits" && (
+          <section className="tab-pane goals-board">
+            <div className="goals-topbar">
+              <nav className="goals-subtabs" aria-label="Accountability sections">
+                <button type="button" className="goals-subtab" onClick={() => setActiveTab("goals")}>
+                  Goals
+                </button>
+                <button type="button" className="goals-subtab active" onClick={() => setActiveTab("habits")}>
+                  Habits
+                </button>
+                <button type="button" className="goals-subtab" onClick={() => setActiveTab("predictions")}>
+                  Predictions
+                </button>
+                <button type="button" className="goals-subtab" onClick={() => setActiveTab("reflection")}>
+                  Reflection
+                </button>
+                <button type="button" className="goals-subtab" onClick={() => setActiveTab("blocks")}>
+                  Block Setup
+                </button>
+              </nav>
+              <div className="goals-filters">
+                <button
+                  type="button"
+                  className={`goals-subtab ${habitsView === "week" ? "active" : ""}`}
+                  onClick={() => setHabitsView("week")}
+                >
+                  Week
+                </button>
+                <button
+                  type="button"
+                  className={`goals-subtab ${habitsView === "month" ? "active" : ""}`}
+                  onClick={() => setHabitsView("month")}
+                >
+                  Month
+                </button>
+              </div>
+            </div>
+            <div className="habits-grid">
+              <div className="habits-add">
+                <input
+                  value={newHabitName}
+                  onChange={(event) => setNewHabitName(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      addHabit();
+                    }
+                  }}
+                  placeholder="Add a habit..."
+                />
+                <button type="button" onClick={addHabit}>Add</button>
+              </div>
+              <div className="habits-meta">
+                <small>Ideas: {ideaHabits.length}</small>
+                <small>Archived: {archivedHabits.length}</small>
+              </div>
+              {activeHabits.length === 0 ? (
+                <p className="goals-empty">No habits yet.</p>
+              ) : (
+                <table className="habits-table">
+                  <thead>
+                    <tr>
+                      <th>Habit</th>
+                      {habitsView === "week"
+                        ? habitDays.map((day) => (
+                            <th key={day.key}>
+                              <div>{day.label}</div>
+                              <small>{day.subLabel}</small>
+                            </th>
+                          ))
+                        : habitWeeks.map((week) => (
+                            <th key={week.start.toISOString()}>{week.label}</th>
+                          ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {activeHabits.map((habit) => (
+                      <tr key={habit.id}>
+                        <td>
+                          <div className="habit-name-cell">
+                            <input
+                              value={habit.name}
+                              onChange={(event) =>
+                                setHabits((prev) =>
+                                  prev.map((h) => (h.id === habit.id ? { ...h, name: event.target.value } : h)),
+                                )
+                              }
+                            />
+                            <button type="button" onClick={() => setHabitStatus(habit.id, "idea")}>Idea</button>
+                            <button type="button" onClick={() => setHabitStatus(habit.id, "archived")}>
+                              Archive
+                            </button>
+                            <button type="button" onClick={() => deleteHabit(habit.id)}>Delete</button>
+                          </div>
+                        </td>
+                        {habitsView === "week"
+                          ? habitDays.map((day) => {
+                              const done = habit.checks.some((check) => check.date === day.key && check.done);
+                              return (
+                                <td key={`${habit.id}:${day.key}`}>
+                                  <button
+                                    type="button"
+                                    className={`habit-check ${done ? "done" : ""}`}
+                                    onClick={() => toggleHabitDay(habit.id, day.key)}
+                                    aria-label={`Mark ${habit.name} for ${day.label}`}
+                                  >
+                                    {done ? "✓" : ""}
+                                  </button>
+                                </td>
+                              );
+                            })
+                          : habitWeeks.map((week) => {
+                              const done = habit.checks.some((check) => {
+                                if (!check.done) return false;
+                                const checkDate = new Date(`${check.date}T00:00:00`);
+                                return checkDate >= week.start && checkDate <= week.end;
+                              });
+                              return (
+                                <td key={`${habit.id}:${week.start.toISOString()}`}>
+                                  <button
+                                    type="button"
+                                    className={`habit-check ${done ? "done" : ""}`}
+                                    onClick={() => toggleHabitWeek(habit.id, week.start, week.end)}
+                                  >
+                                    {done ? "✓" : ""}
+                                  </button>
+                                </td>
+                              );
+                            })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              {(ideaHabits.length > 0 || archivedHabits.length > 0) && (
+                <div className="habits-side-lists">
+                  {ideaHabits.length > 0 && (
+                    <div>
+                      <strong>Ideas</strong>
+                      <ul className="goals-list">
+                        {ideaHabits.map((habit) => (
+                          <li key={`idea:${habit.id}`} className="goal-row">
+                            <span>{habit.name}</span>
+                            <div className="prediction-actions">
+                              <button type="button" onClick={() => setHabitStatus(habit.id, "active")}>
+                                Activate
+                              </button>
+                              <button type="button" onClick={() => deleteHabit(habit.id)}>Delete</button>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {archivedHabits.length > 0 && (
+                    <div>
+                      <strong>Archived</strong>
+                      <ul className="goals-list">
+                        {archivedHabits.map((habit) => (
+                          <li key={`archived:${habit.id}`} className="goal-row">
+                            <span>{habit.name}</span>
+                            <div className="prediction-actions">
+                              <button type="button" onClick={() => setHabitStatus(habit.id, "active")}>
+                                Restore
+                              </button>
+                              <button type="button" onClick={() => deleteHabit(habit.id)}>Delete</button>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </section>
+          )}
+
+          {activeTab === "predictions" && (
+          <section className="tab-pane goals-board">
+            <div className="goals-topbar">
+              <nav className="goals-subtabs" aria-label="Accountability sections">
+                <button type="button" className="goals-subtab" onClick={() => setActiveTab("goals")}>Goals</button>
+                <button type="button" className="goals-subtab" onClick={() => setActiveTab("habits")}>Habits</button>
+                <button type="button" className="goals-subtab active" onClick={() => setActiveTab("predictions")}>
+                  Predictions
+                </button>
+                <button type="button" className="goals-subtab" onClick={() => setActiveTab("reflection")}>
+                  Reflection
+                </button>
+                <button type="button" className="goals-subtab" onClick={() => setActiveTab("blocks")}>
+                  Block Setup
+                </button>
+              </nav>
+            </div>
+            <div className="predictions-top">
+              <p className="goals-progress">
+                Calibration: {calibrationAccuracy ?? "—"}% accuracy / {averageConfidence ?? "—"}% avg confidence
+              </p>
+              <div className="prediction-add">
+                <input
+                  value={newPredictionTitle}
+                  onChange={(event) => setNewPredictionTitle(event.target.value)}
+                  placeholder="Add a prediction..."
+                />
+                <input
+                  type="number"
+                  min={1}
+                  max={99}
+                  value={newPredictionConfidence}
+                  onChange={(event) => {
+                    const numeric = Number(event.target.value);
+                    setNewPredictionConfidence(Number.isFinite(numeric) ? numeric : 70);
+                  }}
+                />
+                <button type="button" onClick={addPrediction}>Add</button>
+              </div>
+            </div>
+            {predictions.length === 0 ? (
+              <p className="goals-empty">No predictions yet.</p>
+            ) : (
+              <ul className="goals-list">
+                {predictions.map((prediction) => (
+                  <li key={prediction.id} className="goal-row">
+                    <div className="prediction-row">
+                      <span>{prediction.title}</span>
+                      <small>{prediction.confidence}%</small>
+                    </div>
+                    <div className="prediction-actions">
+                      <button type="button" onClick={() => setPredictionOutcome(prediction.id, "hit")}>Hit</button>
+                      <button type="button" onClick={() => setPredictionOutcome(prediction.id, "miss")}>Miss</button>
+                      <button type="button" onClick={() => setPredictionOutcome(prediction.id, "pending")}>
+                        Pending
+                      </button>
+                      <button type="button" onClick={() => deletePrediction(prediction.id)}>Delete</button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+          )}
+
+          {activeTab === "reflection" && (
+          <section className="tab-pane goals-board">
+            <div className="goals-topbar">
+              <nav className="goals-subtabs" aria-label="Accountability sections">
+                <button type="button" className="goals-subtab" onClick={() => setActiveTab("goals")}>Goals</button>
+                <button type="button" className="goals-subtab" onClick={() => setActiveTab("habits")}>Habits</button>
+                <button type="button" className="goals-subtab" onClick={() => setActiveTab("predictions")}>
+                  Predictions
+                </button>
+                <button type="button" className="goals-subtab active" onClick={() => setActiveTab("reflection")}>
+                  Reflection
+                </button>
+                <button type="button" className="goals-subtab" onClick={() => setActiveTab("blocks")}>
+                  Block Setup
+                </button>
+              </nav>
+              <div className="goals-filters">
+                <button
+                  type="button"
+                  className={`goals-subtab ${reflectionView === "today" ? "active" : ""}`}
+                  onClick={() => setReflectionView("today")}
+                >
+                  Today
+                </button>
+                <button
+                  type="button"
+                  className={`goals-subtab ${reflectionView === "history" ? "active" : ""}`}
+                  onClick={() => setReflectionView("history")}
+                >
+                  History
+                </button>
+                <input
+                  type="date"
+                  value={selectedReflectionDate}
+                  onChange={(event) => setSelectedReflectionDate(event.target.value || todayKey)}
+                />
+              </div>
+            </div>
+            {reflectionView === "today" ? (
+              <>
+                <div className="reflection-controls">
+                  <button
+                    type="button"
+                    onClick={() => setShowOptionalReflectionQuestions((prev) => !prev)}
+                  >
+                    {showOptionalReflectionQuestions ? "Hide optional prompts" : "Show optional prompts"}
+                  </button>
+                </div>
+                <div className="reflection-grid">
+                  {visibleReflectionQuestions.map((question) => {
+                    const items = reflectionItems(activeReflection, question.key);
+                    return (
+                      <label key={`reflection-question:${question.key}`}>
+                        {question.label}
+                        {items.length === 0 ? (
+                          <textarea
+                            value={reflectionPrompt(activeReflection, question.key)}
+                            onChange={(event) => updateReflectionPrompt(question.key, event.target.value)}
+                            placeholder={question.placeholder}
+                          />
+                        ) : (
+                          <div className="reflection-items">
+                            {items.map((item, index) => (
+                              <div key={`reflection-item:${question.key}:${index}`} className="reflection-item-row">
+                                <textarea
+                                  value={item}
+                                  onChange={(event) =>
+                                    updateReflectionItem(question.key, index, event.target.value)
+                                  }
+                                  placeholder={question.placeholder}
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => removeReflectionItem(question.key, index)}
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        <button type="button" onClick={() => addReflectionItem(question.key)}>
+                          Add item
+                        </button>
+                      </label>
+                    );
+                  })}
+                </div>
+              </>
+            ) : (
+              <>
+                <h3 className="reflection-history-title">Recent reflections</h3>
+                {sortedReflections.length === 0 ? (
+                  <p className="goals-empty">No reflections yet.</p>
+                ) : (
+                  <ul className="goals-list">
+                    {sortedReflections.slice(0, 20).map((entry) => {
+                      const expanded = expandedReflectionId === entry.id;
+                      return (
+                        <li key={entry.id} className="goal-row">
+                          <div className="prediction-row">
+                            <strong>{entry.date}</strong>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setExpandedReflectionId((prev) => (prev === entry.id ? null : entry.id))
+                              }
+                            >
+                              {expanded ? "Collapse" : "Expand"}
+                            </button>
+                          </div>
+                          {expanded && (
+                            <div className="reflection-history-details">
+                              {[...coreReflectionQuestions, ...optionalReflectionQuestions].map((question) => {
+                                const values = reflectionItems(entry, question.key).filter(
+                                  (item) => item.trim().length > 0,
+                                );
+                                if (values.length === 0) return null;
+                                return (
+                                  <div key={`reflection-history:${entry.id}:${question.key}`}>
+                                    <small>{question.label}</small>
+                                    {values.map((value, index) => (
+                                      <p key={`reflection-history-value:${entry.id}:${question.key}:${index}`}>
+                                        {value}
+                                      </p>
+                                    ))}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </>
+            )}
+          </section>
+          )}
+
           {activeTab === "blocks" && (
           <section className="tab-pane goals-board">
           <div className="goals-topbar">
@@ -1059,9 +2386,27 @@ export default function Page() {
               >
                 Goals
               </button>
-              <button type="button" className="goals-subtab" disabled>Habits</button>
-              <button type="button" className="goals-subtab" disabled>Predictions</button>
-              <button type="button" className="goals-subtab" disabled>Reflection</button>
+              <button
+                type="button"
+                className="goals-subtab"
+                onClick={() => setActiveTab("habits")}
+              >
+                Habits
+              </button>
+              <button
+                type="button"
+                className="goals-subtab"
+                onClick={() => setActiveTab("predictions")}
+              >
+                Predictions
+              </button>
+              <button
+                type="button"
+                className="goals-subtab"
+                onClick={() => setActiveTab("reflection")}
+              >
+                Reflection
+              </button>
               <button
                 type="button"
                 className={`goals-subtab ${activeTab === "blocks" ? "active" : ""}`}
@@ -1383,11 +2728,106 @@ export default function Page() {
             </label>
             <label>
               Deadline
-              <input type="date" value={editDeadline} onChange={(event) => setEditDeadline(event.target.value)} />
+              <div className="todo-edit-deadline-row">
+                <input
+                  type="date"
+                  value={editDeadline}
+                  onChange={(event) => setEditDeadline(event.target.value)}
+                />
+                <button
+                  type="button"
+                  className="todo-edit-deadline-plus"
+                  onClick={() => setEditDeadline(tomorrowDateInputValue())}
+                  title="Set deadline to tomorrow"
+                  aria-label="Set deadline to tomorrow"
+                >
+                  +
+                </button>
+              </div>
             </label>
             <div className="todo-edit-modal-actions">
               <button type="button" onClick={closeEditModal}>Cancel</button>
               <button type="button" onClick={saveEditModal}>Save</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {showAiSettingsModal && (
+        <div
+          className="todo-edit-modal-backdrop"
+          role="presentation"
+          onClick={() => setShowAiSettingsModal(false)}
+        >
+          <div
+            className="todo-edit-modal ai-settings-modal"
+            role="dialog"
+            aria-modal="true"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3>AI settings</h3>
+            <label>
+              Expand provider
+              <select
+                value={expandProvider}
+                onChange={(event) => setExpandProvider(event.target.value as ExpandProvider)}
+              >
+                <option value="gemini-flash">Gemini Flash (expand)</option>
+                <option value="openai-gpt-4o-mini">OpenAI GPT-4o mini (expand)</option>
+              </select>
+            </label>
+            <label>
+              Gemini API key
+              <input
+                type="password"
+                value={geminiApiKey}
+                onChange={(event) => setGeminiApiKey(event.target.value)}
+                placeholder="AIza..."
+              />
+            </label>
+            <label>
+              OpenAI API key (optional)
+              <input
+                type="password"
+                value={openAiApiKey}
+                onChange={(event) => setOpenAiApiKey(event.target.value)}
+                placeholder="sk-..."
+              />
+            </label>
+            <p className="ai-settings-hint">
+              Expansion prompt asks for end state, intermediate states, and concrete physical actions, then creates 3-5
+              subtasks prefixed with [2m] or [5m].
+            </p>
+            <div className="todo-edit-modal-actions">
+              <button type="button" onClick={() => setShowAiSettingsModal(false)}>Cancel</button>
+              <button type="button" onClick={saveAiSettings}>Save</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {expansionContextTodoId && (
+        <div className="todo-edit-modal-backdrop" role="presentation" onClick={closeExpansionContextModal}>
+          <div
+            className="todo-edit-modal ai-settings-modal"
+            role="dialog"
+            aria-modal="true"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3>Expansion context</h3>
+            <label>
+              Optional context for AI expansion
+              <textarea
+                className="ai-context-textarea"
+                value={expansionContextDraft}
+                onChange={(event) => setExpansionContextDraft(event.target.value)}
+                placeholder="Add any extra context for the AI, constraints, desired output style, assumptions, etc."
+              />
+            </label>
+            <p className="ai-settings-hint">
+              This note is added to the expansion prompt for this specific todo only.
+            </p>
+            <div className="todo-edit-modal-actions">
+              <button type="button" onClick={closeExpansionContextModal}>Cancel</button>
+              <button type="button" onClick={saveExpansionContextModal}>Save</button>
             </div>
           </div>
         </div>

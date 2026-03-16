@@ -53,6 +53,14 @@ CREATE TABLE IF NOT EXISTS lock_zone_requirements (
   FOREIGN KEY(zone_id) REFERENCES lock_zones(id) ON DELETE CASCADE,
   FOREIGN KEY(todo_id) REFERENCES todos(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS accountability_state (
+  id INTEGER PRIMARY KEY CHECK(id = 1),
+  habits_json TEXT NOT NULL DEFAULT '[]',
+  predictions_json TEXT NOT NULL DEFAULT '[]',
+  reflections_json TEXT NOT NULL DEFAULT '[]',
+  updated_at TEXT NOT NULL
+);
 `);
 
 function migrateTodoStatusToActive() {
@@ -139,3 +147,12 @@ ensureTodoColumn("sort_order", "INTEGER NOT NULL DEFAULT 0");
 ensureTodoColumn("deadline_at", "TEXT");
 ensureTodoColumn("archived_at", "TEXT");
 ensureTodoColumn("completed_at", "TEXT");
+
+const existingStateRow = db
+  .prepare("SELECT 1 FROM accountability_state WHERE id = 1 LIMIT 1")
+  .get() as { 1: number } | undefined;
+if (!existingStateRow) {
+  db.prepare(
+    "INSERT INTO accountability_state (id, habits_json, predictions_json, reflections_json, updated_at) VALUES (1, '[]', '[]', '[]', ?)",
+  ).run(new Date().toISOString());
+}

@@ -16,6 +16,10 @@ Manage todos through the local SlayTheList API in a safe, deterministic way that
   - `PATCH /api/todos/:id`
   - `DELETE /api/todos/:id`
   - `PUT /api/todos/reorder`
+- Accountability CRUD API:
+  - Habits: `GET/POST/PATCH/DELETE /api/habits`
+  - Predictions: `GET/POST/PATCH/DELETE /api/predictions`
+  - Reflections: `GET/POST/PATCH/DELETE /api/reflections`
 
 ## Hard rules
 
@@ -27,6 +31,7 @@ Manage todos through the local SlayTheList API in a safe, deterministic way that
    - then call reorder endpoint to place children under parents.
 5. If a user instruction is ambiguous (for example two todos with same title), ask a clarification question instead of guessing.
 6. Never mutate lock zones in this skill unless user explicitly asks for block/zone changes.
+7. For habits/predictions/reflections, use granular CRUD endpoints instead of replacing entire state.
 
 ## Data model notes
 
@@ -121,6 +126,44 @@ Reorder:
 ```powershell
 Invoke-RestMethod "$API/api/todos/reorder" -Method PUT -ContentType "application/json" -Body (@{
   orderedTodoIds = @("id-1","id-2","id-3")
+} | ConvertTo-Json)
+```
+
+Create habit:
+
+```powershell
+Invoke-RestMethod "$API/api/habits" -Method POST -ContentType "application/json" -Body (@{
+  name = "Daily planning"
+  status = "active"  # active | idea | archived
+} | ConvertTo-Json)
+```
+
+Create prediction:
+
+```powershell
+Invoke-RestMethod "$API/api/predictions" -Method POST -ContentType "application/json" -Body (@{
+  title = "Ship by Friday"
+  confidence = 68
+} | ConvertTo-Json)
+```
+
+Set prediction outcome:
+
+```powershell
+Invoke-RestMethod "$API/api/predictions/<id>" -Method PATCH -ContentType "application/json" -Body (@{
+  outcome = "hit" # pending | hit | miss
+} | ConvertTo-Json)
+```
+
+Create reflection:
+
+```powershell
+Invoke-RestMethod "$API/api/reflections" -Method POST -ContentType "application/json" -Body (@{
+  date = "2026-03-12"
+  wins = "..."
+  challenges = "..."
+  notes = "..."
+  tomorrow = "..."
 } | ConvertTo-Json)
 ```
 

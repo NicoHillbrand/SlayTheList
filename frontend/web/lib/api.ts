@@ -1,4 +1,14 @@
-import type { LockZone, OverlayState, Todo } from "@slaythelist/contracts";
+import type {
+  AccountabilityState,
+  Habit,
+  HabitStatus,
+  LockZone,
+  OverlayState,
+  Prediction,
+  PredictionOutcome,
+  ReflectionEntry,
+  Todo,
+} from "@slaythelist/contracts";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8788";
 
@@ -114,6 +124,105 @@ export async function setZoneRequirements(zoneId: string, todoIds: string[]) {
 
 export async function getOverlayState() {
   return request<OverlayState>("/api/overlay-state");
+}
+
+export async function getAccountabilityState() {
+  return request<AccountabilityState>("/api/accountability-state");
+}
+
+export async function saveAccountabilityState(state: AccountabilityState) {
+  return request<AccountabilityState>("/api/accountability-state", {
+    method: "PUT",
+    body: JSON.stringify(state),
+  });
+}
+
+export async function listHabits() {
+  return request<{ items: Habit[] }>("/api/habits");
+}
+
+export async function createHabit(input: { name: string; status?: HabitStatus }) {
+  return request<Habit>("/api/habits", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateHabit(
+  id: string,
+  patch: Partial<{ name: string; status: HabitStatus; checks: Habit["checks"] }>,
+) {
+  return request<Habit>(`/api/habits/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteHabit(id: string) {
+  return request<{ deleted: true }>(`/api/habits/${id}`, {
+    method: "DELETE",
+  });
+}
+
+export async function listPredictions() {
+  return request<{ items: Prediction[] }>("/api/predictions");
+}
+
+export async function createPrediction(input: { title: string; confidence: number }) {
+  return request<Prediction>("/api/predictions", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updatePrediction(
+  id: string,
+  patch: Partial<{
+    title: string;
+    confidence: number;
+    outcome: PredictionOutcome;
+    resolvedAt: number | null;
+  }>,
+) {
+  return request<Prediction>(`/api/predictions/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deletePrediction(id: string) {
+  return request<{ deleted: true }>(`/api/predictions/${id}`, {
+    method: "DELETE",
+  });
+}
+
+export async function listReflections() {
+  return request<{ items: ReflectionEntry[] }>("/api/reflections");
+}
+
+export async function createReflection(
+  input: Pick<ReflectionEntry, "date" | "wins" | "challenges" | "notes" | "tomorrow">,
+) {
+  return request<ReflectionEntry>("/api/reflections", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateReflection(
+  id: string,
+  patch: Partial<Pick<ReflectionEntry, "date" | "wins" | "challenges" | "notes" | "tomorrow">>,
+) {
+  return request<ReflectionEntry>(`/api/reflections/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteReflection(id: string) {
+  return request<{ deleted: true }>(`/api/reflections/${id}`, {
+    method: "DELETE",
+  });
 }
 
 export function overlayWebSocketUrl() {

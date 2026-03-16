@@ -1,6 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { db } from "./db.js";
-import type { LockZone, LockZoneState, Todo } from "@slaythelist/contracts";
+import type {
+  AccountabilityState,
+  Habit,
+  LockZone,
+  LockZoneState,
+  Prediction,
+  ReflectionEntry,
+  Todo,
+} from "@slaythelist/contracts";
 
 type TodoRow = {
   id: string;
@@ -25,6 +33,13 @@ type ZoneRow = {
   height: number;
   enabled: 0 | 1;
   created_at: string;
+  updated_at: string;
+};
+
+type AccountabilityStateRow = {
+  habits_json: string;
+  predictions_json: string;
+  reflections_json: string;
   updated_at: string;
 };
 
@@ -240,6 +255,50 @@ export function setZoneRequirements(zoneId: string, todoIds: string[]): void {
     }
   });
   tx(zoneId, [...new Set(todoIds)]);
+}
+
+function safeParseJsonArray<T>(raw: string): T[] {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? (parsed as T[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function getAccountabilityState(): AccountabilityState {
+  const row = db
+    .prepare(
+      "SELECT habits_json, predictions_json, reflections_json, updated_at FROM accountability_state WHERE id = 1",
+    )
+    .get() as AccountabilityStateRow | undefined;
+  if (!row) {
+    return {
+      habits: [],
+      predictions: [],
+      reflections: [],
+    };
+  }
+  return {
+    habits: safeParseJsonArray<Habit>(row.habits_json),
+    predictions: safeParseJsonArray<Prediction>(row.predictions_json),
+    reflections: safeParseJsonArray<ReflectionEntry>(row.reflections_json),
+  };
+}
+
+export function saveAccountabilityState(state: AccountabilityState): AccountabilityState {
+  const updatedAt = new Date().toISOString();
+  db.prepare(
+    `UPDATE accountability_state
+     SET habits_json = ?, predictions_json = ?, reflections_json = ?, updated_at = ?
+     WHERE id = 1`,
+  ).run(
+    JSON.stringify(state.habits),
+    JSON.stringify(state.predictions),
+    JSON.stringify(state.reflections),
+    updatedAt,
+  );
+  return state;
 }
 
 export function listOverlayState(): LockZoneState[] {

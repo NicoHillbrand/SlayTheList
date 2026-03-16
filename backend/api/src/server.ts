@@ -1,17 +1,28 @@
 import cors from "cors";
 import express from "express";
 import { createServer } from "node:http";
+import { randomUUID } from "node:crypto";
 import { WebSocketServer } from "ws";
-import type { EventEnvelope, OverlayState } from "@slaythelist/contracts";
+import {
+  accountabilityStateSchema,
+  habitCheckSchema,
+  habitStatusSchema,
+  predictionOutcomeSchema,
+  reflectionEntrySchema,
+  type EventEnvelope,
+  type OverlayState,
+} from "@slaythelist/contracts";
 import {
   createTodo,
   createZone,
   deleteTodo,
   deleteZone,
+  getAccountabilityState,
   listOverlayState,
   listTodos,
   listZones,
   reorderTodos,
+  saveAccountabilityState,
   setZoneRequirements,
   updateTodo,
   updateZone,
@@ -203,6 +214,264 @@ app.put("/api/todos/reorder", (req, res) => {
   } catch (error) {
     return badRequest(res, `invalid reorder payload: ${(error as Error).message}`);
   }
+});
+
+app.get("/api/accountability-state", (_req, res) => {
+  ok(res, getAccountabilityState());
+});
+
+app.put("/api/accountability-state", (req, res) => {
+  const parsed = accountabilityStateSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return badRequest(res, `invalid accountability state: ${parsed.error.issues[0]?.message ?? "invalid payload"}`);
+  }
+  const saved = saveAccountabilityState(parsed.data);
+  ok(res, saved);
+});
+
+app.get("/api/habits", (_req, res) => {
+  const state = accountabilityStateSchema.parse(getAccountabilityState());
+  ok(res, { items: state.habits });
+});
+
+app.post("/api/habits", (req, res) => {
+  const name = req.body?.name;
+  const statusInput = req.body?.status;
+  if (typeof name !== "string" || !name.trim()) {
+    return badRequest(res, "name is required");
+  }
+  const statusParsed = statusInput === undefined ? { success: true, data: "active" as const } : habitStatusSchema.safeParse(statusInput);
+  if (!statusParsed.success) {
+    return badRequest(res, "status must be active, archived, or idea");
+  }
+  const state = accountabilityStateSchema.parse(getAccountabilityState());
+  const created = {
+    id: randomUUID(),
+    name: name.trim(),
+    checks: [],
+    createdAt: Date.now(),
+    status: statusParsed.data,
+  };
+  const saved = saveAccountabilityState({ ...state, habits: [...state.habits, created] });
+  ok(res, created);
+});
+
+app.patch("/api/habits/:id", (req, res) => {
+  const patch = req.body ?? {};
+  const nextName = patch.name;
+  const nextStatus = patch.status;
+  const nextChecks = patch.checks;
+  if (nextName !== undefined && typeof nextName !== "string") {
+    return badRequest(res, "name must be a string");
+  }
+  const statusParsed = nextStatus === undefined ? { success: true, data: undefined } : habitStatusSchema.safeParse(nextStatus);
+  if (!statusParsed.success) {
+    return badRequest(res, "status must be active, archived, or idea");
+  }
+  const checksParsed =
+    nextChecks === undefined ? { success: true, data: undefined } : habitCheckSchema.array().safeParse(nextChecks);
+  if (!checksParsed.success) {
+    return badRequest(res, "checks must be an array of { date, done }");
+  }
+  const state = accountabilityStateSchema.parse(getAccountabilityState());
+  const index = state.habits.findIndex((habit) => habit.id === req.params.id);
+  if (index < 0) {
+    return res.status(404).json({ error: "habit not found" });
+  }
+  const current = state.habits[index];
+  const updated = {
+    ...current,
+    name: nextName === undefined ? current.name : nextName.trim(),
+    status: statusParsed.data === undefined ? current.status : statusParsed.data,
+    checks: checksParsed.data === undefined ? current.checks : checksParsed.data,
+  };
+  const nextHabits = [...state.habits];
+  nextHabits[index] = updated;
+  saveAccountabilityState({ ...state, habits: nextHabits });
+  ok(res, updated);
+});
+
+app.delete("/api/habits/:id", (req, res) => {
+  const state = accountabilityStateSchema.parse(getAccountabilityState());
+  const nextHabits = state.habits.filter((habit) => habit.id !== req.params.id);
+  if (nextHabits.length === state.habits.length) {
+    return res.status(404).json({ error: "habit not found" });
+  }
+  saveAccountabilityState({ ...state, habits: nextHabits });
+  ok(res, { deleted: true });
+});
+
+app.get("/api/predictions", (_req, res) => {
+  const state = accountabilityStateSchema.parse(getAccountabilityState());
+  ok(res, { items: state.predictions });
+});
+
+app.post("/api/predictions", (req, res) => {
+  const title = req.body?.title;
+  const confidence = req.body?.confidence;
+  if (typeof title !== "string" || !title.trim()) {
+    return badRequest(res, "title is required");
+  }
+  if (typeof confidence !== "number" || !Number.isInteger(confidence) || confidence < 1 || confidence > 99) {
+    return badRequest(res, "confidence must be an integer between 1 and 99");
+  }
+  const state = accountabilityStateSchema.parse(getAccountabilityState());
+  const created = {
+    id: randomUUID(),
+    title: title.trim(),
+    confidence,
+    outcome: "pending" as const,
+    createdAt: Date.now(),
+    resolvedAt: null,
+  };
+  saveAccountabilityState({ ...state, predictions: [...state.predictions, created] });
+  ok(res, created);
+});
+
+app.patch("/api/predictions/:id", (req, res) => {
+  const patch = req.body ?? {};
+  const nextTitle = patch.title;
+  const nextConfidence = patch.confidence;
+  const nextOutcome = patch.outcome;
+  const nextResolvedAt = patch.resolvedAt;
+  if (nextTitle !== undefined && typeof nextTitle !== "string") {
+    return badRequest(res, "title must be a string");
+  }
+  if (
+    nextConfidence !== undefined &&
+    (typeof nextConfidence !== "number" || !Number.isInteger(nextConfidence) || nextConfidence < 1 || nextConfidence > 99)
+  ) {
+    return badRequest(res, "confidence must be an integer between 1 and 99");
+  }
+  const outcomeParsed =
+    nextOutcome === undefined ? { success: true, data: undefined } : predictionOutcomeSchema.safeParse(nextOutcome);
+  if (!outcomeParsed.success) {
+    return badRequest(res, "outcome must be pending, hit, or miss");
+  }
+  if (
+    nextResolvedAt !== undefined &&
+    nextResolvedAt !== null &&
+    (typeof nextResolvedAt !== "number" || !Number.isFinite(nextResolvedAt))
+  ) {
+    return badRequest(res, "resolvedAt must be a number timestamp or null");
+  }
+  const state = accountabilityStateSchema.parse(getAccountabilityState());
+  const index = state.predictions.findIndex((prediction) => prediction.id === req.params.id);
+  if (index < 0) {
+    return res.status(404).json({ error: "prediction not found" });
+  }
+  const current = state.predictions[index];
+  const resolvedAtFromOutcome =
+    outcomeParsed.data === undefined
+      ? undefined
+      : outcomeParsed.data === "pending"
+        ? null
+        : current.resolvedAt ?? Date.now();
+  const updated = {
+    ...current,
+    title: nextTitle === undefined ? current.title : nextTitle.trim(),
+    confidence: nextConfidence === undefined ? current.confidence : nextConfidence,
+    outcome: outcomeParsed.data === undefined ? current.outcome : outcomeParsed.data,
+    resolvedAt:
+      nextResolvedAt === undefined
+        ? resolvedAtFromOutcome === undefined
+          ? current.resolvedAt
+          : resolvedAtFromOutcome
+        : nextResolvedAt,
+  };
+  const nextPredictions = [...state.predictions];
+  nextPredictions[index] = updated;
+  saveAccountabilityState({ ...state, predictions: nextPredictions });
+  ok(res, updated);
+});
+
+app.delete("/api/predictions/:id", (req, res) => {
+  const state = accountabilityStateSchema.parse(getAccountabilityState());
+  const nextPredictions = state.predictions.filter((prediction) => prediction.id !== req.params.id);
+  if (nextPredictions.length === state.predictions.length) {
+    return res.status(404).json({ error: "prediction not found" });
+  }
+  saveAccountabilityState({ ...state, predictions: nextPredictions });
+  ok(res, { deleted: true });
+});
+
+app.get("/api/reflections", (_req, res) => {
+  const state = accountabilityStateSchema.parse(getAccountabilityState());
+  ok(res, { items: state.reflections });
+});
+
+app.post("/api/reflections", (req, res) => {
+  const date = req.body?.date;
+  if (typeof date !== "string" || !date.trim()) {
+    return badRequest(res, "date is required");
+  }
+  const now = Date.now();
+  const created = reflectionEntrySchema.parse({
+    id: randomUUID(),
+    date: date.trim(),
+    wins: typeof req.body?.wins === "string" ? req.body.wins : "",
+    challenges: typeof req.body?.challenges === "string" ? req.body.challenges : "",
+    notes: typeof req.body?.notes === "string" ? req.body.notes : "",
+    tomorrow: typeof req.body?.tomorrow === "string" ? req.body.tomorrow : "",
+    createdAt: now,
+    updatedAt: now,
+  });
+  const state = accountabilityStateSchema.parse(getAccountabilityState());
+  saveAccountabilityState({ ...state, reflections: [...state.reflections, created] });
+  ok(res, created);
+});
+
+app.patch("/api/reflections/:id", (req, res) => {
+  const patch = req.body ?? {};
+  const nextDate = patch.date;
+  const nextWins = patch.wins;
+  const nextChallenges = patch.challenges;
+  const nextNotes = patch.notes;
+  const nextTomorrow = patch.tomorrow;
+  if (nextDate !== undefined && typeof nextDate !== "string") {
+    return badRequest(res, "date must be a string");
+  }
+  if (nextWins !== undefined && typeof nextWins !== "string") {
+    return badRequest(res, "wins must be a string");
+  }
+  if (nextChallenges !== undefined && typeof nextChallenges !== "string") {
+    return badRequest(res, "challenges must be a string");
+  }
+  if (nextNotes !== undefined && typeof nextNotes !== "string") {
+    return badRequest(res, "notes must be a string");
+  }
+  if (nextTomorrow !== undefined && typeof nextTomorrow !== "string") {
+    return badRequest(res, "tomorrow must be a string");
+  }
+  const state = accountabilityStateSchema.parse(getAccountabilityState());
+  const index = state.reflections.findIndex((reflection) => reflection.id === req.params.id);
+  if (index < 0) {
+    return res.status(404).json({ error: "reflection not found" });
+  }
+  const current = state.reflections[index];
+  const updated = reflectionEntrySchema.parse({
+    ...current,
+    date: nextDate === undefined ? current.date : nextDate.trim(),
+    wins: nextWins === undefined ? current.wins : nextWins,
+    challenges: nextChallenges === undefined ? current.challenges : nextChallenges,
+    notes: nextNotes === undefined ? current.notes : nextNotes,
+    tomorrow: nextTomorrow === undefined ? current.tomorrow : nextTomorrow,
+    updatedAt: Date.now(),
+  });
+  const nextReflections = [...state.reflections];
+  nextReflections[index] = updated;
+  saveAccountabilityState({ ...state, reflections: nextReflections });
+  ok(res, updated);
+});
+
+app.delete("/api/reflections/:id", (req, res) => {
+  const state = accountabilityStateSchema.parse(getAccountabilityState());
+  const nextReflections = state.reflections.filter((reflection) => reflection.id !== req.params.id);
+  if (nextReflections.length === state.reflections.length) {
+    return res.status(404).json({ error: "reflection not found" });
+  }
+  saveAccountabilityState({ ...state, reflections: nextReflections });
+  ok(res, { deleted: true });
 });
 
 app.delete("/api/todos/:id", (req, res) => {

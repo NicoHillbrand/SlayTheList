@@ -20,6 +20,24 @@ Base URL (default): `http://localhost:8788`
 - `DELETE /api/todos/:id` -> delete todo
 - `PUT /api/todos/reorder` -> apply explicit order
 
+## Endpoints (granular accountability CRUD)
+
+- Habits:
+  - `GET /api/habits`
+  - `POST /api/habits`
+  - `PATCH /api/habits/:id`
+  - `DELETE /api/habits/:id`
+- Predictions:
+  - `GET /api/predictions`
+  - `POST /api/predictions`
+  - `PATCH /api/predictions/:id`
+  - `DELETE /api/predictions/:id`
+- Reflections:
+  - `GET /api/reflections`
+  - `POST /api/reflections`
+  - `PATCH /api/reflections/:id`
+  - `DELETE /api/reflections/:id`
+
 Updatable fields on `PATCH /api/todos/:id`:
 
 - `title: string`
@@ -119,6 +137,54 @@ Invoke-RestMethod "$API/api/todos/reorder" -Method PUT -ContentType "application
     "id-sub-2",
     "id-top-2"
   )
+} | ConvertTo-Json)
+```
+
+Create habit:
+
+```powershell
+Invoke-RestMethod "$API/api/habits" -Method POST -ContentType "application/json" -Body (@{
+  name = "Morning planning"
+  status = "active"  # active | idea | archived
+} | ConvertTo-Json)
+```
+
+Update habit checks:
+
+```powershell
+Invoke-RestMethod "$API/api/habits/<habit-id>" -Method PATCH -ContentType "application/json" -Body (@{
+  checks = @(
+    @{ date = "2026-03-12"; done = $true }
+  )
+} | ConvertTo-Json -Depth 5)
+```
+
+Create prediction:
+
+```powershell
+Invoke-RestMethod "$API/api/predictions" -Method POST -ContentType "application/json" -Body (@{
+  title = "Finish review by Friday"
+  confidence = 72
+} | ConvertTo-Json)
+```
+
+Resolve prediction:
+
+```powershell
+Invoke-RestMethod "$API/api/predictions/<prediction-id>" -Method PATCH -ContentType "application/json" -Body (@{
+  outcome = "hit" # pending | hit | miss
+} | ConvertTo-Json)
+```
+
+Create reflection:
+
+```powershell
+Invoke-RestMethod "$API/api/reflections" -Method POST -ContentType "application/json" -Body (@{
+  date = "2026-03-12"
+  wins = "Finished key tasks"
+  challenges = "Context switching"
+  notes = "Better focus in the afternoon"
+  tomorrow = "Start with hardest task first"
 } | ConvertTo-Json)
 ```
 

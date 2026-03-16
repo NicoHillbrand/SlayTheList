@@ -77,7 +77,8 @@ main {
 }
 
 .tab-stage-body {
-  height: clamp(27rem, 68vh, 44rem);
+  min-height: 30rem;
+  max-height: calc(100vh - 13rem);
   overflow: auto;
   padding-right: 0.25rem;
 }
@@ -273,6 +274,31 @@ main {
   font-size: 0.74rem;
 }
 
+.goal-expand-btn {
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+.goal-context-btn {
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  font-size: 0.8rem;
+  line-height: 1;
+}
+
+.goal-context-btn.has-context {
+  border-color: rgba(96, 165, 250, 0.7);
+  color: #bfdbfe;
+}
+
 .goals-add-item-btn {
   margin-top: 0.2rem;
   margin-left: 2.1rem;
@@ -285,6 +311,162 @@ main {
 
 .goals-add-item-btn span {
   margin-right: 0.25rem;
+}
+
+.habits-grid {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.habits-add {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.habits-add input {
+  flex: 1;
+}
+
+.habits-meta {
+  display: flex;
+  gap: 0.75rem;
+  color: #bbb4a4;
+}
+
+.habits-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.habits-table th,
+.habits-table td {
+  border-bottom: 1px solid rgba(173, 142, 84, 0.18);
+  padding: 0.45rem;
+  text-align: center;
+}
+
+.habits-table th:first-child,
+.habits-table td:first-child {
+  text-align: left;
+}
+
+.habit-name-cell {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.habit-name-cell input {
+  flex: 1;
+}
+
+.habits-side-lists {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.habit-check {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  border: 1px solid rgba(173, 142, 84, 0.42);
+  background: rgba(10, 16, 27, 0.9);
+  color: transparent;
+  padding: 0;
+}
+
+.habit-check.done {
+  background: rgba(99, 77, 39, 0.65);
+  color: #f8f3e5;
+}
+
+.predictions-top {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.prediction-add {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.prediction-add input:first-child {
+  flex: 1;
+}
+
+.prediction-add input[type="number"] {
+  width: 5rem;
+}
+
+.prediction-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.7rem;
+  align-items: center;
+}
+
+.prediction-actions {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.reflection-grid {
+  display: grid;
+  gap: 0.55rem;
+  grid-template-columns: 1fr 1fr;
+}
+
+.reflection-grid label {
+  display: grid;
+  gap: 0.3rem;
+  font-size: 0.9rem;
+}
+
+.reflection-controls {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.reflection-items {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.reflection-item-row {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.reflection-item-row button {
+  justify-self: end;
+  padding: 0.2rem 0.45rem;
+  font-size: 0.75rem;
+}
+
+.reflection-grid textarea {
+  min-height: 88px;
+  resize: vertical;
+  border-radius: 8px;
+  border: 1px solid rgba(173, 142, 84, 0.4);
+  background: rgba(8, 14, 25, 0.9);
+  color: #f7f2e4;
+  padding: 0.5rem;
+}
+
+.reflection-history-title {
+  margin: 0.35rem 0 0;
+  font-size: 1rem;
+}
+
+.reflection-history-details {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.reflection-history-details p {
+  margin: 0;
+  opacity: 0.92;
 }
 
 .todo-edit-modal-backdrop {
@@ -316,10 +498,51 @@ main {
   font-size: 0.9rem;
 }
 
+.todo-edit-deadline-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.todo-edit-deadline-row input[type="date"] {
+  width: 100%;
+}
+
+.todo-edit-deadline-plus {
+  width: 2.25rem;
+  height: 2.25rem;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  font-size: 1.15rem;
+  line-height: 1;
+}
+
 .todo-edit-modal-actions {
   display: flex;
   justify-content: flex-end;
   gap: 0.5rem;
+}
+
+.ai-settings-modal {
+  width: min(560px, calc(100vw - 2rem));
+}
+
+.ai-settings-hint {
+  margin: 0;
+  font-size: 0.8rem;
+  opacity: 0.8;
+}
+
+.ai-context-textarea {
+  min-height: 8rem;
+  resize: vertical;
+  border-radius: 8px;
+  border: 1px solid rgba(173, 142, 84, 0.4);
+  background: rgba(8, 14, 25, 0.9);
+  color: #f7f2e4;
+  padding: 0.5rem;
 }
 
 .view-tabs {
@@ -385,9 +608,14 @@ h2 {
   }
 
   .tab-stage-body {
+    min-height: 0;
     height: auto;
     max-height: none;
     overflow: visible;
     padding-right: 0;
+  }
+
+  .reflection-grid {
+    grid-template-columns: 1fr;
   }
 }
