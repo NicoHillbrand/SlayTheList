@@ -85,6 +85,36 @@ export const goldStateSchema = z.object({
 });
 export type GoldState = z.infer<typeof goldStateSchema>;
 
+export const gameStateDetectionMethodSchema = z.enum(["screenshot_match"]);
+export type GameStateDetectionMethod = z.infer<typeof gameStateDetectionMethodSchema>;
+
+export const gameStateSchema = z.object({
+  id: z.string(),
+  name: z.string().min(1),
+  enabled: z.boolean(),
+  detectionMethod: gameStateDetectionMethodSchema,
+  matchThreshold: z.number().min(0).max(1),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type GameState = z.infer<typeof gameStateSchema>;
+
+export const gameStateReferenceImageSchema = z.object({
+  id: z.string(),
+  gameStateId: z.string(),
+  filename: z.string(),
+  createdAt: z.string(),
+});
+export type GameStateReferenceImage = z.infer<typeof gameStateReferenceImageSchema>;
+
+export const detectedGameStateSchema = z.object({
+  gameStateId: z.string().nullable(),
+  gameStateName: z.string().nullable(),
+  confidence: z.number().min(0).max(1),
+  detectedAt: z.string(),
+});
+export type DetectedGameState = z.infer<typeof detectedGameStateSchema>;
+
 export const lockZoneUnlockModeSchema = z.enum(["todos", "gold"]);
 export type LockZoneUnlockMode = z.infer<typeof lockZoneUnlockModeSchema>;
 
@@ -114,6 +144,8 @@ export const lockZoneStateSchema = z.object({
   requiredTodoTitles: z.array(z.string()),
   goldUnlockActive: z.boolean(),
   isLocked: z.boolean(),
+  activeForGameStateIds: z.array(z.string()),
+  activeForCurrentState: z.boolean(),
 });
 export type LockZoneState = z.infer<typeof lockZoneStateSchema>;
 
@@ -122,6 +154,8 @@ export const overlayStateSchema = z.object({
     titleHint: z.string(),
   }),
   zones: z.array(lockZoneStateSchema),
+  detectedGameState: detectedGameStateSchema.nullable(),
+  gameStates: z.array(gameStateSchema),
   lastUpdatedAt: z.string(),
 });
 export type OverlayState = z.infer<typeof overlayStateSchema>;

@@ -39,6 +39,30 @@ internal static class NativeMethods
     [DllImport("user32.dll", EntryPoint = "SetWindowLongPtr")]
     private static extern IntPtr SetWindowLongPtr64(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
 
+    [DllImport("user32.dll")]
+    public static extern bool PrintWindow(IntPtr hWnd, IntPtr hdcBlt, uint nFlags);
+
+    [DllImport("gdi32.dll")]
+    public static extern IntPtr CreateCompatibleDC(IntPtr hdc);
+
+    [DllImport("gdi32.dll")]
+    public static extern IntPtr CreateCompatibleBitmap(IntPtr hdc, int nWidth, int nHeight);
+
+    [DllImport("gdi32.dll")]
+    public static extern IntPtr SelectObject(IntPtr hdc, IntPtr hObject);
+
+    [DllImport("gdi32.dll")]
+    public static extern bool DeleteObject(IntPtr hObject);
+
+    [DllImport("gdi32.dll")]
+    public static extern bool DeleteDC(IntPtr hdc);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetDC(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
+
     [StructLayout(LayoutKind.Sequential)]
     public struct RECT
     {
@@ -81,6 +105,42 @@ internal static class NativeMethods
         var builder = new StringBuilder(512);
         _ = GetWindowText(hWnd, builder, builder.Capacity);
         return builder.ToString();
+    }
+
+    public static byte[]? CaptureWindow(IntPtr hWnd)
+    {
+        if (hWnd == IntPtr.Zero) return null;
+        if (!GetWindowRect(hWnd, out var rect)) return null;
+
+        var width = rect.Right - rect.Left;
+        var height = rect.Bottom - rect.Top;
+        if (width <= 0 || height <= 0) return null;
+
+        var hdcWindow = GetDC(hWnd);
+        var hdcMem = CreateCompatibleDC(hdcWindow);
+        var hBitmap = CreateCompatibleBitmap(hdcWindow, width, height);
+        var hOld = SelectObject(hdcMem, hBitmap);
+
+        // PW_RENDERFULLCONTENT = 2 for better DWM capture
+        PrintWindow(hWnd, hdcMem, 2);
+
+        SelectObject(hdcMem, hOld);
+        DeleteDC(hdcMem);
+        ReleaseDC(hWnd, hdcWindow);
+
+        try
+        {
+            using var bitmap = System.Drawing.Image.FromHbitmap(hBitmap);
+            DeleteObject(hBitmap);
+            using var ms = new System.IO.MemoryStream();
+            bitmap.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+            return ms.ToArray();
+        }
+        catch
+        {
+            DeleteObject(hBitmap);
+            return null;
+        }
     }
 
     public static void EnableNoActivate(IntPtr hWnd)

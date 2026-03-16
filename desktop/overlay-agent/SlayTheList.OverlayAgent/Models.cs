@@ -19,6 +19,12 @@ public sealed class OverlayPayload
     [JsonPropertyName("zones")]
     public List<ZoneState> Zones { get; set; } = [];
 
+    [JsonPropertyName("detectedGameState")]
+    public DetectedGameStateInfo? DetectedGameState { get; set; }
+
+    [JsonPropertyName("gameStates")]
+    public List<GameStateInfo> GameStates { get; set; } = [];
+
     [JsonPropertyName("lastUpdatedAt")]
     public string LastUpdatedAt { get; set; } = string.Empty;
 }
@@ -66,4 +72,64 @@ public sealed class Zone
 
     [JsonPropertyName("unlockMode")]
     public string UnlockMode { get; set; } = "todos";
+}
+
+public sealed class DetectedGameStateInfo
+{
+    [JsonPropertyName("gameStateId")]
+    public string? GameStateId { get; set; }
+
+    [JsonPropertyName("gameStateName")]
+    public string? GameStateName { get; set; }
+
+    [JsonPropertyName("confidence")]
+    public double Confidence { get; set; }
+
+    [JsonPropertyName("detectedAt")]
+    public string DetectedAt { get; set; } = string.Empty;
+}
+
+public sealed class GameStateInfo
+{
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = string.Empty;
+
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; }
+
+    [JsonPropertyName("matchThreshold")]
+    public double MatchThreshold { get; set; } = 0.8;
+}
+
+public sealed class TestDetectionResponse
+{
+    [JsonPropertyName("results")]
+    public List<TestDetectionResult> Results { get; set; } = [];
+}
+
+public sealed class TestDetectionResult
+{
+    [JsonPropertyName("gameStateId")]
+    public string GameStateId { get; set; } = string.Empty;
+
+    [JsonPropertyName("gameStateName")]
+    public string GameStateName { get; set; } = string.Empty;
+
+    [JsonPropertyName("imageId")]
+    public string ImageId { get; set; } = string.Empty;
+
+    [JsonPropertyName("filename")]
+    public string Filename { get; set; } = string.Empty;
+
+    [JsonPropertyName("ncc")]
+    public double Ncc { get; set; }
+
+    [JsonPropertyName("histogram")]
+    public double Histogram { get; set; }
+
+    [JsonPropertyName("combined")]
+    public double Combined { get; set; }
 }

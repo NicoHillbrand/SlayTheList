@@ -11,11 +11,12 @@ coverage
 .DS_Store
 Thumbs.db
 
-# Database
+# Database & runtime data
 *.db
 *.db-journal
 *.db-wal
 *.db-shm
+backend/api/data/
 
 # TypeScript incremental build info
 *.tsbuildinfo

@@ -31,6 +31,7 @@ public partial class MainWindow : Window
     private const uint SndAsync = 0x0001;
     private const uint SndNodefault = 0x0002;
     private const uint SndFilename = 0x00020000;
+    private const int DetectionIntervalMs = 200;
 
     private OverlayPayload? _lastOverlayState;
     private IntPtr _gameWindowHandle = IntPtr.Zero;
@@ -42,6 +43,10 @@ public partial class MainWindow : Window
     private readonly List<string> _overlayImagePaths = [];
     private string? _statusOverrideText;
     private DateTime _statusOverrideUntilUtc;
+    private int _detectionScanCount;
+    private string _lastDetectionLabel = "—";
+    private double _lastDetectionScore;
+    private bool _detectionRunning;
 
     [DllImport("winmm.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool PlaySound(string? soundName, IntPtr moduleHandle, uint soundFlags);
@@ -59,7 +64,11 @@ public partial class MainWindow : Window
 
         LoadOverlayImagePaths();
         SourceInitialized += (_, _) => AttachNoActivateWindowHook();
-        Loaded += (_, _) => _ = RunWebSocketLoop();
+        Loaded += (_, _) =>
+        {
+            _ = RunWebSocketLoop();
+            _ = RunDetectionLoop();
+        };
         Closed += (_, _) =>
         {
             _windowSyncTimer.Stop();
@@ -117,6 +126,122 @@ public partial class MainWindow : Window
         }
     }
 
+    private async Task RunDetectionLoop()
+    {
+        // Wait for initial connection and game state data
+        await Task.Delay(3000);
+
+        while (true)
+        {
+            try
+            {
+                await Task.Delay(DetectionIntervalMs);
+
+                if (!_isGameInForeground || _gameWindowHandle == IntPtr.Zero)
+                    continue;
+
+                var hasGameStates = (_lastOverlayState?.GameStates.Count ?? 0) > 0;
+                if (!hasGameStates)
+                    continue;
+
+                if (_detectionRunning)
+                    continue;
+
+                _detectionRunning = true;
+                try
+                {
+                    await RunSingleDetection();
+                }
+                finally
+                {
+                    _detectionRunning = false;
+                }
+            }
+            catch
+            {
+                // Keep looping on any error
+            }
+        }
+    }
+
+    private async Task RunSingleDetection()
+    {
+        var screenshotBytes = NativeMethods.CaptureWindow(_gameWindowHandle);
+        if (screenshotBytes is null || screenshotBytes.Length == 0)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                _detectionScanCount++;
+                _lastDetectionLabel = "capture failed";
+                _lastDetectionScore = 0;
+                UpdateStatusText();
+            });
+            return;
+        }
+
+        var base64 = Convert.ToBase64String(screenshotBytes);
+        var requestBody = JsonSerializer.Serialize(new { imageData = base64 });
+        using var content = new StringContent(requestBody, Encoding.UTF8, "application/json");
+        using var response = await _httpClient.PostAsync($"{_apiBaseUrl}/api/game-states/test-detection", content);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                _detectionScanCount++;
+                _lastDetectionLabel = $"API {(int)response.StatusCode}";
+                _lastDetectionScore = 0;
+                UpdateStatusText();
+            });
+            return;
+        }
+
+        var json = await response.Content.ReadAsStringAsync();
+        var testResult = JsonSerializer.Deserialize<TestDetectionResponse>(json, _jsonOptions);
+        var results = testResult?.Results ?? [];
+
+        _detectionScanCount++;
+
+        if (results.Count == 0)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                _lastDetectionLabel = "no refs";
+                _lastDetectionScore = 0;
+                UpdateStatusText();
+            });
+            return;
+        }
+
+        var best = results[0];
+        var matchingState = (_lastOverlayState?.GameStates ?? [])
+            .FirstOrDefault(gs => gs.Id == best.GameStateId);
+        var threshold = matchingState is not null
+            ? GetThresholdForState(best.GameStateId)
+            : 0.8;
+        var passes = best.Combined >= threshold;
+
+        var applyStateId = passes ? best.GameStateId : null;
+        var applyConfidence = passes ? best.Combined : 0.0;
+
+        var setBody = JsonSerializer.Serialize(new { gameStateId = applyStateId, confidence = applyConfidence });
+        using var setContent = new StringContent(setBody, Encoding.UTF8, "application/json");
+        await _httpClient.PutAsync($"{_apiBaseUrl}/api/detected-game-state", setContent);
+
+        Dispatcher.Invoke(() =>
+        {
+            _lastDetectionLabel = passes ? best.GameStateName : "Default";
+            _lastDetectionScore = best.Combined;
+            UpdateStatusText();
+        });
+    }
+
+    private double GetThresholdForState(string gameStateId)
+    {
+        var gs = (_lastOverlayState?.GameStates ?? []).FirstOrDefault(s => s.Id == gameStateId);
+        return gs?.MatchThreshold ?? 0.8;
+    }
+
     private static async Task<string> ReceiveText(ClientWebSocket socket)
     {
         var buffer = new byte[8192];
@@ -172,12 +297,26 @@ public partial class MainWindow : Window
             return;
         }
 
-        Left = rect.Left;
-        Top = rect.Top;
-        Width = width;
-        Height = height;
+        var dpiScale = GetDpiScale();
+        Left = rect.Left / dpiScale;
+        Top = rect.Top / dpiScale;
+        Width = width / dpiScale;
+        Height = height / dpiScale;
         SetOverlayVisible(true);
     }
+
+    private double GetDpiScale()
+    {
+        var source = PresentationSource.FromVisual(this);
+        if (source?.CompositionTarget != null)
+        {
+            return source.CompositionTarget.TransformToDevice.M11;
+        }
+        return 1.0;
+    }
+
+    private const double TemplateWidth = 1280;
+    private const double TemplateHeight = 720;
 
     private void RenderLockedZones()
     {
@@ -185,10 +324,17 @@ public partial class MainWindow : Window
         var allZones = _lastOverlayState?.Zones ?? [];
         var lockedZones = allZones.Where((z) => z.IsLocked && z.Zone.Enabled).ToList();
 
+        var canvasWidth = OverlayCanvas.ActualWidth > 0 ? OverlayCanvas.ActualWidth : Width;
+        var canvasHeight = OverlayCanvas.ActualHeight > 0 ? OverlayCanvas.ActualHeight : Height;
+        var scaleX = canvasWidth / TemplateWidth;
+        var scaleY = canvasHeight / TemplateHeight;
+
         foreach (var zoneState in lockedZones)
         {
+            var scaledWidth = zoneState.Zone.Width * scaleX;
+            var scaledHeight = zoneState.Zone.Height * scaleY;
             var lockText = BuildLockText(zoneState.Zone.UnlockMode, zoneState.RequiredTodoTitles);
-            var lockFontSize = CalculateLockFontSize(zoneState.Zone.Width, zoneState.Zone.Height);
+            var lockFontSize = CalculateLockFontSize(scaledWidth, scaledHeight);
             var isGoldUnlock = string.Equals(zoneState.Zone.UnlockMode, "gold", StringComparison.OrdinalIgnoreCase);
             var contentStack = new StackPanel
             {
@@ -231,8 +377,8 @@ public partial class MainWindow : Window
             }
             var border = new Border
             {
-                Width = zoneState.Zone.Width,
-                Height = zoneState.Zone.Height,
+                Width = scaledWidth,
+                Height = scaledHeight,
                 Background = CreateBlockedBackgroundBrush(zoneState.Zone.Id),
                 BorderBrush = new SolidColorBrush(Color.FromArgb(220, 22, 101, 52)),
                 BorderThickness = new Thickness(2),
@@ -261,8 +407,8 @@ public partial class MainWindow : Window
                     await TryUnlockZoneWithGold(zoneState.Zone.Id, zoneState.Zone.Name);
                 };
             }
-            Canvas.SetLeft(border, zoneState.Zone.X);
-            Canvas.SetTop(border, zoneState.Zone.Y);
+            Canvas.SetLeft(border, zoneState.Zone.X * scaleX);
+            Canvas.SetTop(border, zoneState.Zone.Y * scaleY);
             OverlayCanvas.Children.Add(border);
         }
 
@@ -439,13 +585,27 @@ public partial class MainWindow : Window
         _statusOverrideText = null;
         var lockedCount = _lastOverlayState?.Zones.Count((z) => z.IsLocked && z.Zone.Enabled) ?? 0;
         var focusLabel = _isGameInForeground ? "focused" : "background";
+        var stateLabel = FormatDetectedGameStateLabel();
+        var blockingLabel = _visualOnlyOverlay ? "visual only" : "blocking";
         if (lockedCount > 0)
         {
-            StatusText.Text = $"Tracking {_titleHint} ({focusLabel}) | Locked zones: {lockedCount} | {(_visualOnlyOverlay ? "visual only" : "blocking")}";
+            StatusText.Text = $"{_titleHint} ({focusLabel}) | {stateLabel} | Locked: {lockedCount} | {blockingLabel}";
             return;
         }
 
-        StatusText.Text = $"Tracking {_titleHint} ({focusLabel}) | No locked zones | {(_visualOnlyOverlay ? "visual sign active" : "blocking armed")}";
+        StatusText.Text = $"{_titleHint} ({focusLabel}) | {stateLabel} | {(_visualOnlyOverlay ? "visual sign" : "armed")}";
+    }
+
+    private string FormatDetectedGameStateLabel()
+    {
+        var detected = _lastOverlayState?.DetectedGameState;
+        if (detected is null || string.IsNullOrWhiteSpace(detected.GameStateId))
+        {
+            return "State: Default";
+        }
+
+        var confidence = (int)Math.Round(detected.Confidence * 100);
+        return $"State: {detected.GameStateName ?? "Unknown"} ({confidence}%)";
     }
 
     private void ShowTransientStatus(string text, int durationMs)

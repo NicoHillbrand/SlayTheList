@@ -1,5 +1,8 @@
 import type {
   AccountabilityState,
+  DetectedGameState,
+  GameState,
+  GameStateReferenceImage,
   GoldState,
   Habit,
   HabitStatus,
@@ -270,4 +273,91 @@ export function overlayWebSocketUrl() {
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.pathname = "/ws";
   return url.toString();
+}
+
+// ---------------------------------------------------------------------------
+// Game States
+// ---------------------------------------------------------------------------
+
+export async function listGameStates() {
+  return request<{ items: GameState[] }>("/api/game-states");
+}
+
+export async function createGameState(input: { name: string; matchThreshold?: number }) {
+  return request<GameState>("/api/game-states", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateGameState(
+  id: string,
+  patch: Partial<{ name: string; enabled: boolean; matchThreshold: number }>,
+) {
+  return request<GameState>(`/api/game-states/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteGameState(id: string) {
+  return request<{ deleted: true }>(`/api/game-states/${id}`, {
+    method: "DELETE",
+  });
+}
+
+export async function listReferenceImages(gameStateId: string) {
+  return request<{ items: GameStateReferenceImage[] }>(`/api/game-states/${gameStateId}/reference-images`);
+}
+
+export async function uploadReferenceImage(gameStateId: string, imageData: string, filename: string) {
+  return request<GameStateReferenceImage>(`/api/game-states/${gameStateId}/reference-images`, {
+    method: "POST",
+    body: JSON.stringify({ imageData, filename }),
+  });
+}
+
+export async function deleteReferenceImage(imageId: string) {
+  return request<{ deleted: true }>(`/api/game-states/reference-images/${imageId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function setZoneGameStates(zoneId: string, gameStateIds: string[]) {
+  return request<{ updated: true }>(`/api/zones/${zoneId}/game-states`, {
+    method: "PUT",
+    body: JSON.stringify({ gameStateIds }),
+  });
+}
+
+export async function getDetectedGameState() {
+  return request<DetectedGameState>("/api/detected-game-state");
+}
+
+export async function setDetectedGameState(gameStateId: string | null, confidence: number) {
+  return request<DetectedGameState>("/api/detected-game-state", {
+    method: "PUT",
+    body: JSON.stringify({ gameStateId, confidence }),
+  });
+}
+
+export function referenceImageUrl(gameStateId: string, filename: string) {
+  return `${API_BASE}/api/reference-images/${gameStateId}/${filename}`;
+}
+
+export type DetectionTestResult = {
+  gameStateId: string;
+  gameStateName: string;
+  imageId: string;
+  filename: string;
+  ncc: number;
+  histogram: number;
+  combined: number;
+};
+
+export async function testDetection(imageData: string) {
+  return request<{ results: DetectionTestResult[] }>("/api/game-states/test-detection", {
+    method: "POST",
+    body: JSON.stringify({ imageData }),
+  });
 }

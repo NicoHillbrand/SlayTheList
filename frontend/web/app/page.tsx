@@ -12,6 +12,8 @@ import {
   useState,
 } from "react";
 import type {
+  GameState,
+  GameStateReferenceImage,
   Habit,
   HabitStatus,
   LockZone,
@@ -23,27 +25,38 @@ import type {
   Todo,
 } from "@slaythelist/contracts";
 import {
+  createGameState as createGameStateApi,
   createTodo,
   createZone,
   clearZoneGoldUnlock,
+  deleteGameState as deleteGameStateApi,
+  deleteReferenceImage as deleteReferenceImageApi,
   deleteTodo,
   deleteZone,
   getAccountabilityState,
   getGoldState,
   getOverlayState,
+  listReferenceImages,
   listTodos,
   listZones,
   overlayWebSocketUrl,
   purchaseZoneGoldUnlock,
+  referenceImageUrl,
   reorderTodos,
   saveGoldState,
   saveAccountabilityState,
+  setDetectedGameState as setDetectedGameStateApi,
+  testDetection as testDetectionApi,
+  type DetectionTestResult,
+  setZoneGameStates as setZoneGameStatesApi,
   awardGold as awardGoldApi,
   awardTodoGold as awardTodoGoldApi,
   setTodoStatus,
   setZoneRequirements,
+  updateGameState as updateGameStateApi,
   updateTodo,
   updateZone,
+  uploadReferenceImage,
 } from "../lib/api";
 
 type LoadState = "idle" | "loading" | "error";
@@ -515,6 +528,14 @@ export default function Page() {
   const accountabilityLoadedRef = useRef(false);
   const accountabilitySaveTimerRef = useRef<number | null>(null);
   const [focusTodoId, setFocusTodoId] = useState<string | null>(null);
+  const [gameStates, setGameStates] = useState<GameState[]>([]);
+  const [newGameStateName, setNewGameStateName] = useState("");
+  const [selectedGameStateId, setSelectedGameStateId] = useState<string | null>(null);
+  const [gameStateRefImages, setGameStateRefImages] = useState<Map<string, GameStateReferenceImage[]>>(new Map());
+  const [blockSubtab, setBlockSubtab] = useState<"zones" | "game-states">("zones");
+  const [detectionTestResults, setDetectionTestResults] = useState<DetectionTestResult[] | null>(null);
+  const [detectionTestImage, setDetectionTestImage] = useState<string | null>(null);
+  const [isTestingDetection, setIsTestingDetection] = useState(false);
 
   function stopGoldSoundPlayback() {
     goldSoundTimeoutsRef.current.forEach((timeoutId) => window.clearTimeout(timeoutId));
@@ -686,6 +707,7 @@ export default function Page() {
       setRewardedTodoIds(nextGoldState.rewardedTodoIds);
       setZones(zoneData.items);
       setOverlayState(overlayData);
+      setGameStates(overlayData.gameStates ?? []);
       setLoadState("idle");
     } catch (err) {
       setLoadState("error");
@@ -891,6 +913,11 @@ export default function Page() {
       }
     };
   }, [habits, predictions, reflections]);
+
+  useEffect(() => {
+    if (!selectedGameStateId) return;
+    void loadRefImages(selectedGameStateId);
+  }, [selectedGameStateId]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1533,6 +1560,129 @@ export default function Page() {
     });
   }
 
+  function addGameState() {
+    const name = newGameStateName.trim();
+    if (!name) return;
+    void runAction(async () => {
+      const created = await createGameStateApi({ name });
+      setGameStates((prev) => [...prev, created]);
+      setNewGameStateName("");
+      setSelectedGameStateId(created.id);
+      await refresh();
+    });
+  }
+
+  function removeGameState(id: string) {
+    void runAction(async () => {
+      await deleteGameStateApi(id);
+      setGameStates((prev) => prev.filter((gs) => gs.id !== id));
+      if (selectedGameStateId === id) setSelectedGameStateId(null);
+      setGameStateRefImages((prev) => {
+        const next = new Map(prev);
+        next.delete(id);
+        return next;
+      });
+      await refresh();
+    });
+  }
+
+  function patchGameState(id: string, patch: Partial<{ name: string; enabled: boolean; matchThreshold: number }>) {
+    void runAction(async () => {
+      const updated = await updateGameStateApi(id, patch);
+      setGameStates((prev) => prev.map((gs) => (gs.id === updated.id ? updated : gs)));
+    });
+  }
+
+  async function loadRefImages(gameStateId: string) {
+    const result = await listReferenceImages(gameStateId);
+    setGameStateRefImages((prev) => new Map(prev).set(gameStateId, result.items));
+  }
+
+  function handleRefImageUpload(gameStateId: string, files: FileList | null) {
+    if (!files || files.length === 0) return;
+    void runAction(async () => {
+      for (const file of Array.from(files)) {
+        const buffer = await file.arrayBuffer();
+        const base64 = btoa(
+          new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), ""),
+        );
+        await uploadReferenceImage(gameStateId, base64, file.name);
+      }
+      await loadRefImages(gameStateId);
+    });
+  }
+
+  function removeRefImage(imageId: string, gameStateId: string) {
+    void runAction(async () => {
+      await deleteReferenceImageApi(imageId);
+      await loadRefImages(gameStateId);
+    });
+  }
+
+  function runDetectionTest(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    const file = files[0];
+    setIsTestingDetection(true);
+    setDetectionTestResults(null);
+
+    const previewReader = new FileReader();
+    previewReader.onload = () => setDetectionTestImage(previewReader.result as string);
+    previewReader.readAsDataURL(file);
+
+    void (async () => {
+      try {
+        const buffer = await file.arrayBuffer();
+        const base64 = btoa(
+          new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), ""),
+        );
+        const result = await testDetectionApi(base64);
+        setDetectionTestResults(result.results);
+      } catch (err) {
+        setError(toErrorMessage(err));
+      } finally {
+        setIsTestingDetection(false);
+      }
+    })();
+  }
+
+  function runDetectionTestFromUrl(imageUrl: string) {
+    setIsTestingDetection(true);
+    setDetectionTestResults(null);
+    setDetectionTestImage(imageUrl);
+
+    void (async () => {
+      try {
+        const response = await fetch(imageUrl);
+        const blob = await response.blob();
+        const buffer = await blob.arrayBuffer();
+        const base64 = btoa(
+          new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), ""),
+        );
+        const result = await testDetectionApi(base64);
+        setDetectionTestResults(result.results);
+      } catch (err) {
+        setError(toErrorMessage(err));
+      } finally {
+        setIsTestingDetection(false);
+      }
+    })();
+  }
+
+  function toggleZoneGameState(zoneId: string, gameStateId: string) {
+    if (!overlayState) return;
+    const zoneState = overlayState.zones.find((zs) => zs.zone.id === zoneId);
+    const current = new Set(zoneState?.activeForGameStateIds ?? []);
+    if (current.has(gameStateId)) {
+      current.delete(gameStateId);
+    } else {
+      current.add(gameStateId);
+    }
+    void runAction(async () => {
+      await setZoneGameStatesApi(zoneId, [...current]);
+      await refresh();
+    });
+  }
+
   function updateDraftZone(zoneId: string, key: "name" | ZoneRectKey, value: string | number) {
     setZones((prev) => prev.map((item) => (item.id === zoneId ? { ...item, [key]: value } : item)));
   }
@@ -1817,6 +1967,18 @@ export default function Page() {
     () => new Map(lockableTodos.map((todo) => [todo.id, todo.title] as const)),
     [lockableTodos],
   );
+  const gameStatesByZone = useMemo(() => {
+    const map = new Map<string, Set<string>>();
+    for (const zoneState of overlayState?.zones ?? []) {
+      map.set(zoneState.zone.id, new Set(zoneState.activeForGameStateIds));
+    }
+    return map;
+  }, [overlayState]);
+  const gameStateNameById = useMemo(
+    () => new Map(gameStates.map((gs) => [gs.id, gs.name])),
+    [gameStates],
+  );
+  const detectedGameState = overlayState?.detectedGameState ?? null;
 
   const selectedImageValue = useMemo(() => {
     if (selectedZoneIds.length === 0) return "__auto__";
@@ -3071,6 +3233,54 @@ export default function Page() {
             </nav>
           </div>
           <div className="tab-pane">
+          <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
+            <button
+              type="button"
+              onClick={() => setBlockSubtab("zones")}
+              style={{
+                fontWeight: blockSubtab === "zones" ? 700 : 400,
+                background: "transparent",
+                borderTop: "none",
+                borderLeft: "none",
+                borderRight: "none",
+                borderBottomWidth: 2,
+                borderBottomStyle: "solid",
+                borderBottomColor: blockSubtab === "zones" ? "#60a5fa" : "transparent",
+                padding: "0.4rem 0.75rem",
+                cursor: "pointer",
+                color: blockSubtab === "zones" ? "#e2e8f0" : "#94a3b8",
+              }}
+            >
+              Lock Zones
+            </button>
+            <button
+              type="button"
+              onClick={() => setBlockSubtab("game-states")}
+              style={{
+                fontWeight: blockSubtab === "game-states" ? 700 : 400,
+                background: "transparent",
+                borderTop: "none",
+                borderLeft: "none",
+                borderRight: "none",
+                borderBottomWidth: 2,
+                borderBottomStyle: "solid",
+                borderBottomColor: blockSubtab === "game-states" ? "#60a5fa" : "transparent",
+                padding: "0.4rem 0.75rem",
+                cursor: "pointer",
+                color: blockSubtab === "game-states" ? "#e2e8f0" : "#94a3b8",
+              }}
+            >
+              Game States
+              {detectedGameState?.gameStateName && (
+                <span style={{ marginLeft: "0.4rem", fontSize: "0.75rem", color: "#86efac" }}>
+                  ({detectedGameState.gameStateName})
+                </span>
+              )}
+            </button>
+          </div>
+
+          {blockSubtab === "zones" && (
+          <>
           <h2>Create Lock Zone</h2>
           <form onSubmit={onCreateZone} style={{ display: "flex", gap: "0.5rem" }}>
             <input
@@ -3421,11 +3631,434 @@ export default function Page() {
                         ))
                       )}
                     </div>
+
+                    <div style={{ display: "grid", gap: "0.25rem" }}>
+                      <strong>Active in game states</strong>
+                      {gameStates.length === 0 ? (
+                        <small style={{ opacity: 0.7 }}>No game states defined yet. Create them in the Game States tab.</small>
+                      ) : (
+                        <>
+                          <small style={{ opacity: 0.7 }}>
+                            {(gameStatesByZone.get(zone.id)?.size ?? 0) === 0
+                              ? "Always active (no game state filter)"
+                              : `Active in: ${[...(gameStatesByZone.get(zone.id) ?? [])].map((id) => gameStateNameById.get(id) ?? id).join(", ")}`}
+                          </small>
+                          {gameStates.map((gs) => (
+                            <label key={`${zone.id}:gs:${gs.id}`} style={{ display: "flex", gap: "0.4rem" }}>
+                              <input
+                                type="checkbox"
+                                checked={gameStatesByZone.get(zone.id)?.has(gs.id) ?? false}
+                                onChange={() => toggleZoneGameState(zone.id, gs.id)}
+                              />
+                              <span>{gs.name}</span>
+                            </label>
+                          ))}
+                        </>
+                      )}
+                    </div>
                   </article>
                 );
               })}
             </div>
           )}
+          </>
+          )}
+
+          {blockSubtab === "game-states" && (
+          <>
+          <h2>Game States</h2>
+          <p style={{ marginBottom: "0.75rem", opacity: 0.85 }}>
+            Define game states (shop, campfire, combat, etc.) to conditionally activate lock zones.
+            The detection agent will match screenshots against reference images to determine the current state.
+          </p>
+
+          {detectedGameState && (
+            <div style={{
+              padding: "0.6rem 0.75rem",
+              borderRadius: "8px",
+              border: "1px solid #374151",
+              marginBottom: "1rem",
+              background: detectedGameState.gameStateId ? "rgba(34,197,94,0.08)" : "rgba(55,65,81,0.3)",
+            }}>
+              <strong>Currently detected: </strong>
+              {detectedGameState.gameStateName ? (
+                <span style={{ color: "#86efac" }}>
+                  {detectedGameState.gameStateName}
+                  <small style={{ marginLeft: "0.5rem", opacity: 0.7 }}>
+                    ({(detectedGameState.confidence * 100).toFixed(0)}% confidence)
+                  </small>
+                </span>
+              ) : (
+                <span style={{ opacity: 0.6 }}>None (no state detected)</span>
+              )}
+              {detectedGameState.gameStateId && (
+                <button
+                  type="button"
+                  onClick={() => void runAction(async () => { await setDetectedGameStateApi(null, 0); await refresh(); })}
+                  style={{ marginLeft: "0.75rem", fontSize: "0.8rem" }}
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          )}
+
+          <div style={{
+            padding: "0.75rem",
+            borderRadius: "8px",
+            border: "1px solid #374151",
+            marginBottom: "1rem",
+            background: "rgba(30,41,59,0.5)",
+          }}>
+            <strong>Test Detection</strong>
+            <p style={{ opacity: 0.7, fontSize: "0.85rem", margin: "0.25rem 0 0.5rem" }}>
+              Upload any screenshot or click &quot;Test this&quot; on a reference image below.
+              This runs the image comparison algorithm and shows match scores against all references.
+              It does <strong>not</strong> change the active detected state — use &quot;Apply best match&quot; for that.
+            </p>
+            <div style={{ display: "flex", gap: "0.75rem", alignItems: "flex-start", flexWrap: "wrap" }}>
+              <label style={{
+                display: "inline-block",
+                padding: "0.35rem 0.75rem",
+                border: "1px dashed #4b5563",
+                borderRadius: "6px",
+                cursor: "pointer",
+                fontSize: "0.85rem",
+              }}>
+                {isTestingDetection ? "Analyzing..." : "Upload test screenshot"}
+                <input
+                  type="file"
+                  accept="image/*"
+                  style={{ display: "none" }}
+                  onChange={(event) => runDetectionTest(event.target.files)}
+                  disabled={isTestingDetection}
+                />
+              </label>
+              {detectionTestImage && (
+                <img
+                  src={detectionTestImage}
+                  alt="Test screenshot"
+                  style={{ width: 160, height: 90, objectFit: "cover", borderRadius: "4px", border: "1px solid #4b5563" }}
+                />
+              )}
+            </div>
+            {detectionTestResults && (
+              <div style={{ marginTop: "0.75rem" }}>
+                {detectionTestResults.length === 0 ? (
+                  <p style={{ opacity: 0.6 }}>No reference images to compare against. Upload some first.</p>
+                ) : (
+                  <div style={{ display: "grid", gap: "0.35rem" }}>
+                    <div style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr 80px 80px 80px",
+                      gap: "0.5rem",
+                      fontSize: "0.75rem",
+                      fontWeight: 700,
+                      opacity: 0.6,
+                      paddingBottom: "0.25rem",
+                      borderBottom: "1px solid #374151",
+                    }}>
+                      <span>Game State (ref image)</span>
+                      <span>Structural</span>
+                      <span>Histogram</span>
+                      <span>Combined</span>
+                    </div>
+                    {detectionTestResults.map((r, i) => {
+                      const isTop = i === 0;
+                      const passesThreshold = (() => {
+                        const gs = gameStates.find((s) => s.id === r.gameStateId);
+                        return gs ? r.combined >= gs.matchThreshold : false;
+                      })();
+                      return (
+                        <div
+                          key={`${r.imageId}-${i}`}
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "1fr 80px 80px 80px",
+                            gap: "0.5rem",
+                            fontSize: "0.85rem",
+                            padding: "0.3rem 0",
+                            background: isTop ? "rgba(34,197,94,0.08)" : "transparent",
+                            borderRadius: isTop ? "4px" : 0,
+                            color: passesThreshold ? "#86efac" : isTop ? "#fde68a" : "#94a3b8",
+                          }}
+                        >
+                          <span>
+                            {isTop && (passesThreshold ? "  " : "  ")}
+                            {r.gameStateName}
+                            <small style={{ opacity: 0.5, marginLeft: "0.3rem" }}>({r.filename.slice(0, 12)}...)</small>
+                          </span>
+                          <span>{(r.ncc * 100).toFixed(1)}%</span>
+                          <span>{(r.histogram * 100).toFixed(1)}%</span>
+                          <span style={{ fontWeight: isTop ? 700 : 400 }}>{(r.combined * 100).toFixed(1)}%</span>
+                        </div>
+                      );
+                    })}
+                    {detectionTestResults.length > 0 && (() => {
+                      const best = detectionTestResults[0];
+                      const gs = gameStates.find((s) => s.id === best.gameStateId);
+                      const threshold = gs?.matchThreshold ?? 0.8;
+                      const passes = best.combined >= threshold;
+                      return (
+                        <div style={{ marginTop: "0.5rem", display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+                          <p style={{
+                            margin: 0,
+                            fontSize: "0.85rem",
+                            color: passes ? "#86efac" : "#fca5a5",
+                          }}>
+                            Best match: <strong>{best.gameStateName}</strong> at {(best.combined * 100).toFixed(1)}%
+                            {passes
+                              ? ` — passes threshold (${(threshold * 100).toFixed(0)}%)`
+                              : ` — below threshold (${(threshold * 100).toFixed(0)}%)`}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => void runAction(async () => {
+                              await setDetectedGameStateApi(passes ? best.gameStateId : null, passes ? best.combined : 0);
+                              await refresh();
+                            })}
+                            style={{
+                              fontSize: "0.8rem",
+                              padding: "0.25rem 0.6rem",
+                              background: passes ? "rgba(34,197,94,0.15)" : "rgba(239,68,68,0.15)",
+                              border: passes ? "1px solid #166534" : "1px solid #7f1d1d",
+                              borderRadius: "4px",
+                              color: passes ? "#86efac" : "#fca5a5",
+                              cursor: "pointer",
+                            }}
+                          >
+                            {passes
+                              ? `Apply: set state to "${best.gameStateName}"`
+                              : "Apply: clear state (below threshold)"}
+                          </button>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <form
+            onSubmit={(event) => { event.preventDefault(); addGameState(); }}
+            style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}
+          >
+            <input
+              value={newGameStateName}
+              onChange={(event) => setNewGameStateName(event.target.value)}
+              placeholder="e.g. Shop, Campfire, Combat"
+              style={{ flex: 1 }}
+            />
+            <button type="submit" disabled={!newGameStateName.trim()}>Add Game State</button>
+          </form>
+
+          {gameStates.length === 0 ? (
+            <p style={{ opacity: 0.6 }}>No game states defined yet.</p>
+          ) : (
+            <div style={{ display: "grid", gap: "0.75rem" }}>
+              {gameStates.map((gs) => {
+                const isSelected = selectedGameStateId === gs.id;
+                const refImages = gameStateRefImages.get(gs.id) ?? [];
+                return (
+                  <article
+                    key={gs.id}
+                    onClick={() => setSelectedGameStateId(gs.id)}
+                    style={{
+                      border: isSelected ? "1px solid #60a5fa" : "1px solid #374151",
+                      borderRadius: "10px",
+                      padding: "0.75rem",
+                      display: "grid",
+                      gap: "0.5rem",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                      <input
+                        value={gs.name}
+                        onChange={(event) => {
+                          const nextName = event.target.value;
+                          setGameStates((prev) => prev.map((item) => (item.id === gs.id ? { ...item, name: nextName } : item)));
+                        }}
+                        onBlur={() => patchGameState(gs.id, { name: gs.name.trim() })}
+                        onClick={(event) => event.stopPropagation()}
+                        style={{ flex: 1 }}
+                      />
+                      <button
+                        type="button"
+                        onClick={(event) => { event.stopPropagation(); patchGameState(gs.id, { enabled: !gs.enabled }); }}
+                      >
+                        {gs.enabled ? "Disable" : "Enable"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(event) => { event.stopPropagation(); removeGameState(gs.id); }}
+                        style={{ color: "#fca5a5" }}
+                      >
+                        Delete
+                      </button>
+                    </div>
+
+                    <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                      <label onClick={(event) => event.stopPropagation()} style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
+                        <small>Match threshold:</small>
+                        <input
+                          type="range"
+                          min={0}
+                          max={1}
+                          step={0.05}
+                          value={gs.matchThreshold}
+                          onChange={(event) => {
+                            const val = Number(event.target.value);
+                            setGameStates((prev) => prev.map((item) => (item.id === gs.id ? { ...item, matchThreshold: val } : item)));
+                          }}
+                          onMouseUp={() => patchGameState(gs.id, { matchThreshold: gs.matchThreshold })}
+                          onTouchEnd={() => patchGameState(gs.id, { matchThreshold: gs.matchThreshold })}
+                          style={{ width: 100 }}
+                        />
+                        <small>{(gs.matchThreshold * 100).toFixed(0)}%</small>
+                      </label>
+                      <small style={{ opacity: 0.5 }}>Method: {gs.detectionMethod.replace(/_/g, " ")}</small>
+                    </div>
+
+                    <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void runAction(async () => { await setDetectedGameStateApi(gs.id, 1.0); await refresh(); });
+                        }}
+                        style={{ fontSize: "0.8rem" }}
+                        title="Force-set the detected state to this game state (no image comparison, just directly activates it)"
+                      >
+                        Force activate this state
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void runAction(async () => { await setDetectedGameStateApi(null, 0); await refresh(); });
+                        }}
+                        style={{ fontSize: "0.8rem" }}
+                        title="Clear the detected state back to Default"
+                      >
+                        Clear to Default
+                      </button>
+                      <small style={{ opacity: 0.5 }}>
+                        {gs.enabled ? "Enabled" : "Disabled"}
+                        {detectedGameState?.gameStateId === gs.id && (
+                          <span style={{ color: "#86efac", marginLeft: "0.4rem" }}>(currently active)</span>
+                        )}
+                      </small>
+                    </div>
+
+                    {isSelected && (
+                      <div style={{ borderTop: "1px solid #374151", paddingTop: "0.5rem" }}>
+                        <strong>Reference Screenshots</strong>
+                        <p style={{ opacity: 0.7, fontSize: "0.85rem", margin: "0.25rem 0 0.5rem" }}>
+                          Upload screenshots that represent this game state. The agent will compare against these.
+                        </p>
+
+                        <label
+                          onClick={(event) => event.stopPropagation()}
+                          style={{
+                            display: "inline-block",
+                            padding: "0.35rem 0.75rem",
+                            border: "1px dashed #4b5563",
+                            borderRadius: "6px",
+                            cursor: "pointer",
+                            marginBottom: "0.5rem",
+                            fontSize: "0.85rem",
+                          }}
+                        >
+                          Upload image(s)
+                          <input
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            style={{ display: "none" }}
+                            onChange={(event) => handleRefImageUpload(gs.id, event.target.files)}
+                          />
+                        </label>
+
+                        {refImages.length === 0 ? (
+                          <p style={{ opacity: 0.5, fontSize: "0.85rem" }}>No reference images yet.</p>
+                        ) : (
+                          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                            {refImages.map((img) => (
+                              <div
+                                key={img.id}
+                                style={{
+                                  position: "relative",
+                                  border: "1px solid #4b5563",
+                                  borderRadius: "6px",
+                                  overflow: "hidden",
+                                }}
+                                onClick={(event) => event.stopPropagation()}
+                              >
+                                <img
+                                  src={referenceImageUrl(gs.id, img.filename)}
+                                  alt={img.filename}
+                                  style={{ width: 140, height: 80, objectFit: "cover", display: "block" }}
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => runDetectionTestFromUrl(referenceImageUrl(gs.id, img.filename))}
+                                  disabled={isTestingDetection}
+                                  style={{
+                                    position: "absolute",
+                                    bottom: 2,
+                                    left: 2,
+                                    background: "rgba(0,0,0,0.75)",
+                                    color: "#93c5fd",
+                                    border: "none",
+                                    borderRadius: "4px",
+                                    fontSize: 10,
+                                    cursor: "pointer",
+                                    padding: "2px 6px",
+                                  }}
+                                  title="Test: compare this image against all references (should match itself at ~100%)"
+                                >
+                                  Test this
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => removeRefImage(img.id, gs.id)}
+                                  style={{
+                                    position: "absolute",
+                                    top: 2,
+                                    right: 2,
+                                    background: "rgba(0,0,0,0.7)",
+                                    color: "#fca5a5",
+                                    border: "none",
+                                    borderRadius: "50%",
+                                    width: 20,
+                                    height: 20,
+                                    fontSize: 12,
+                                    cursor: "pointer",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    padding: 0,
+                                  }}
+                                  title="Remove image"
+                                >
+                                  ×
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </article>
+                );
+              })}
+            </div>
+          )}
+          </>
+          )}
+
           </div>
           </section>
           )}

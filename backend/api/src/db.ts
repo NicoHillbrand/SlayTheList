@@ -5,6 +5,9 @@ import Database from "better-sqlite3";
 const dataDir = path.join(process.cwd(), "data");
 fs.mkdirSync(dataDir, { recursive: true });
 
+export const referenceImagesDir = path.join(dataDir, "reference-images");
+fs.mkdirSync(referenceImagesDir, { recursive: true });
+
 const dbPath = path.join(dataDir, "slaythelist.db");
 export const db = new Database(dbPath);
 
@@ -82,6 +85,40 @@ CREATE TABLE IF NOT EXISTS gold_state (
   gold INTEGER NOT NULL DEFAULT 0,
   rewarded_todo_ids_json TEXT NOT NULL DEFAULT '[]',
   updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS game_states (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  detection_method TEXT NOT NULL DEFAULT 'screenshot_match',
+  match_threshold REAL NOT NULL DEFAULT 0.8,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS game_state_reference_images (
+  id TEXT PRIMARY KEY,
+  game_state_id TEXT NOT NULL,
+  filename TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(game_state_id) REFERENCES game_states(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS lock_zone_game_states (
+  zone_id TEXT NOT NULL,
+  game_state_id TEXT NOT NULL,
+  PRIMARY KEY(zone_id, game_state_id),
+  FOREIGN KEY(zone_id) REFERENCES lock_zones(id) ON DELETE CASCADE,
+  FOREIGN KEY(game_state_id) REFERENCES game_states(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS detected_game_state (
+  id INTEGER PRIMARY KEY CHECK(id = 1),
+  game_state_id TEXT,
+  confidence REAL NOT NULL DEFAULT 0,
+  detected_at TEXT NOT NULL,
+  FOREIGN KEY(game_state_id) REFERENCES game_states(id) ON DELETE SET NULL
 );
 `);
 
@@ -186,5 +223,14 @@ const existingGoldStateRow = db
 if (!existingGoldStateRow) {
   db.prepare(
     "INSERT INTO gold_state (id, gold, rewarded_todo_ids_json, updated_at) VALUES (1, 0, '[]', ?)",
+  ).run(new Date().toISOString());
+}
+
+const existingDetectedRow = db
+  .prepare("SELECT 1 FROM detected_game_state WHERE id = 1 LIMIT 1")
+  .get() as { 1: number } | undefined;
+if (!existingDetectedRow) {
+  db.prepare(
+    "INSERT INTO detected_game_state (id, game_state_id, confidence, detected_at) VALUES (1, NULL, 0, ?)",
   ).run(new Date().toISOString());
 }

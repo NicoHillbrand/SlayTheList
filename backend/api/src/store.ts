@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { db } from "./db.js";
+import fs from "node:fs";
+import path from "node:path";
+import { db, referenceImagesDir } from "./db.js";
 import type {
   AccountabilityState,
+  DetectedGameState,
+  GameState,
+  GameStateReferenceImage,
   GoldState,
   Habit,
   LockZone,
@@ -386,6 +391,164 @@ export function spendGold(amount: number): GoldState {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Game States
+// ---------------------------------------------------------------------------
+
+type GameStateRow = {
+  id: string;
+  name: string;
+  enabled: 0 | 1;
+  detection_method: string;
+  match_threshold: number;
+  created_at: string;
+  updated_at: string;
+};
+
+type GameStateRefImageRow = {
+  id: string;
+  game_state_id: string;
+  filename: string;
+  created_at: string;
+};
+
+type DetectedGameStateRow = {
+  game_state_id: string | null;
+  confidence: number;
+  detected_at: string;
+};
+
+function toGameState(row: GameStateRow): GameState {
+  return {
+    id: row.id,
+    name: row.name,
+    enabled: !!row.enabled,
+    detectionMethod: row.detection_method as GameState["detectionMethod"],
+    matchThreshold: row.match_threshold,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function toRefImage(row: GameStateRefImageRow): GameStateReferenceImage {
+  return {
+    id: row.id,
+    gameStateId: row.game_state_id,
+    filename: row.filename,
+    createdAt: row.created_at,
+  };
+}
+
+export function listGameStates(): GameState[] {
+  const rows = db.prepare("SELECT * FROM game_states ORDER BY created_at ASC").all() as GameStateRow[];
+  return rows.map(toGameState);
+}
+
+export function getGameState(id: string): GameState | undefined {
+  const row = db.prepare("SELECT * FROM game_states WHERE id = ?").get(id) as GameStateRow | undefined;
+  return row ? toGameState(row) : undefined;
+}
+
+export function createGameState(input: { name: string; matchThreshold?: number }): GameState {
+  const now = new Date().toISOString();
+  const id = randomUUID();
+  db.prepare(
+    `INSERT INTO game_states (id, name, enabled, detection_method, match_threshold, created_at, updated_at)
+     VALUES (?, ?, 1, 'screenshot_match', ?, ?, ?)`,
+  ).run(id, input.name.trim(), input.matchThreshold ?? 0.8, now, now);
+  return getGameState(id)!;
+}
+
+export function updateGameState(
+  id: string,
+  patch: Partial<Pick<GameState, "name" | "enabled" | "matchThreshold">>,
+): GameState | undefined {
+  const existing = getGameState(id);
+  if (!existing) return undefined;
+  const next = {
+    name: patch.name ?? existing.name,
+    enabled: patch.enabled ?? existing.enabled,
+    matchThreshold: patch.matchThreshold ?? existing.matchThreshold,
+    updatedAt: new Date().toISOString(),
+  };
+  db.prepare(
+    `UPDATE game_states SET name = ?, enabled = ?, match_threshold = ?, updated_at = ? WHERE id = ?`,
+  ).run(next.name, next.enabled ? 1 : 0, next.matchThreshold, next.updatedAt, id);
+  return getGameState(id);
+}
+
+export function deleteGameState(id: string): boolean {
+  const stateDir = path.join(referenceImagesDir, id);
+  if (fs.existsSync(stateDir)) {
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+  const result = db.prepare("DELETE FROM game_states WHERE id = ?").run(id);
+  return result.changes > 0;
+}
+
+export function listReferenceImages(gameStateId: string): GameStateReferenceImage[] {
+  const rows = db
+    .prepare("SELECT * FROM game_state_reference_images WHERE game_state_id = ? ORDER BY created_at ASC")
+    .all(gameStateId) as GameStateRefImageRow[];
+  return rows.map(toRefImage);
+}
+
+export function addReferenceImage(gameStateId: string, imageBuffer: Buffer, originalName: string): GameStateReferenceImage {
+  const ext = path.extname(originalName) || ".png";
+  const id = randomUUID();
+  const filename = `${id}${ext}`;
+  const stateDir = path.join(referenceImagesDir, gameStateId);
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.writeFileSync(path.join(stateDir, filename), imageBuffer);
+  const now = new Date().toISOString();
+  db.prepare(
+    "INSERT INTO game_state_reference_images (id, game_state_id, filename, created_at) VALUES (?, ?, ?, ?)",
+  ).run(id, gameStateId, filename, now);
+  return { id, gameStateId, filename, createdAt: now };
+}
+
+export function deleteReferenceImage(imageId: string): boolean {
+  const row = db.prepare("SELECT * FROM game_state_reference_images WHERE id = ?").get(imageId) as GameStateRefImageRow | undefined;
+  if (!row) return false;
+  const filePath = path.join(referenceImagesDir, row.game_state_id, row.filename);
+  if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  db.prepare("DELETE FROM game_state_reference_images WHERE id = ?").run(imageId);
+  return true;
+}
+
+export function setZoneGameStates(zoneId: string, gameStateIds: string[]): void {
+  const tx = db.transaction((zone: string, ids: string[]) => {
+    db.prepare("DELETE FROM lock_zone_game_states WHERE zone_id = ?").run(zone);
+    const stmt = db.prepare("INSERT INTO lock_zone_game_states (zone_id, game_state_id) VALUES (?, ?)");
+    for (const gsId of [...new Set(ids)]) {
+      stmt.run(zone, gsId);
+    }
+  });
+  tx(zoneId, gameStateIds);
+}
+
+export function getDetectedGameState(): DetectedGameState {
+  const row = db.prepare("SELECT game_state_id, confidence, detected_at FROM detected_game_state WHERE id = 1").get() as DetectedGameStateRow | undefined;
+  if (!row) return { gameStateId: null, gameStateName: null, confidence: 0, detectedAt: new Date().toISOString() };
+  const name = row.game_state_id
+    ? (db.prepare("SELECT name FROM game_states WHERE id = ?").get(row.game_state_id) as { name: string } | undefined)?.name ?? null
+    : null;
+  return {
+    gameStateId: row.game_state_id,
+    gameStateName: name,
+    confidence: row.confidence,
+    detectedAt: row.detected_at,
+  };
+}
+
+export function setDetectedGameState(gameStateId: string | null, confidence: number): DetectedGameState {
+  const now = new Date().toISOString();
+  db.prepare(
+    "UPDATE detected_game_state SET game_state_id = ?, confidence = ?, detected_at = ? WHERE id = 1",
+  ).run(gameStateId, confidence, now);
+  return getDetectedGameState();
+}
+
 export function listOverlayState(): LockZoneState[] {
   const zones = listZones();
   const requiredRows = db
@@ -400,6 +563,19 @@ export function listOverlayState(): LockZoneState[] {
     status: "active" | "done";
     archived_at: string | null;
   }>;
+
+  const zoneGameStateRows = db
+    .prepare("SELECT zone_id, game_state_id FROM lock_zone_game_states")
+    .all() as Array<{ zone_id: string; game_state_id: string }>;
+  const gameStatesByZone = new Map<string, string[]>();
+  for (const row of zoneGameStateRows) {
+    const existing = gameStatesByZone.get(row.zone_id) ?? [];
+    existing.push(row.game_state_id);
+    gameStatesByZone.set(row.zone_id, existing);
+  }
+
+  const detected = getDetectedGameState();
+  const currentGameStateId = detected.gameStateId;
 
   const activeTodoRows = todoRows.filter(
     (row) => !row.archived_at && row.title.trim().length > 0,
@@ -422,19 +598,26 @@ export function listOverlayState(): LockZoneState[] {
       .map((todoId) => titleByTodo.get(todoId))
       .filter((title): title is string => !!title);
     const goldUnlockActive = goldUnlockedZoneIds.has(zone.id);
+    const activeForGameStateIds = gameStatesByZone.get(zone.id) ?? [];
+    const activeForCurrentState =
+      activeForGameStateIds.length === 0 ||
+      (currentGameStateId !== null && activeForGameStateIds.includes(currentGameStateId));
     const isLocked =
-      zone.unlockMode === "gold"
+      activeForCurrentState &&
+      (zone.unlockMode === "gold"
         ? zone.enabled && !goldUnlockActive
         : zone.enabled &&
           requiredTodoIds.length > 0 &&
           requiredTodoIds.some((todoId) => statusByTodo.get(todoId) !== "done") &&
-          !goldUnlockActive;
+          !goldUnlockActive);
     return {
       zone,
       requiredTodoIds,
       requiredTodoTitles,
       goldUnlockActive,
       isLocked,
+      activeForGameStateIds,
+      activeForCurrentState,
     };
   });
 }

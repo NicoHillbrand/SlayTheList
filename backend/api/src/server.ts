@@ -15,38 +15,52 @@ import {
 } from "@slaythelist/contracts";
 import {
   activateZoneGoldUnlock,
+  addReferenceImage,
   clearZoneGoldUnlock,
+  createGameState,
   createTodo,
   createZone,
+  deleteGameState,
+  deleteReferenceImage,
   deleteTodo,
   deleteZone,
   getAccountabilityState,
+  getDetectedGameState,
   getGoldState,
+  listGameStates,
   listOverlayState,
+  listReferenceImages,
   listTodos,
   listZones,
   reorderTodos,
   saveGoldState,
+  setDetectedGameState,
+  setZoneGameStates,
   spendGold,
   awardGold,
   awardTodoGold,
   saveAccountabilityState,
   setZoneRequirements,
+  updateGameState,
   updateTodo,
   updateZone,
 } from "./store.js";
+import { referenceImagesDir } from "./db.js";
+import { testDetection } from "./image-match.js";
 import { errorLogger, requestLogger } from "./logger.js";
 
 const port = Number(process.env.PORT ?? 8788);
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "50mb" }));
 app.use(requestLogger);
 
 function buildOverlayState(): OverlayState {
   return {
     gameWindow: { titleHint: "Slay the Spire 2" },
     zones: listOverlayState(),
+    detectedGameState: getDetectedGameState(),
+    gameStates: listGameStates(),
     lastUpdatedAt: new Date().toISOString(),
   };
 }
@@ -653,6 +667,138 @@ app.delete("/api/zones/:id/gold-unlock", (req, res) => {
   ok(res, { updated: true });
   broadcastOverlayState();
 });
+
+// ---------------------------------------------------------------------------
+// Game States
+// ---------------------------------------------------------------------------
+
+app.get("/api/game-states", (_req, res) => {
+  ok(res, { items: listGameStates() });
+});
+
+app.post("/api/game-states", (req, res) => {
+  const name = req.body?.name;
+  if (typeof name !== "string" || !name.trim()) {
+    return badRequest(res, "name is required");
+  }
+  const matchThreshold = req.body?.matchThreshold;
+  const parsedThreshold =
+    typeof matchThreshold === "number" && matchThreshold >= 0 && matchThreshold <= 1
+      ? matchThreshold
+      : undefined;
+  const created = createGameState({ name: name.trim(), matchThreshold: parsedThreshold });
+  ok(res, created);
+  broadcastOverlayState();
+});
+
+app.patch("/api/game-states/:id", (req, res) => {
+  const patch = req.body ?? {};
+  const parsedPatch: Record<string, unknown> = {};
+  if (typeof patch.name === "string") parsedPatch.name = patch.name.trim();
+  if (typeof patch.enabled === "boolean") parsedPatch.enabled = patch.enabled;
+  if (typeof patch.matchThreshold === "number" && patch.matchThreshold >= 0 && patch.matchThreshold <= 1) {
+    parsedPatch.matchThreshold = patch.matchThreshold;
+  }
+  if (Object.keys(parsedPatch).length === 0) {
+    return badRequest(res, "no valid fields provided");
+  }
+  const updated = updateGameState(req.params.id, parsedPatch as Partial<{ name: string; enabled: boolean; matchThreshold: number }>);
+  if (!updated) {
+    return res.status(404).json({ error: "game state not found" });
+  }
+  ok(res, updated);
+  broadcastOverlayState();
+});
+
+app.delete("/api/game-states/:id", (req, res) => {
+  if (!deleteGameState(req.params.id)) {
+    return res.status(404).json({ error: "game state not found" });
+  }
+  ok(res, { deleted: true });
+  broadcastOverlayState();
+});
+
+app.get("/api/game-states/:id/reference-images", (req, res) => {
+  ok(res, { items: listReferenceImages(req.params.id) });
+});
+
+app.post("/api/game-states/:id/reference-images", (req, res) => {
+  const imageData = req.body?.imageData;
+  const filename = req.body?.filename;
+  if (typeof imageData !== "string" || !imageData) {
+    return badRequest(res, "imageData (base64) is required");
+  }
+  if (typeof filename !== "string" || !filename.trim()) {
+    return badRequest(res, "filename is required");
+  }
+  const stateExists = listGameStates().some((gs) => gs.id === req.params.id);
+  if (!stateExists) {
+    return res.status(404).json({ error: "game state not found" });
+  }
+  const buffer = Buffer.from(imageData, "base64");
+  const created = addReferenceImage(req.params.id, buffer, filename.trim());
+  ok(res, created);
+});
+
+app.delete("/api/game-states/reference-images/:imageId", (req, res) => {
+  if (!deleteReferenceImage(req.params.imageId)) {
+    return res.status(404).json({ error: "reference image not found" });
+  }
+  ok(res, { deleted: true });
+});
+
+app.put("/api/zones/:id/game-states", (req, res) => {
+  const gameStateIds = req.body?.gameStateIds;
+  if (!Array.isArray(gameStateIds) || gameStateIds.some((x) => typeof x !== "string")) {
+    return badRequest(res, "gameStateIds must be an array of game state ids");
+  }
+  const zoneExists = listZones().some((zone) => zone.id === req.params.id);
+  if (!zoneExists) {
+    return res.status(404).json({ error: "zone not found" });
+  }
+  setZoneGameStates(req.params.id, gameStateIds);
+  ok(res, { updated: true });
+  broadcastOverlayState();
+});
+
+app.get("/api/detected-game-state", (_req, res) => {
+  ok(res, getDetectedGameState());
+});
+
+app.put("/api/detected-game-state", (req, res) => {
+  const gameStateId = req.body?.gameStateId ?? null;
+  const confidence = req.body?.confidence;
+  if (gameStateId !== null && typeof gameStateId !== "string") {
+    return badRequest(res, "gameStateId must be a string or null");
+  }
+  if (typeof confidence !== "number" || confidence < 0 || confidence > 1) {
+    return badRequest(res, "confidence must be a number between 0 and 1");
+  }
+  const detected = setDetectedGameState(gameStateId, confidence);
+  ok(res, detected);
+  broadcastOverlayState();
+});
+
+app.post("/api/game-states/test-detection", async (req, res) => {
+  const imageData = req.body?.imageData;
+  if (typeof imageData !== "string" || !imageData) {
+    return badRequest(res, "imageData (base64) is required");
+  }
+  try {
+    const testBuffer = Buffer.from(imageData, "base64");
+    const states = listGameStates();
+    const refMap = new Map<string, Array<{ id: string; filename: string }>>();
+    for (const gs of states) {
+      refMap.set(gs.id, listReferenceImages(gs.id));
+    }
+    const results = await testDetection(testBuffer, states, refMap);
+    ok(res, { results });
+  } catch (err) {
+    res.status(500).json({ error: `detection test failed: ${(err as Error).message}` });
+  }
+});
+
+app.use("/api/reference-images", express.static(referenceImagesDir));
 
 app.get("/api/overlay-state", (_req, res) => {
   ok(res, buildOverlayState());
