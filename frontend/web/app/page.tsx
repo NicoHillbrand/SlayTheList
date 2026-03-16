@@ -68,6 +68,20 @@ type ReflectionQuestion = {
   isMulti: boolean;
 };
 type ExpandProvider = "gemini-flash" | "openai-gpt-4o-mini";
+type GoldSoundStep = {
+  src: string;
+  delayMs: number;
+  volume: number;
+  playbackRate?: number;
+  startAtSec?: number;
+  durationMs?: number;
+};
+type GoldSoundOption = {
+  id: string;
+  label: string;
+  description: string;
+  steps: GoldSoundStep[];
+};
 
 const TEMPLATE_WIDTH = 1280;
 const TEMPLATE_HEIGHT = 720;
@@ -113,6 +127,47 @@ const DEFAULT_OPTIONAL_REFLECTION_QUESTIONS: ReflectionQuestion[] = [
     label: "How could you have done something faster?",
     placeholder: "Add optimization idea...",
     isMulti: true,
+  },
+];
+
+const GOLD_PER_TODO = 5;
+const GOLD_STORAGE_KEY = "slaythelist.gold";
+const REWARDED_TODOS_STORAGE_KEY = "slaythelist.gold.rewardedTodoIds";
+const DEFAULT_GOLD_SOUND_ID = "sack-shift";
+const GOLD_SOUND_OPTIONS: GoldSoundOption[] = [
+  {
+    id: "sack-drop",
+    label: "Sack Drop",
+    description: "A real bag-of-coins hit with a quick rich jingle after it lands.",
+    steps: [
+      { src: "/sfx/gold-sack.wav", delayMs: 0, volume: 0.72, startAtSec: 0, durationMs: 950 },
+    ],
+  },
+  {
+    id: "sack-shift",
+    label: "Sack Shift",
+    description: "More bag movement and coin shuffle, less impact at the start.",
+    steps: [
+      { src: "/sfx/gold-sack.wav", delayMs: 0, volume: 0.72, startAtSec: 0.22, durationMs: 1450 },
+    ],
+  },
+  {
+    id: "coin-rush",
+    label: "Coin Rush",
+    description: "A fast burst of many loose coins clinking together.",
+    steps: [
+      { src: "/sfx/coin-jingle.ogg", delayMs: 0, volume: 0.62, startAtSec: 0, durationMs: 900 },
+    ],
+  },
+  {
+    id: "tight-clink",
+    label: "Tight Clink",
+    description: "A short stacked clink burst made from smaller coin hits.",
+    steps: [
+      { src: "/sfx/starninjas/coin.3.ogg", delayMs: 0, volume: 0.3, playbackRate: 0.96 },
+      { src: "/sfx/starninjas/coin.8.ogg", delayMs: 75, volume: 0.24, playbackRate: 1.02 },
+      { src: "/sfx/starninjas/coin.11.ogg", delayMs: 145, volume: 0.2, playbackRate: 0.92 },
+    ],
   },
 ];
 
@@ -391,12 +446,152 @@ export default function Page() {
   const [todoDrafts, setTodoDrafts] = useState<Record<string, string>>({});
   const [zoneImageOverrides, setZoneImageOverrides] = useState<Record<string, string>>({});
   const [blockedImages, setBlockedImages] = useState<string[]>([]);
+  const [gold, setGold] = useState(0);
+  const [rewardedTodoIds, setRewardedTodoIds] = useState<string[]>([]);
   const templateRef = useRef<HTMLDivElement | null>(null);
   const templateHostRef = useRef<HTMLDivElement | null>(null);
   const todoInputRefs = useRef<Map<string, HTMLInputElement>>(new Map());
+  const goldAudioRefs = useRef<Map<string, HTMLAudioElement>>(new Map());
+  const goldSoundTimeoutsRef = useRef<number[]>([]);
+  const activeGoldAudioRef = useRef<HTMLAudioElement[]>([]);
+  const goldCounterRef = useRef<HTMLDivElement | null>(null);
+  const activeFlyingCoinNodesRef = useRef<HTMLSpanElement[]>([]);
   const accountabilityLoadedRef = useRef(false);
   const accountabilitySaveTimerRef = useRef<number | null>(null);
   const [focusTodoId, setFocusTodoId] = useState<string | null>(null);
+
+  function stopGoldSoundPlayback() {
+    goldSoundTimeoutsRef.current.forEach((timeoutId) => window.clearTimeout(timeoutId));
+    goldSoundTimeoutsRef.current = [];
+    activeGoldAudioRef.current.forEach((audio) => {
+      audio.pause();
+      audio.currentTime = 0;
+    });
+    activeGoldAudioRef.current = [];
+  }
+
+  function goldSoundById(id: string) {
+    return GOLD_SOUND_OPTIONS.find((option) => option.id === id) ?? GOLD_SOUND_OPTIONS[0];
+  }
+
+  function playGoldSound() {
+    if (typeof window === "undefined") return;
+    stopGoldSoundPlayback();
+    const option = goldSoundById(DEFAULT_GOLD_SOUND_ID);
+    option.steps.forEach((step) => {
+      const timeoutId = window.setTimeout(() => {
+        const baseAudio = goldAudioRefs.current.get(step.src) ?? new Audio(step.src);
+        goldAudioRefs.current.set(step.src, baseAudio);
+        const audio = baseAudio.cloneNode(true) as HTMLAudioElement;
+        audio.volume = step.volume;
+        audio.playbackRate = step.playbackRate ?? 1;
+        audio.currentTime = step.startAtSec ?? 0;
+        activeGoldAudioRef.current.push(audio);
+        audio.addEventListener(
+          "ended",
+          () => {
+            activeGoldAudioRef.current = activeGoldAudioRef.current.filter((entry) => entry !== audio);
+          },
+          { once: true },
+        );
+        void audio.play().catch(() => {});
+        if (step.durationMs) {
+          const stopTimeoutId = window.setTimeout(() => {
+            audio.pause();
+            activeGoldAudioRef.current = activeGoldAudioRef.current.filter((entry) => entry !== audio);
+          }, step.durationMs);
+          goldSoundTimeoutsRef.current.push(stopTimeoutId);
+        }
+      }, step.delayMs);
+      goldSoundTimeoutsRef.current.push(timeoutId);
+    });
+  }
+
+  function clearFlyingCoins() {
+    activeFlyingCoinNodesRef.current.forEach((coin) => coin.remove());
+    activeFlyingCoinNodesRef.current = [];
+  }
+
+  function launchFlyingCoins(sourceElement: HTMLInputElement | null) {
+    if (typeof window === "undefined" || !sourceElement || !goldCounterRef.current) return;
+    clearFlyingCoins();
+    const sourceRect = sourceElement.getBoundingClientRect();
+    const targetRect = goldCounterRef.current.getBoundingClientRect();
+    const startX = sourceRect.left + sourceRect.width / 2;
+    const startY = sourceRect.top + sourceRect.height / 2;
+    const endX = targetRect.left + targetRect.width / 2;
+    const endY = targetRect.top + targetRect.height / 2;
+    const counter = goldCounterRef.current;
+    const coinConfigs = Array.from({ length: 5 }, (_, index) => ({
+      left: startX + (index - 2) * 4,
+      top: startY - index * 3,
+      dx: endX - startX + (index - 2) * 10,
+      dy: endY - startY - 10 - index * 4,
+      delay: index * 55,
+      duration: 760 + index * 35,
+      rotation: (index % 2 === 0 ? 1 : -1) * (120 + index * 24),
+      scale: 0.82 + index * 0.06,
+    }));
+
+    coinConfigs.forEach((coinConfig) => {
+      const coin = document.createElement("span");
+      coin.className = "gold-flight-coin";
+      coin.textContent = "🪙";
+      coin.style.left = `${coinConfig.left}px`;
+      coin.style.top = `${coinConfig.top}px`;
+      document.body.appendChild(coin);
+      activeFlyingCoinNodesRef.current.push(coin);
+
+      const animation = coin.animate(
+        [
+          {
+            opacity: 0,
+            transform: "translate(-50%, -50%) translate(0px, 0px) scale(0.4) rotate(0deg)",
+            offset: 0,
+          },
+          {
+            opacity: 1,
+            transform: `translate(-50%, -50%) translate(0px, 0px) scale(${coinConfig.scale * 1.08}) rotate(${coinConfig.rotation * 0.12}deg)`,
+            offset: 0.12,
+          },
+          {
+            opacity: 1,
+            transform: `translate(-50%, -50%) translate(${coinConfig.dx * 0.45}px, ${coinConfig.dy * 0.38 - 56}px) scale(${coinConfig.scale}) rotate(${coinConfig.rotation * 0.62}deg)`,
+            offset: 0.55,
+          },
+          {
+            opacity: 0,
+            transform: `translate(-50%, -50%) translate(${coinConfig.dx}px, ${coinConfig.dy}px) scale(0.52) rotate(${coinConfig.rotation}deg)`,
+            offset: 1,
+          },
+        ],
+        {
+          duration: coinConfig.duration,
+          delay: coinConfig.delay,
+          easing: "cubic-bezier(0.18, 0.82, 0.2, 1)",
+          fill: "forwards",
+        },
+      );
+
+      void animation.finished.finally(() => {
+        coin.remove();
+        activeFlyingCoinNodesRef.current = activeFlyingCoinNodesRef.current.filter((entry) => entry !== coin);
+      });
+    });
+
+    void counter.animate(
+      [
+        { transform: "scale(1)" },
+        { transform: "scale(1.08)" },
+        { transform: "scale(1)" },
+      ],
+      {
+        duration: 360,
+        delay: 520,
+        easing: "ease-out",
+      },
+    );
+  }
 
   async function refresh(showLoader = false) {
     if (showLoader) {
@@ -409,6 +604,18 @@ export default function Page() {
         getOverlayState(),
       ]);
       setTodos(todoData.items);
+      try {
+        const rawRewarded = window.localStorage.getItem(REWARDED_TODOS_STORAGE_KEY);
+        if (!rawRewarded) {
+          const seededRewardedIds = todoData.items
+            .filter((todo) => todo.status === "done")
+            .map((todo) => todo.id);
+          window.localStorage.setItem(REWARDED_TODOS_STORAGE_KEY, JSON.stringify(seededRewardedIds));
+          setRewardedTodoIds(seededRewardedIds);
+        }
+      } catch {
+        // ignore invalid local storage values
+      }
       setZones(zoneData.items);
       setOverlayState(overlayData);
       setLoadState("idle");
@@ -444,6 +651,47 @@ export default function Page() {
       }
     };
     return () => ws.close();
+  }, []);
+
+  useEffect(() => {
+    const uniqueSources = [...new Set(GOLD_SOUND_OPTIONS.flatMap((option) => option.steps.map((step) => step.src)))];
+    goldAudioRefs.current = new Map(uniqueSources.map((source) => {
+      const audio = new Audio(source);
+      audio.preload = "auto";
+      return [source, audio] as const;
+    }));
+    return () => {
+      stopGoldSoundPlayback();
+      goldAudioRefs.current.forEach((audio) => {
+        audio.pause();
+        audio.src = "";
+      });
+      goldAudioRefs.current = new Map();
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      clearFlyingCoins();
+    };
+  }, []);
+
+  useEffect(() => {
+    try {
+      const rawGold = window.localStorage.getItem(GOLD_STORAGE_KEY);
+      const parsedGold = rawGold ? Number(rawGold) : 0;
+      if (Number.isFinite(parsedGold) && parsedGold >= 0) {
+        setGold(Math.floor(parsedGold));
+      }
+
+      const rawRewarded = window.localStorage.getItem(REWARDED_TODOS_STORAGE_KEY);
+      if (!rawRewarded) return;
+      const parsedRewarded = JSON.parse(rawRewarded) as unknown;
+      if (!Array.isArray(parsedRewarded)) return;
+      setRewardedTodoIds(parsedRewarded.filter((value): value is string => typeof value === "string"));
+    } catch {
+      // ignore invalid local storage values
+    }
   }, []);
 
   useEffect(() => {
@@ -527,6 +775,14 @@ export default function Page() {
     const storageKey = "slaythelist.zoneImageOverrides";
     window.localStorage.setItem(storageKey, JSON.stringify(zoneImageOverrides));
   }, [zoneImageOverrides]);
+
+  useEffect(() => {
+    window.localStorage.setItem(GOLD_STORAGE_KEY, String(gold));
+  }, [gold]);
+
+  useEffect(() => {
+    window.localStorage.setItem(REWARDED_TODOS_STORAGE_KEY, JSON.stringify(rewardedTodoIds));
+  }, [rewardedTodoIds]);
 
   useEffect(() => {
     void runAction(async () => {
@@ -620,9 +876,15 @@ export default function Page() {
     });
   }
 
-  function toggleTodo(todo: Todo) {
+  function toggleTodo(todo: Todo, sourceElement: HTMLInputElement | null = null) {
     const next = todo.status === "done" ? "active" : "done";
     const nowIso = new Date().toISOString();
+    const shouldCelebrateCompletion = next === "done";
+    const shouldAwardGold = shouldCelebrateCompletion && !rewardedTodoIds.includes(todo.id);
+    if (shouldCelebrateCompletion) {
+      playGoldSound();
+      launchFlyingCoins(sourceElement);
+    }
     setTodos((previous) =>
       previous.map((item) =>
         item.id === todo.id
@@ -638,6 +900,12 @@ export default function Page() {
     void runAction(async () => {
       const updated = await setTodoStatus(todo.id, next);
       setTodos((previous) => previous.map((item) => (item.id === updated.id ? updated : item)));
+      if (shouldAwardGold) {
+        setGold((previous) => previous + GOLD_PER_TODO);
+        setRewardedTodoIds((previous) =>
+          previous.includes(todo.id) ? previous : [...previous, todo.id],
+        );
+      }
     });
   }
 
@@ -1793,10 +2061,17 @@ export default function Page() {
   return (
     <main className="app-shell">
       <header className="app-header">
-        <h1>SlayTheList</h1>
-        <p>
-        Complete todos to unlock blocked game regions.
-        </p>
+        <div>
+          <h1>SlayTheList</h1>
+          <p>Complete todos to unlock blocked game regions.</p>
+        </div>
+        <div ref={goldCounterRef} className="gold-counter" aria-label={`${gold} gold`}>
+          <span className="gold-counter-icon" aria-hidden="true">
+            🪙
+          </span>
+          <span className="gold-counter-value">{gold}</span>
+          <span className="gold-counter-label">gold</span>
+        </div>
       </header>
       <div className="grid single-column">
         <section className="panel tab-stage">
@@ -1911,7 +2186,7 @@ export default function Page() {
                       <input
                         type="checkbox"
                         checked={todo.status === "done"}
-                        onChange={() => toggleTodo(todo)}
+                        onChange={(event) => toggleTodo(todo, event.currentTarget)}
                         aria-label={`Toggle ${todo.title}`}
                       />
                       <input

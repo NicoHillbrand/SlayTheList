@@ -39,14 +39,65 @@ main {
 }
 
 .app-header {
-  display: grid;
-  gap: 0.35rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
   width: min(960px, 100%);
   margin: 0 auto;
 }
 
+.app-header h1 {
+  margin: 0;
+}
+
 .app-header p {
   margin: 0;
+}
+
+.gold-counter {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.45rem 0.75rem;
+  border-radius: 999px;
+  border: 1px solid rgba(212, 170, 71, 0.52);
+  background: linear-gradient(180deg, rgba(67, 49, 12, 0.85), rgba(26, 20, 6, 0.9));
+  color: #f8df8b;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.28);
+  white-space: nowrap;
+}
+
+.gold-counter-icon {
+  font-size: 1rem;
+}
+
+.gold-counter-value {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #fff1ba;
+}
+
+.gold-counter-label {
+  font-size: 0.82rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #d7bf7f;
+}
+
+.gold-flight-coin {
+  position: fixed;
+  left: 0;
+  top: 0;
+  font-size: 1.45rem;
+  line-height: 1;
+  transform: translate(-50%, -50%);
+  filter:
+    drop-shadow(0 0 10px rgba(255, 214, 102, 0.75))
+    drop-shadow(0 5px 14px rgba(0, 0, 0, 0.34));
+  pointer-events: none;
+  z-index: 9999;
+  will-change: transform, opacity;
 }
 
 .grid {
@@ -133,6 +184,7 @@ main {
   display: flex;
   gap: 0.45rem;
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .goals-copy-btn {
@@ -272,6 +324,17 @@ main {
   padding: 0.22rem 0.38rem;
   border-radius: 7px;
   font-size: 0.74rem;
+}
+
+@media (max-width: 700px) {
+  .app-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .gold-counter {
+    align-self: flex-start;
+  }
 }
 
 .goal-expand-btn {
@@ -544,6 +607,7 @@ main {
   color: #f7f2e4;
   padding: 0.5rem;
 }
+
 
 .view-tabs {
   display: inline-flex;
