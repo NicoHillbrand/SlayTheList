@@ -63,4 +63,7 @@ public sealed class Zone
 
     [JsonPropertyName("enabled")]
     public bool Enabled { get; set; }
+
+    [JsonPropertyName("unlockMode")]
+    public string UnlockMode { get; set; } = "todos";
 }

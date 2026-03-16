@@ -19,6 +19,14 @@ function ensureTodoColumn(name: string, definition: string) {
   db.exec(`ALTER TABLE todos ADD COLUMN ${name} ${definition};`);
 }
 
+function ensureLockZoneColumn(name: string, definition: string) {
+  const existing = db
+    .prepare("SELECT 1 FROM pragma_table_info('lock_zones') WHERE name = ? LIMIT 1")
+    .get(name) as { 1: number } | undefined;
+  if (existing) return;
+  db.exec(`ALTER TABLE lock_zones ADD COLUMN ${name} ${definition};`);
+}
+
 db.exec(`
 CREATE TABLE IF NOT EXISTS todos (
   id TEXT PRIMARY KEY,
@@ -42,6 +50,7 @@ CREATE TABLE IF NOT EXISTS lock_zones (
   width REAL NOT NULL,
   height REAL NOT NULL,
   enabled INTEGER NOT NULL DEFAULT 1,
+  unlock_mode TEXT NOT NULL DEFAULT 'todos' CHECK(unlock_mode IN ('todos', 'gold')),
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -54,11 +63,24 @@ CREATE TABLE IF NOT EXISTS lock_zone_requirements (
   FOREIGN KEY(todo_id) REFERENCES todos(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS lock_zone_gold_unlocks (
+  zone_id TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(zone_id) REFERENCES lock_zones(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS accountability_state (
   id INTEGER PRIMARY KEY CHECK(id = 1),
   habits_json TEXT NOT NULL DEFAULT '[]',
   predictions_json TEXT NOT NULL DEFAULT '[]',
   reflections_json TEXT NOT NULL DEFAULT '[]',
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS gold_state (
+  id INTEGER PRIMARY KEY CHECK(id = 1),
+  gold INTEGER NOT NULL DEFAULT 0,
+  rewarded_todo_ids_json TEXT NOT NULL DEFAULT '[]',
   updated_at TEXT NOT NULL
 );
 `);
@@ -147,6 +169,7 @@ ensureTodoColumn("sort_order", "INTEGER NOT NULL DEFAULT 0");
 ensureTodoColumn("deadline_at", "TEXT");
 ensureTodoColumn("archived_at", "TEXT");
 ensureTodoColumn("completed_at", "TEXT");
+ensureLockZoneColumn("unlock_mode", "TEXT NOT NULL DEFAULT 'todos' CHECK(unlock_mode IN ('todos', 'gold'))");
 
 const existingStateRow = db
   .prepare("SELECT 1 FROM accountability_state WHERE id = 1 LIMIT 1")
@@ -154,5 +177,14 @@ const existingStateRow = db
 if (!existingStateRow) {
   db.prepare(
     "INSERT INTO accountability_state (id, habits_json, predictions_json, reflections_json, updated_at) VALUES (1, '[]', '[]', '[]', ?)",
+  ).run(new Date().toISOString());
+}
+
+const existingGoldStateRow = db
+  .prepare("SELECT 1 FROM gold_state WHERE id = 1 LIMIT 1")
+  .get() as { 1: number } | undefined;
+if (!existingGoldStateRow) {
+  db.prepare(
+    "INSERT INTO gold_state (id, gold, rewarded_todo_ids_json, updated_at) VALUES (1, 0, '[]', ?)",
   ).run(new Date().toISOString());
 }

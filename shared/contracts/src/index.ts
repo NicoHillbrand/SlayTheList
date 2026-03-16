@@ -79,6 +79,15 @@ export const accountabilityStateSchema = z.object({
 });
 export type AccountabilityState = z.infer<typeof accountabilityStateSchema>;
 
+export const goldStateSchema = z.object({
+  gold: z.number().int().nonnegative(),
+  rewardedTodoIds: z.array(z.string()),
+});
+export type GoldState = z.infer<typeof goldStateSchema>;
+
+export const lockZoneUnlockModeSchema = z.enum(["todos", "gold"]);
+export type LockZoneUnlockMode = z.infer<typeof lockZoneUnlockModeSchema>;
+
 export const lockZoneSchema = z.object({
   id: z.string(),
   name: z.string().min(1),
@@ -87,6 +96,7 @@ export const lockZoneSchema = z.object({
   width: z.number().positive(),
   height: z.number().positive(),
   enabled: z.boolean(),
+  unlockMode: lockZoneUnlockModeSchema,
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -102,6 +112,7 @@ export const lockZoneStateSchema = z.object({
   zone: lockZoneSchema,
   requiredTodoIds: z.array(z.string()),
   requiredTodoTitles: z.array(z.string()),
+  goldUnlockActive: z.boolean(),
   isLocked: z.boolean(),
 });
 export type LockZoneState = z.infer<typeof lockZoneStateSchema>;

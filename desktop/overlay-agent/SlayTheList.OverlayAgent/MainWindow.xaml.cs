@@ -1,10 +1,14 @@
 using System.Net.WebSockets;
+using System.Net.Http;
 using System.IO;
+using System.Media;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -13,13 +17,20 @@ namespace SlayTheList.OverlayAgent;
 
 public partial class MainWindow : Window
 {
+    private const int ZoneGoldUnlockCost = 10;
     private readonly DispatcherTimer _windowSyncTimer;
     private readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web);
     private readonly bool _visualOnlyOverlay = ReadVisualOnlySetting();
+    private readonly HttpClient _httpClient = new();
+    private readonly string _apiBaseUrl = ResolveApiBaseUrl();
+    private readonly string? _goldUnlockSoundPath = ResolveGoldUnlockSoundPath();
     private const int FocusAcquireTicks = 1;
     private const int FocusReleaseTicks = 3;
     private const int WmMouseActivate = 0x0021;
     private const int MaNoActivate = 3;
+    private const uint SndAsync = 0x0001;
+    private const uint SndNodefault = 0x0002;
+    private const uint SndFilename = 0x00020000;
 
     private OverlayPayload? _lastOverlayState;
     private IntPtr _gameWindowHandle = IntPtr.Zero;
@@ -29,6 +40,11 @@ public partial class MainWindow : Window
     private int _focusPositiveStreak;
     private int _focusNegativeStreak;
     private readonly List<string> _overlayImagePaths = [];
+    private string? _statusOverrideText;
+    private DateTime _statusOverrideUntilUtc;
+
+    [DllImport("winmm.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool PlaySound(string? soundName, IntPtr moduleHandle, uint soundFlags);
 
     public MainWindow()
     {
@@ -44,7 +60,11 @@ public partial class MainWindow : Window
         LoadOverlayImagePaths();
         SourceInitialized += (_, _) => AttachNoActivateWindowHook();
         Loaded += (_, _) => _ = RunWebSocketLoop();
-        Closed += (_, _) => _windowSyncTimer.Stop();
+        Closed += (_, _) =>
+        {
+            _windowSyncTimer.Stop();
+            _httpClient.Dispose();
+        };
     }
 
     private async Task RunWebSocketLoop()
@@ -167,8 +187,48 @@ public partial class MainWindow : Window
 
         foreach (var zoneState in lockedZones)
         {
-            var lockText = BuildLockText(zoneState.RequiredTodoTitles);
+            var lockText = BuildLockText(zoneState.Zone.UnlockMode, zoneState.RequiredTodoTitles);
             var lockFontSize = CalculateLockFontSize(zoneState.Zone.Width, zoneState.Zone.Height);
+            var isGoldUnlock = string.Equals(zoneState.Zone.UnlockMode, "gold", StringComparison.OrdinalIgnoreCase);
+            var contentStack = new StackPanel
+            {
+                Orientation = Orientation.Vertical,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            contentStack.Children.Add(new TextBlock
+            {
+                Text = lockText,
+                Foreground = new SolidColorBrush(Color.FromArgb(248, 248, 250, 252)),
+                FontSize = lockFontSize,
+                FontWeight = FontWeights.Bold,
+                TextWrapping = TextWrapping.Wrap,
+                TextAlignment = TextAlignment.Center,
+                FontFamily = new FontFamily("Georgia"),
+                HorizontalAlignment = HorizontalAlignment.Center,
+            });
+            if (isGoldUnlock)
+            {
+                contentStack.Children.Add(new Border
+                {
+                    Margin = new Thickness(0, 10, 0, 0),
+                    Padding = new Thickness(10, 5, 10, 5),
+                    CornerRadius = new CornerRadius(999),
+                    Background = new SolidColorBrush(Color.FromArgb(232, 73, 53, 18)),
+                    BorderBrush = new SolidColorBrush(Color.FromArgb(210, 212, 170, 71)),
+                    BorderThickness = new Thickness(1),
+                    IsHitTestVisible = false,
+                    Child = new TextBlock
+                    {
+                        Text = $"Unlock for {ZoneGoldUnlockCost} gold",
+                        Foreground = new SolidColorBrush(Color.FromArgb(255, 248, 223, 139)),
+                        FontSize = Math.Max(11, lockFontSize * 0.82),
+                        FontWeight = FontWeights.SemiBold,
+                        TextAlignment = TextAlignment.Center,
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                    },
+                });
+            }
             var border = new Border
             {
                 Width = zoneState.Zone.Width,
@@ -176,27 +236,31 @@ public partial class MainWindow : Window
                 Background = CreateBlockedBackgroundBrush(zoneState.Zone.Id),
                 BorderBrush = new SolidColorBrush(Color.FromArgb(220, 22, 101, 52)),
                 BorderThickness = new Thickness(2),
-                ToolTip = $"Locked: {zoneState.Zone.Name}",
+                ToolTip = isGoldUnlock
+                    ? $"Click to unlock {zoneState.Zone.Name} for {ZoneGoldUnlockCost} gold"
+                    : $"Locked: {zoneState.Zone.Name}",
                 IsHitTestVisible = !_visualOnlyOverlay,
+                Cursor = isGoldUnlock
+                    ? Cursors.Hand
+                    : Cursors.Arrow,
                 Child = new Border
                 {
                     Background = Brushes.Transparent,
                     Padding = new Thickness(6, 4, 6, 4),
                     HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Center,
-                    Child = new TextBlock
-                    {
-                        Text = lockText,
-                        Foreground = new SolidColorBrush(Color.FromArgb(248, 248, 250, 252)),
-                        FontSize = lockFontSize,
-                        FontWeight = FontWeights.Bold,
-                        TextWrapping = TextWrapping.Wrap,
-                        TextAlignment = TextAlignment.Center,
-                        FontFamily = new FontFamily("Georgia"),
-                    },
+                    Child = contentStack,
                     IsHitTestVisible = false,
                 },
             };
+            if (isGoldUnlock)
+            {
+                border.MouseLeftButtonUp += async (_, args) =>
+                {
+                    args.Handled = true;
+                    await TryUnlockZoneWithGold(zoneState.Zone.Id, zoneState.Zone.Name);
+                };
+            }
             Canvas.SetLeft(border, zoneState.Zone.X);
             Canvas.SetTop(border, zoneState.Zone.Y);
             OverlayCanvas.Children.Add(border);
@@ -233,6 +297,61 @@ public partial class MainWindow : Window
         }
 
         UpdateStatusText();
+    }
+
+    private async Task TryUnlockZoneWithGold(string zoneId, string zoneName)
+    {
+        try
+        {
+            using var response = await _httpClient.PostAsync($"{_apiBaseUrl}/api/zones/{zoneId}/gold-unlock", content: null);
+            if (!response.IsSuccessStatusCode)
+            {
+                var body = await response.Content.ReadAsStringAsync();
+                Dispatcher.Invoke(() => ShowTransientStatus(
+                    string.IsNullOrWhiteSpace(body) ? $"Failed to unlock {zoneName}" : body,
+                    3500));
+                return;
+            }
+
+            var soundPlayed = PlayGoldUnlockSound();
+            Dispatcher.Invoke(() => ShowTransientStatus(
+                soundPlayed
+                    ? $"Unlocked {zoneName} for {ZoneGoldUnlockCost} gold"
+                    : $"Unlocked {zoneName} for {ZoneGoldUnlockCost} gold | sound failed",
+                3500));
+        }
+        catch
+        {
+            Dispatcher.Invoke(() => ShowTransientStatus($"Failed to reach API for {zoneName} unlock", 3500));
+        }
+    }
+
+    private bool PlayGoldUnlockSound()
+    {
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(_goldUnlockSoundPath) && File.Exists(_goldUnlockSoundPath))
+            {
+                if (PlaySound(_goldUnlockSoundPath, IntPtr.Zero, SndAsync | SndFilename | SndNodefault))
+                {
+                    return true;
+                }
+            }
+        }
+        catch
+        {
+            // Fall back below.
+        }
+
+        try
+        {
+            SystemSounds.Asterisk.Play();
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private bool IsGameInForeground()
@@ -311,6 +430,13 @@ public partial class MainWindow : Window
 
     private void UpdateStatusText()
     {
+        if (!string.IsNullOrWhiteSpace(_statusOverrideText) && DateTime.UtcNow < _statusOverrideUntilUtc)
+        {
+            StatusText.Text = _statusOverrideText;
+            return;
+        }
+
+        _statusOverrideText = null;
         var lockedCount = _lastOverlayState?.Zones.Count((z) => z.IsLocked && z.Zone.Enabled) ?? 0;
         var focusLabel = _isGameInForeground ? "focused" : "background";
         if (lockedCount > 0)
@@ -322,8 +448,20 @@ public partial class MainWindow : Window
         StatusText.Text = $"Tracking {_titleHint} ({focusLabel}) | No locked zones | {(_visualOnlyOverlay ? "visual sign active" : "blocking armed")}";
     }
 
-    private static string BuildLockText(IReadOnlyList<string> requiredTodoTitles)
+    private void ShowTransientStatus(string text, int durationMs)
     {
+        _statusOverrideText = text;
+        _statusOverrideUntilUtc = DateTime.UtcNow.AddMilliseconds(durationMs);
+        StatusText.Text = text;
+    }
+
+    private static string BuildLockText(string unlockMode, IReadOnlyList<string> requiredTodoTitles)
+    {
+        if (string.Equals(unlockMode, "gold", StringComparison.OrdinalIgnoreCase))
+        {
+            return $"Unlock for\n\n{ZoneGoldUnlockCost} gold";
+        }
+
         if (requiredTodoTitles.Count == 0)
         {
             return "Unlock via\n\nto-do";
@@ -345,6 +483,23 @@ public partial class MainWindow : Window
         }
 
         return $"{value[..(maxLength - 1)]}…";
+    }
+
+    private static string ResolveApiBaseUrl()
+    {
+        var wsUrl = Environment.GetEnvironmentVariable("SLAYTHELIST_WS_URL") ?? "ws://localhost:8788/ws";
+        if (!Uri.TryCreate(wsUrl, UriKind.Absolute, out var uri))
+        {
+            return "http://localhost:8788";
+        }
+
+        var builder = new UriBuilder(uri)
+        {
+            Scheme = uri.Scheme.Equals("wss", StringComparison.OrdinalIgnoreCase) ? "https" : "http",
+            Path = string.Empty,
+            Query = string.Empty,
+        };
+        return builder.Uri.ToString().TrimEnd('/');
     }
 
     private static double CalculateLockFontSize(double width, double height)
@@ -446,6 +601,11 @@ public partial class MainWindow : Window
         }
 
         return null;
+    }
+
+    private static string ResolveGoldUnlockSoundPath()
+    {
+        return System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "gold-sack.wav");
     }
 
     private static bool ReadVisualOnlySetting()

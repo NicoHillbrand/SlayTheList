@@ -15,6 +15,7 @@ import type {
   Habit,
   HabitStatus,
   LockZone,
+  LockZoneUnlockMode,
   OverlayState,
   Prediction,
   PredictionOutcome,
@@ -24,15 +25,21 @@ import type {
 import {
   createTodo,
   createZone,
+  clearZoneGoldUnlock,
   deleteTodo,
   deleteZone,
   getAccountabilityState,
+  getGoldState,
   getOverlayState,
   listTodos,
   listZones,
   overlayWebSocketUrl,
+  purchaseZoneGoldUnlock,
   reorderTodos,
+  saveGoldState,
   saveAccountabilityState,
+  awardGold as awardGoldApi,
+  awardTodoGold as awardTodoGoldApi,
   setTodoStatus,
   setZoneRequirements,
   updateTodo,
@@ -58,8 +65,8 @@ type MoveState = {
 type ViewTab = "goals" | "habits" | "predictions" | "reflection" | "blocks";
 type TodoFilter = "active" | "completed" | "archived" | "all";
 type TodoRange = "daily" | "weekly" | "monthly" | "all" | "top";
-type TodoMode = "list" | "calendar";
 type HabitsView = "week" | "month";
+type HabitsSubtab = "ideas" | "week" | "month";
 type ReflectionView = "today" | "history";
 type ReflectionQuestion = {
   key: string;
@@ -133,6 +140,15 @@ const DEFAULT_OPTIONAL_REFLECTION_QUESTIONS: ReflectionQuestion[] = [
 const GOLD_PER_TODO = 5;
 const GOLD_STORAGE_KEY = "slaythelist.gold";
 const REWARDED_TODOS_STORAGE_KEY = "slaythelist.gold.rewardedTodoIds";
+const ZONE_IMAGE_OVERRIDES_STORAGE_KEY = "slaythelist.zoneImageOverrides";
+const AI_EXPAND_PROVIDER_STORAGE_KEY = "slaythelist.ai.expandProvider";
+const AI_GEMINI_API_KEY_STORAGE_KEY = "slaythelist.ai.geminiApiKey";
+const AI_OPENAI_API_KEY_STORAGE_KEY = "slaythelist.ai.openAiApiKey";
+const AI_EXPAND_CONTEXT_STORAGE_KEY = "slaythelist.ai.expandContextByTodoId";
+const LEGACY_HABITS_STORAGE_KEY = "slaythelist.habits";
+const LEGACY_PREDICTIONS_STORAGE_KEY = "slaythelist.predictions";
+const LEGACY_REFLECTIONS_STORAGE_KEY = "slaythelist.reflections";
+const ZONE_GOLD_UNLOCK_COST = 10;
 const DEFAULT_GOLD_SOUND_ID = "sack-shift";
 const GOLD_SOUND_OPTIONS: GoldSoundOption[] = [
   {
@@ -194,7 +210,10 @@ function truncateText(input: string, max = 40) {
   return `${input.slice(0, max - 1)}…`;
 }
 
-function lockMessage(requiredTodoTitles: string[]) {
+function lockMessage(requiredTodoTitles: string[], unlockMode: LockZoneUnlockMode) {
+  if (unlockMode === "gold") {
+    return `Unlock for\n\n${ZONE_GOLD_UNLOCK_COST} gold`;
+  }
   if (requiredTodoTitles.length === 0) {
     return "Unlock via\n\nto-do";
   }
@@ -371,6 +390,10 @@ function getDateKey(date: Date) {
   return date.toISOString().slice(0, 10);
 }
 
+function parseDateKey(dateKey: string) {
+  return new Date(`${dateKey}T00:00:00`);
+}
+
 function getLastNDays(n: number) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -404,6 +427,38 @@ function getLastNWeeks(n: number) {
   });
 }
 
+function calculateHabitDayStreak(habit: Habit, endDateKey: string) {
+  const doneDates = new Set(habit.checks.filter((check) => check.done).map((check) => check.date));
+  let streak = 0;
+  const cursor = parseDateKey(endDateKey);
+  cursor.setHours(0, 0, 0, 0);
+  while (doneDates.has(getDateKey(cursor))) {
+    streak += 1;
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  return streak;
+}
+
+function calculateHabitWeekStreak(habit: Habit, weekStart: Date, weekEnd: Date) {
+  let streak = 0;
+  const checks = habit.checks.filter((check) => check.done);
+  const currentStart = new Date(weekStart);
+  const currentEnd = new Date(weekEnd);
+  currentStart.setHours(0, 0, 0, 0);
+  currentEnd.setHours(23, 59, 59, 999);
+
+  while (true) {
+    const hasCheckInWeek = checks.some((check) => {
+      const checkDate = parseDateKey(check.date);
+      return checkDate >= currentStart && checkDate <= currentEnd;
+    });
+    if (!hasCheckInWeek) return streak;
+    streak += 1;
+    currentStart.setDate(currentStart.getDate() - 7);
+    currentEnd.setDate(currentEnd.getDate() - 7);
+  }
+}
+
 export default function Page() {
   const [todos, setTodos] = useState<Todo[]>([]);
   const [zones, setZones] = useState<LockZone[]>([]);
@@ -418,10 +473,10 @@ export default function Page() {
   const [activeTab, setActiveTab] = useState<ViewTab>("goals");
   const [todoFilter, setTodoFilter] = useState<TodoFilter>("active");
   const [todoRange, setTodoRange] = useState<TodoRange>("daily");
-  const [todoMode, setTodoMode] = useState<TodoMode>("list");
-  const [habitsView, setHabitsView] = useState<HabitsView>("week");
+  const [habitsSubtab, setHabitsSubtab] = useState<HabitsSubtab>("week");
   const [habits, setHabits] = useState<Habit[]>([]);
   const [newHabitName, setNewHabitName] = useState("");
+  const [editingHabitId, setEditingHabitId] = useState<string | null>(null);
   const [predictions, setPredictions] = useState<Prediction[]>([]);
   const [newPredictionTitle, setNewPredictionTitle] = useState("");
   const [newPredictionConfidence, setNewPredictionConfidence] = useState(70);
@@ -436,7 +491,8 @@ export default function Page() {
   const [editTitle, setEditTitle] = useState("");
   const [editDeadline, setEditDeadline] = useState("");
   const [expandingTodoId, setExpandingTodoId] = useState<string | null>(null);
-  const [showAiSettingsModal, setShowAiSettingsModal] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [isResettingGold, setIsResettingGold] = useState(false);
   const [expandProvider, setExpandProvider] = useState<ExpandProvider>("gemini-flash");
   const [geminiApiKey, setGeminiApiKey] = useState("");
   const [openAiApiKey, setOpenAiApiKey] = useState("");
@@ -512,7 +568,7 @@ export default function Page() {
     activeFlyingCoinNodesRef.current = [];
   }
 
-  function launchFlyingCoins(sourceElement: HTMLInputElement | null) {
+  function launchFlyingCoins(sourceElement: HTMLElement | null) {
     if (typeof window === "undefined" || !sourceElement || !goldCounterRef.current) return;
     clearFlyingCoins();
     const sourceRect = sourceElement.getBoundingClientRect();
@@ -598,24 +654,36 @@ export default function Page() {
       setLoadState("loading");
     }
     try {
-      const [todoData, zoneData, overlayData] = await Promise.all([
+      const [todoData, zoneData, overlayData, fetchedGoldState] = await Promise.all([
         listTodos(),
         listZones(),
         getOverlayState(),
+        getGoldState(),
       ]);
       setTodos(todoData.items);
-      try {
-        const rawRewarded = window.localStorage.getItem(REWARDED_TODOS_STORAGE_KEY);
-        if (!rawRewarded) {
-          const seededRewardedIds = todoData.items
-            .filter((todo) => todo.status === "done")
-            .map((todo) => todo.id);
-          window.localStorage.setItem(REWARDED_TODOS_STORAGE_KEY, JSON.stringify(seededRewardedIds));
-          setRewardedTodoIds(seededRewardedIds);
+      let nextGoldState = fetchedGoldState;
+      if (fetchedGoldState.gold === 0 && fetchedGoldState.rewardedTodoIds.length === 0) {
+        try {
+          const rawGold = window.localStorage.getItem(GOLD_STORAGE_KEY);
+          const parsedGold = rawGold ? Number(rawGold) : 0;
+          const rawRewarded = window.localStorage.getItem(REWARDED_TODOS_STORAGE_KEY);
+          const parsedRewarded = rawRewarded ? (JSON.parse(rawRewarded) as unknown) : [];
+          const migratedGold = Number.isFinite(parsedGold) && parsedGold >= 0 ? Math.floor(parsedGold) : 0;
+          const migratedRewarded = Array.isArray(parsedRewarded)
+            ? parsedRewarded.filter((value): value is string => typeof value === "string")
+            : [];
+          if (migratedGold > 0 || migratedRewarded.length > 0) {
+            nextGoldState = await saveGoldState({
+              gold: migratedGold,
+              rewardedTodoIds: migratedRewarded,
+            });
+          }
+        } catch {
+          // ignore invalid legacy local storage values
         }
-      } catch {
-        // ignore invalid local storage values
       }
+      setGold(nextGoldState.gold);
+      setRewardedTodoIds(nextGoldState.rewardedTodoIds);
       setZones(zoneData.items);
       setOverlayState(overlayData);
       setLoadState("idle");
@@ -677,24 +745,6 @@ export default function Page() {
   }, []);
 
   useEffect(() => {
-    try {
-      const rawGold = window.localStorage.getItem(GOLD_STORAGE_KEY);
-      const parsedGold = rawGold ? Number(rawGold) : 0;
-      if (Number.isFinite(parsedGold) && parsedGold >= 0) {
-        setGold(Math.floor(parsedGold));
-      }
-
-      const rawRewarded = window.localStorage.getItem(REWARDED_TODOS_STORAGE_KEY);
-      if (!rawRewarded) return;
-      const parsedRewarded = JSON.parse(rawRewarded) as unknown;
-      if (!Array.isArray(parsedRewarded)) return;
-      setRewardedTodoIds(parsedRewarded.filter((value): value is string => typeof value === "string"));
-    } catch {
-      // ignore invalid local storage values
-    }
-  }, []);
-
-  useEffect(() => {
     const onFullscreenChange = () => {
       setIsCanvasFullscreen(document.fullscreenElement === templateHostRef.current);
     };
@@ -734,7 +784,7 @@ export default function Page() {
   }, []);
 
   useEffect(() => {
-    const storageKey = "slaythelist.zoneImageOverrides";
+    const storageKey = ZONE_IMAGE_OVERRIDES_STORAGE_KEY;
     try {
       const raw = window.localStorage.getItem(storageKey);
       if (!raw) return;
@@ -772,17 +822,9 @@ export default function Page() {
   }, [blockedImages, zones]);
 
   useEffect(() => {
-    const storageKey = "slaythelist.zoneImageOverrides";
+    const storageKey = ZONE_IMAGE_OVERRIDES_STORAGE_KEY;
     window.localStorage.setItem(storageKey, JSON.stringify(zoneImageOverrides));
   }, [zoneImageOverrides]);
-
-  useEffect(() => {
-    window.localStorage.setItem(GOLD_STORAGE_KEY, String(gold));
-  }, [gold]);
-
-  useEffect(() => {
-    window.localStorage.setItem(REWARDED_TODOS_STORAGE_KEY, JSON.stringify(rewardedTodoIds));
-  }, [rewardedTodoIds]);
 
   useEffect(() => {
     void runAction(async () => {
@@ -795,9 +837,9 @@ export default function Page() {
         nextHabits.length === 0 && nextPredictions.length === 0 && nextReflections.length === 0;
       if (isApiEmpty) {
         try {
-          const rawHabits = window.localStorage.getItem("slaythelist.habits");
-          const rawPredictions = window.localStorage.getItem("slaythelist.predictions");
-          const rawReflections = window.localStorage.getItem("slaythelist.reflections");
+          const rawHabits = window.localStorage.getItem(LEGACY_HABITS_STORAGE_KEY);
+          const rawPredictions = window.localStorage.getItem(LEGACY_PREDICTIONS_STORAGE_KEY);
+          const rawReflections = window.localStorage.getItem(LEGACY_REFLECTIONS_STORAGE_KEY);
           if (rawHabits) {
             const parsed = JSON.parse(rawHabits) as Habit[];
             if (Array.isArray(parsed)) nextHabits = parsed;
@@ -876,7 +918,7 @@ export default function Page() {
     });
   }
 
-  function toggleTodo(todo: Todo, sourceElement: HTMLInputElement | null = null) {
+  function toggleTodo(todo: Todo, sourceElement: HTMLElement | null = null) {
     const next = todo.status === "done" ? "active" : "done";
     const nowIso = new Date().toISOString();
     const shouldCelebrateCompletion = next === "done";
@@ -901,10 +943,9 @@ export default function Page() {
       const updated = await setTodoStatus(todo.id, next);
       setTodos((previous) => previous.map((item) => (item.id === updated.id ? updated : item)));
       if (shouldAwardGold) {
-        setGold((previous) => previous + GOLD_PER_TODO);
-        setRewardedTodoIds((previous) =>
-          previous.includes(todo.id) ? previous : [...previous, todo.id],
-        );
+        const result = await awardTodoGoldApi(todo.id, GOLD_PER_TODO);
+        setGold(result.state.gold);
+        setRewardedTodoIds(result.state.rewardedTodoIds);
       }
     });
   }
@@ -1029,15 +1070,40 @@ export default function Page() {
     });
   }
 
-  function saveAiSettings() {
+  function saveSettings() {
     try {
-      window.localStorage.setItem("slaythelist.ai.expandProvider", expandProvider);
-      window.localStorage.setItem("slaythelist.ai.geminiApiKey", geminiApiKey.trim());
-      window.localStorage.setItem("slaythelist.ai.openAiApiKey", openAiApiKey.trim());
+      window.localStorage.setItem(AI_EXPAND_PROVIDER_STORAGE_KEY, expandProvider);
+      window.localStorage.setItem(AI_GEMINI_API_KEY_STORAGE_KEY, geminiApiKey.trim());
+      window.localStorage.setItem(AI_OPENAI_API_KEY_STORAGE_KEY, openAiApiKey.trim());
       setError(null);
-      setShowAiSettingsModal(false);
+      setShowSettingsModal(false);
     } catch {
-      setError("Failed to save AI settings.");
+      setError("Failed to save settings.");
+    }
+  }
+
+  async function resetGoldProgress() {
+    const confirmed = window.confirm(
+      "Reset gold for testing? This clears your gold total and completed gold rewards, but keeps the rest of your app data.",
+    );
+    if (!confirmed) return;
+
+    setIsResettingGold(true);
+    setError(null);
+    try {
+      const nextGoldState = await saveGoldState({ gold: 0, rewardedTodoIds: [] });
+      setGold(nextGoldState.gold);
+      setRewardedTodoIds(nextGoldState.rewardedTodoIds);
+      try {
+        [GOLD_STORAGE_KEY, REWARDED_TODOS_STORAGE_KEY].forEach((key) => window.localStorage.removeItem(key));
+      } catch {
+        // ignore local storage access issues
+      }
+      setShowSettingsModal(false);
+    } catch (err) {
+      setError(toErrorMessage(err));
+    } finally {
+      setIsResettingGold(false);
     }
   }
 
@@ -1110,7 +1176,7 @@ export default function Page() {
   async function generateSubtodosWithGemini(todo: Todo): Promise<string[]> {
     const apiKey = geminiApiKey.trim();
     if (!apiKey) {
-      throw new Error("Gemini API key is missing. Add it in AI settings.");
+      throw new Error("Gemini API key is missing. Add it in Settings.");
     }
     const index = todos.findIndex((entry) => entry.id === todo.id);
     if (index < 0) {
@@ -1190,7 +1256,7 @@ export default function Page() {
   async function generateSubtodosWithOpenAI(todo: Todo): Promise<string[]> {
     const apiKey = openAiApiKey.trim();
     if (!apiKey) {
-      throw new Error("OpenAI API key is missing. Add it in AI settings.");
+      throw new Error("OpenAI API key is missing. Add it in Settings.");
     }
     const index = todos.findIndex((entry) => entry.id === todo.id);
     if (index < 0) {
@@ -1299,13 +1365,13 @@ export default function Page() {
   function handleExpandTodo(todo: Todo) {
     if (expandingTodoId) return;
     if (expandProvider === "gemini-flash" && !geminiApiKey.trim()) {
-      setShowAiSettingsModal(true);
-      setError("Add a Gemini API key in AI settings to use expansion.");
+      setShowSettingsModal(true);
+      setError("Add a Gemini API key in Settings to use expansion.");
       return;
     }
     if (expandProvider === "openai-gpt-4o-mini" && !openAiApiKey.trim()) {
-      setShowAiSettingsModal(true);
-      setError("Add an OpenAI API key in AI settings to use expansion.");
+      setShowSettingsModal(true);
+      setError("Add an OpenAI API key in Settings to use expansion.");
       return;
     }
     setExpandingTodoId(todo.id);
@@ -1426,6 +1492,43 @@ export default function Page() {
     }
     void runAction(async () => {
       await setZoneRequirements(zoneId, [...set]);
+      await refresh();
+    });
+  }
+
+  function setZoneUnlockMode(zoneId: string, unlockMode: LockZoneUnlockMode) {
+    setZones((previous) =>
+      previous.map((zone) => (zone.id === zoneId ? { ...zone, unlockMode } : zone)),
+    );
+    void runAction(async () => {
+      await updateZone(zoneId, { unlockMode });
+      await refresh();
+    });
+  }
+
+  function unlockZoneWithGold(zoneId: string) {
+    const zoneState = overlayState?.zones.find((entry) => entry.zone.id === zoneId);
+    if (!zoneState) return;
+    if (!zoneState.isLocked) return;
+    if (gold < ZONE_GOLD_UNLOCK_COST) {
+      setError(`You need ${ZONE_GOLD_UNLOCK_COST} gold to unlock this block.`);
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Spend ${ZONE_GOLD_UNLOCK_COST} gold to unlock this block?`,
+    );
+    if (!confirmed) return;
+
+    void runAction(async () => {
+      await purchaseZoneGoldUnlock(zoneId);
+      await refresh();
+    });
+  }
+
+  function relockZone(zoneId: string) {
+    void runAction(async () => {
+      await clearZoneGoldUnlock(zoneId);
       await refresh();
     });
   }
@@ -1652,10 +1755,10 @@ export default function Page() {
 
   useEffect(() => {
     try {
-      const providerRaw = window.localStorage.getItem("slaythelist.ai.expandProvider");
-      const storedGemini = window.localStorage.getItem("slaythelist.ai.geminiApiKey");
-      const storedOpenAi = window.localStorage.getItem("slaythelist.ai.openAiApiKey");
-      const storedExpandContext = window.localStorage.getItem("slaythelist.ai.expandContextByTodoId");
+      const providerRaw = window.localStorage.getItem(AI_EXPAND_PROVIDER_STORAGE_KEY);
+      const storedGemini = window.localStorage.getItem(AI_GEMINI_API_KEY_STORAGE_KEY);
+      const storedOpenAi = window.localStorage.getItem(AI_OPENAI_API_KEY_STORAGE_KEY);
+      const storedExpandContext = window.localStorage.getItem(AI_EXPAND_CONTEXT_STORAGE_KEY);
       if (providerRaw === "gemini-flash" || providerRaw === "openai-gpt-4o-mini") {
         setExpandProvider(providerRaw);
       }
@@ -1679,7 +1782,7 @@ export default function Page() {
   useEffect(() => {
     try {
       window.localStorage.setItem(
-        "slaythelist.ai.expandContextByTodoId",
+        AI_EXPAND_CONTEXT_STORAGE_KEY,
         JSON.stringify(expandContextByTodoId),
       );
     } catch {
@@ -1714,10 +1817,6 @@ export default function Page() {
     () => new Map(lockableTodos.map((todo) => [todo.id, todo.title] as const)),
     [lockableTodos],
   );
-  const statusByTodoId = useMemo(
-    () => new Map(lockableTodos.map((todo) => [todo.id, todo.status] as const)),
-    [lockableTodos],
-  );
 
   const selectedImageValue = useMemo(() => {
     if (selectedZoneIds.length === 0) return "__auto__";
@@ -1748,8 +1847,20 @@ export default function Page() {
   const habitDays = useMemo(() => getLastNDays(7), []);
   const habitWeeks = useMemo(() => getLastNWeeks(5), []);
   const todayKey = getDateKey(new Date());
+  const habitsView: HabitsView = habitsSubtab === "month" ? "month" : "week";
 
-  function addHabit() {
+  function awardHabitGold(streak: number, sourceElement: HTMLElement | null) {
+    const rewardAmount = 4 + streak;
+    playGoldSound();
+    launchFlyingCoins(sourceElement);
+    void runAction(async () => {
+      const nextGoldState = await awardGoldApi(rewardAmount);
+      setGold(nextGoldState.gold);
+      setRewardedTodoIds(nextGoldState.rewardedTodoIds);
+    });
+  }
+
+  function addHabit(status: HabitStatus = "active") {
     const nextName = newHabitName.trim();
     if (!nextName) return;
     setHabits((prev) => [
@@ -1759,51 +1870,69 @@ export default function Page() {
         name: nextName,
         checks: [],
         createdAt: Date.now(),
-        status: "active",
+        status,
       },
     ]);
     setNewHabitName("");
   }
 
-  function toggleHabitDay(habitId: string, dateKey: string) {
+  function toggleHabitDay(habitId: string, dateKey: string, sourceElement: HTMLElement | null = null) {
+    let rewardedHabit: Habit | null = null;
+    let streak = 0;
     setHabits((prev) =>
       prev.map((habit) => {
         if (habit.id !== habitId) return habit;
         const hasCheck = habit.checks.some((check) => check.date === dateKey && check.done);
-        return {
+        const nextHabit = {
           ...habit,
           checks: hasCheck
             ? habit.checks.filter((check) => check.date !== dateKey)
             : [...habit.checks.filter((check) => check.date !== dateKey), { date: dateKey, done: true }],
         };
+        if (!hasCheck) {
+          rewardedHabit = nextHabit;
+          streak = calculateHabitDayStreak(nextHabit, dateKey);
+        }
+        return nextHabit;
       }),
     );
+    if (rewardedHabit) {
+      awardHabitGold(streak, sourceElement);
+    }
   }
 
-  function toggleHabitWeek(habitId: string, weekStart: Date, weekEnd: Date) {
+  function toggleHabitWeek(habitId: string, weekStart: Date, weekEnd: Date, sourceElement: HTMLElement | null = null) {
+    let rewardedHabit: Habit | null = null;
+    let streak = 0;
     setHabits((prev) =>
       prev.map((habit) => {
         if (habit.id !== habitId) return habit;
         const doneInWeek = habit.checks.some((check) => {
           if (!check.done) return false;
-          const checkDate = new Date(`${check.date}T00:00:00`);
+          const checkDate = parseDateKey(check.date);
           return checkDate >= weekStart && checkDate <= weekEnd;
         });
         if (doneInWeek) {
           return {
             ...habit,
             checks: habit.checks.filter((check) => {
-              const checkDate = new Date(`${check.date}T00:00:00`);
+              const checkDate = parseDateKey(check.date);
               return checkDate < weekStart || checkDate > weekEnd;
             }),
           };
         }
-        return {
+        const nextHabit = {
           ...habit,
           checks: [...habit.checks, { date: getDateKey(weekEnd), done: true }],
         };
+        rewardedHabit = nextHabit;
+        streak = calculateHabitWeekStreak(nextHabit, weekStart, weekEnd);
+        return nextHabit;
       }),
     );
+    if (rewardedHabit) {
+      awardHabitGold(streak, sourceElement);
+    }
   }
 
   function deleteHabit(habitId: string) {
@@ -1814,6 +1943,7 @@ export default function Page() {
     setHabits((prev) =>
       prev.map((habit) => (habit.id === habitId ? { ...habit, status } : habit)),
     );
+    setEditingHabitId((prev) => (prev === habitId ? null : prev));
   }
 
   const activeHabits = useMemo(
@@ -1828,6 +1958,10 @@ export default function Page() {
     () => habits.filter((habit) => habit.status === "archived"),
     [habits],
   );
+  const habitsTableColSpan = habitsView === "week" ? habitDays.length + 1 : habitWeeks.length + 1;
+  const newHabitStatus: HabitStatus = habitsSubtab === "ideas" ? "idea" : "active";
+  const newHabitPlaceholder =
+    habitsSubtab === "ideas" ? "+ Add a new habit idea..." : "+ Add a new habit...";
 
   function addPrediction() {
     const title = newPredictionTitle.trim();
@@ -2128,9 +2262,9 @@ export default function Page() {
                 <button
                   type="button"
                   className="goals-copy-btn"
-                  onClick={() => setShowAiSettingsModal(true)}
-                  title="AI settings"
-                  aria-label="AI settings"
+                  onClick={() => setShowSettingsModal(true)}
+                  title="Settings"
+                  aria-label="Settings"
                 >
                   ⚙
                 </button>
@@ -2147,10 +2281,6 @@ export default function Page() {
                   <option value="monthly">Month</option>
                   <option value="all">All time</option>
                 </select>
-                <select value={todoMode} onChange={(event) => setTodoMode(event.target.value as TodoMode)}>
-                  <option value="list">List</option>
-                  <option value="calendar">Calendar</option>
-                </select>
               </div>
             </div>
 
@@ -2158,9 +2288,7 @@ export default function Page() {
             {loadState === "loading" && <p>Loading…</p>}
             {error && <p style={{ color: "#fda4af" }}>{error}</p>}
 
-            {todoMode === "calendar" ? (
-              <p className="goals-empty">Calendar view is coming soon.</p>
-            ) : filteredTodos.length === 0 ? (
+            {filteredTodos.length === 0 ? (
               <p className="goals-empty">No goals yet.</p>
             ) : (
               <ul className="goals-list" onDragOver={(event) => event.preventDefault()}>
@@ -2233,7 +2361,7 @@ export default function Page() {
                             title="Add expansion context"
                             aria-label="Add expansion context"
                           >
-                            🎤
+                            <span className="goal-context-icon" aria-hidden="true">🎤</span>
                           </button>
                         )}
                         {!todo.archivedAt && (
@@ -2255,8 +2383,7 @@ export default function Page() {
                 ))}
               </ul>
             )}
-            {todoMode === "list" &&
-              todoFilter !== "completed" &&
+            {todoFilter !== "completed" &&
               todoFilter !== "archived" &&
               todoRange !== "top" && (
               <button type="button" className="goals-add-item-btn" onClick={addItemBelowList}>
@@ -2289,87 +2416,347 @@ export default function Page() {
               <div className="goals-filters">
                 <button
                   type="button"
-                  className={`goals-subtab ${habitsView === "week" ? "active" : ""}`}
-                  onClick={() => setHabitsView("week")}
+                  className={`goals-subtab ${habitsSubtab === "ideas" ? "active" : ""}`}
+                  onClick={() => setHabitsSubtab("ideas")}
+                >
+                  Ideas {ideaHabits.length > 0 ? `(${ideaHabits.length})` : ""}
+                </button>
+                <button
+                  type="button"
+                  className={`goals-subtab ${habitsSubtab === "week" ? "active" : ""}`}
+                  onClick={() => setHabitsSubtab("week")}
                 >
                   Week
                 </button>
                 <button
                   type="button"
-                  className={`goals-subtab ${habitsView === "month" ? "active" : ""}`}
-                  onClick={() => setHabitsView("month")}
+                  className={`goals-subtab ${habitsSubtab === "month" ? "active" : ""}`}
+                  onClick={() => setHabitsSubtab("month")}
                 >
                   Month
                 </button>
               </div>
             </div>
             <div className="habits-grid">
-              <div className="habits-add">
-                <input
-                  value={newHabitName}
-                  onChange={(event) => setNewHabitName(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      addHabit();
-                    }
-                  }}
-                  placeholder="Add a habit..."
-                />
-                <button type="button" onClick={addHabit}>Add</button>
-              </div>
-              <div className="habits-meta">
-                <small>Ideas: {ideaHabits.length}</small>
-                <small>Archived: {archivedHabits.length}</small>
-              </div>
-              {activeHabits.length === 0 ? (
-                <p className="goals-empty">No habits yet.</p>
+              {habitsSubtab === "ideas" ? (
+                <div className="habits-panel">
+                  <div className="habits-table-wrap">
+                    <table className="habits-table habits-ideas-table">
+                      <thead>
+                        <tr>
+                          <th>Idea</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {ideaHabits.length === 0 ? (
+                          <tr>
+                            <td className="habits-empty-cell">
+                              <p className="goals-empty">No habit ideas yet.</p>
+                            </td>
+                          </tr>
+                        ) : (
+                          ideaHabits.map((habit) => (
+                            <tr
+                              key={habit.id}
+                              className={`habit-row ${editingHabitId === habit.id ? "editing" : ""}`}
+                              onBlur={(event) => {
+                                const nextTarget = event.relatedTarget as Node | null;
+                                if (!event.currentTarget.contains(nextTarget)) {
+                                  setEditingHabitId((current) => (current === habit.id ? null : current));
+                                }
+                              }}
+                            >
+                              <td>
+                                <div className="habit-name-cell">
+                                  <input
+                                    id={`habit-name-${habit.id}`}
+                                    className="habit-name-input"
+                                    value={habit.name}
+                                    onFocus={() => setEditingHabitId(habit.id)}
+                                    onChange={(event) =>
+                                      setHabits((prev) =>
+                                        prev.map((h) =>
+                                          h.id === habit.id ? { ...h, name: event.target.value } : h,
+                                        ),
+                                      )
+                                    }
+                                    onKeyDown={(event) => {
+                                      if (event.key === "Enter") event.currentTarget.blur();
+                                    }}
+                                  />
+                                  <button
+                                    type="button"
+                                    className="habit-edit-trigger"
+                                    onClick={() => {
+                                      setEditingHabitId(habit.id);
+                                      requestAnimationFrame(() => {
+                                        document.getElementById(`habit-name-${habit.id}`)?.focus();
+                                      });
+                                    }}
+                                    aria-label={`Edit ${habit.name}`}
+                                  >
+                                    ✎
+                                  </button>
+                                  <div className="habit-row-actions">
+                                    <button
+                                      type="button"
+                                      onClick={() => setHabitStatus(habit.id, "active")}
+                                    >
+                                      Activate
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setHabitStatus(habit.id, "archived")}
+                                    >
+                                      Archive
+                                    </button>
+                                    <button type="button" onClick={() => deleteHabit(habit.id)}>
+                                      Delete
+                                    </button>
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                        <tr className="habits-add-row">
+                          <td>
+                            <div className="habits-add-inline">
+                              <span className="habit-add-prefix">+</span>
+                              <input
+                                value={newHabitName}
+                                onChange={(event) => setNewHabitName(event.target.value)}
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter") {
+                                    event.preventDefault();
+                                    addHabit(newHabitStatus);
+                                  }
+                                }}
+                                placeholder={newHabitPlaceholder}
+                              />
+                              {newHabitName.trim() ? (
+                                <button type="button" onClick={() => addHabit(newHabitStatus)}>
+                                  Add
+                                </button>
+                              ) : null}
+                            </div>
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  {archivedHabits.length > 0 && (
+                    <div className="habits-archive-panel">
+                      <div className="habits-panel-header">
+                        <strong>Archived</strong>
+                        <small>{archivedHabits.length}</small>
+                      </div>
+                      <ul className="goals-list">
+                        {archivedHabits.map((habit) => (
+                          <li
+                            key={`archived:${habit.id}`}
+                            className={`goal-row habit-side-row ${editingHabitId === habit.id ? "editing" : ""}`}
+                            onBlur={(event) => {
+                              const nextTarget = event.relatedTarget as Node | null;
+                              if (!event.currentTarget.contains(nextTarget)) {
+                                setEditingHabitId((current) => (current === habit.id ? null : current));
+                              }
+                            }}
+                          >
+                            <div className="habit-name-cell">
+                              <input
+                                id={`habit-name-${habit.id}`}
+                                className="habit-name-input"
+                                value={habit.name}
+                                onFocus={() => setEditingHabitId(habit.id)}
+                                onChange={(event) =>
+                                  setHabits((prev) =>
+                                    prev.map((h) =>
+                                      h.id === habit.id ? { ...h, name: event.target.value } : h,
+                                    ),
+                                  )
+                                }
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter") event.currentTarget.blur();
+                                }}
+                              />
+                              <button
+                                type="button"
+                                className="habit-edit-trigger"
+                                onClick={() => {
+                                  setEditingHabitId(habit.id);
+                                  requestAnimationFrame(() => {
+                                    document.getElementById(`habit-name-${habit.id}`)?.focus();
+                                  });
+                                }}
+                                aria-label={`Edit ${habit.name}`}
+                              >
+                                ✎
+                              </button>
+                              <div className="habit-row-actions">
+                                <button
+                                  type="button"
+                                  onClick={() => setHabitStatus(habit.id, "active")}
+                                >
+                                  Restore
+                                </button>
+                                <button type="button" onClick={() => deleteHabit(habit.id)}>
+                                  Delete
+                                </button>
+                              </div>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              ) : activeHabits.length === 0 ? (
+                <div className="habits-panel">
+                  <div className="habits-table-wrap">
+                    <table className="habits-table">
+                      <thead>
+                        <tr>
+                          <th>Habit</th>
+                          {habitsView === "week"
+                            ? habitDays.map((day) => (
+                                <th key={day.key} className={day.key === todayKey ? "is-today" : ""}>
+                                  <div>{day.label}</div>
+                                  <small>{day.subLabel}</small>
+                                </th>
+                              ))
+                            : habitWeeks.map((week) => (
+                                <th
+                                  key={week.start.toISOString()}
+                                  className={getDateKey(week.end) >= todayKey && getDateKey(week.start) <= todayKey
+                                    ? "is-today"
+                                    : ""}
+                                >
+                                  {week.label}
+                                </th>
+                              ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr>
+                          <td className="habits-empty-cell" colSpan={habitsTableColSpan}>
+                            <p className="goals-empty">No habits yet.</p>
+                          </td>
+                        </tr>
+                        <tr className="habits-add-row">
+                          <td colSpan={habitsTableColSpan}>
+                            <div className="habits-add-inline">
+                              <span className="habit-add-prefix">+</span>
+                              <input
+                                value={newHabitName}
+                                onChange={(event) => setNewHabitName(event.target.value)}
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter") {
+                                    event.preventDefault();
+                                    addHabit(newHabitStatus);
+                                  }
+                                }}
+                                placeholder={newHabitPlaceholder}
+                              />
+                              {newHabitName.trim() ? (
+                                <button type="button" onClick={() => addHabit(newHabitStatus)}>
+                                  Add
+                                </button>
+                              ) : null}
+                            </div>
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
               ) : (
-                <table className="habits-table">
+                <div className="habits-panel">
+                  <div className="habits-table-wrap">
+                    <table className="habits-table">
                   <thead>
                     <tr>
                       <th>Habit</th>
                       {habitsView === "week"
                         ? habitDays.map((day) => (
-                            <th key={day.key}>
+                            <th key={day.key} className={day.key === todayKey ? "is-today" : ""}>
                               <div>{day.label}</div>
                               <small>{day.subLabel}</small>
                             </th>
                           ))
                         : habitWeeks.map((week) => (
-                            <th key={week.start.toISOString()}>{week.label}</th>
+                            <th
+                              key={week.start.toISOString()}
+                              className={getDateKey(week.end) >= todayKey && getDateKey(week.start) <= todayKey
+                                ? "is-today"
+                                : ""}
+                            >
+                              {week.label}
+                            </th>
                           ))}
                     </tr>
                   </thead>
                   <tbody>
                     {activeHabits.map((habit) => (
-                      <tr key={habit.id}>
+                      <tr
+                        key={habit.id}
+                        className={`habit-row ${editingHabitId === habit.id ? "editing" : ""}`}
+                        onBlur={(event) => {
+                          const nextTarget = event.relatedTarget as Node | null;
+                          if (!event.currentTarget.contains(nextTarget)) {
+                            setEditingHabitId((current) => (current === habit.id ? null : current));
+                          }
+                        }}
+                      >
                         <td>
                           <div className="habit-name-cell">
                             <input
+                              id={`habit-name-${habit.id}`}
+                              className="habit-name-input"
                               value={habit.name}
+                              onFocus={() => setEditingHabitId(habit.id)}
                               onChange={(event) =>
                                 setHabits((prev) =>
                                   prev.map((h) => (h.id === habit.id ? { ...h, name: event.target.value } : h)),
                                 )
                               }
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") event.currentTarget.blur();
+                              }}
                             />
-                            <button type="button" onClick={() => setHabitStatus(habit.id, "idea")}>Idea</button>
-                            <button type="button" onClick={() => setHabitStatus(habit.id, "archived")}>
-                              Archive
+                            <button
+                              type="button"
+                              className="habit-edit-trigger"
+                              onClick={() => {
+                                setEditingHabitId(habit.id);
+                                requestAnimationFrame(() => {
+                                  document.getElementById(`habit-name-${habit.id}`)?.focus();
+                                });
+                              }}
+                              aria-label={`Edit ${habit.name}`}
+                            >
+                              ✎
                             </button>
-                            <button type="button" onClick={() => deleteHabit(habit.id)}>Delete</button>
+                            <div className="habit-row-actions">
+                              <button type="button" onClick={() => setHabitStatus(habit.id, "idea")}>
+                                Idea
+                              </button>
+                              <button type="button" onClick={() => setHabitStatus(habit.id, "archived")}>
+                                Archive
+                              </button>
+                              <button type="button" onClick={() => deleteHabit(habit.id)}>Delete</button>
+                            </div>
                           </div>
                         </td>
                         {habitsView === "week"
                           ? habitDays.map((day) => {
                               const done = habit.checks.some((check) => check.date === day.key && check.done);
                               return (
-                                <td key={`${habit.id}:${day.key}`}>
+                                <td key={`${habit.id}:${day.key}`} className={day.key === todayKey ? "is-today" : ""}>
                                   <button
                                     type="button"
                                     className={`habit-check ${done ? "done" : ""}`}
-                                    onClick={() => toggleHabitDay(habit.id, day.key)}
+                                    onClick={(event) => toggleHabitDay(habit.id, day.key, event.currentTarget)}
                                     aria-label={`Mark ${habit.name} for ${day.label}`}
                                   >
                                     {done ? "✓" : ""}
@@ -2384,11 +2771,18 @@ export default function Page() {
                                 return checkDate >= week.start && checkDate <= week.end;
                               });
                               return (
-                                <td key={`${habit.id}:${week.start.toISOString()}`}>
+                                <td
+                                  key={`${habit.id}:${week.start.toISOString()}`}
+                                  className={getDateKey(week.end) >= todayKey && getDateKey(week.start) <= todayKey
+                                    ? "is-today"
+                                    : ""}
+                                >
                                   <button
                                     type="button"
                                     className={`habit-check ${done ? "done" : ""}`}
-                                    onClick={() => toggleHabitWeek(habit.id, week.start, week.end)}
+                                    onClick={(event) =>
+                                      toggleHabitWeek(habit.id, week.start, week.end, event.currentTarget)
+                                    }
                                   >
                                     {done ? "✓" : ""}
                                   </button>
@@ -2397,47 +2791,32 @@ export default function Page() {
                             })}
                       </tr>
                     ))}
+                    <tr className="habits-add-row">
+                      <td colSpan={habitsTableColSpan}>
+                        <div className="habits-add-inline">
+                          <span className="habit-add-prefix">+</span>
+                          <input
+                            value={newHabitName}
+                            onChange={(event) => setNewHabitName(event.target.value)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                addHabit(newHabitStatus);
+                              }
+                            }}
+                            placeholder={newHabitPlaceholder}
+                          />
+                          {newHabitName.trim() ? (
+                            <button type="button" onClick={() => addHabit(newHabitStatus)}>
+                              Add
+                            </button>
+                          ) : null}
+                        </div>
+                      </td>
+                    </tr>
                   </tbody>
-                </table>
-              )}
-              {(ideaHabits.length > 0 || archivedHabits.length > 0) && (
-                <div className="habits-side-lists">
-                  {ideaHabits.length > 0 && (
-                    <div>
-                      <strong>Ideas</strong>
-                      <ul className="goals-list">
-                        {ideaHabits.map((habit) => (
-                          <li key={`idea:${habit.id}`} className="goal-row">
-                            <span>{habit.name}</span>
-                            <div className="prediction-actions">
-                              <button type="button" onClick={() => setHabitStatus(habit.id, "active")}>
-                                Activate
-                              </button>
-                              <button type="button" onClick={() => deleteHabit(habit.id)}>Delete</button>
-                            </div>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                  {archivedHabits.length > 0 && (
-                    <div>
-                      <strong>Archived</strong>
-                      <ul className="goals-list">
-                        {archivedHabits.map((habit) => (
-                          <li key={`archived:${habit.id}`} className="goal-row">
-                            <span>{habit.name}</span>
-                            <div className="prediction-actions">
-                              <button type="button" onClick={() => setHabitStatus(habit.id, "active")}>
-                                Restore
-                              </button>
-                              <button type="button" onClick={() => deleteHabit(habit.id)}>Delete</button>
-                            </div>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
+                    </table>
+                  </div>
                 </div>
               )}
             </div>
@@ -2827,11 +3206,9 @@ export default function Page() {
               const requiredTitles = requiredTodoIds
                 .map((todoId) => titleByTodoId.get(todoId))
                 .filter((title): title is string => !!title);
-              const isLocked =
-                zone.enabled &&
-                requiredTodoIds.length > 0 &&
-                requiredTodoIds.some((todoId) => statusByTodoId.get(todoId) !== "done");
-              const lockText = lockMessage(requiredTitles);
+              const isLocked = zoneState?.isLocked ?? false;
+              const goldUnlockActive = zoneState?.goldUnlockActive ?? false;
+              const lockText = lockMessage(requiredTitles, zone.unlockMode);
               const lockTextStyle = lockTextStyleForZone(zone.width, zone.height);
               const zoneImage = imageForZone(zone.id);
               return (
@@ -2861,7 +3238,7 @@ export default function Page() {
                     backgroundPosition: "center",
                     backgroundBlendMode: zoneImage ? "multiply" : "normal",
                     pointerEvents: "auto",
-                    cursor: "move",
+                    cursor: isLocked ? "pointer" : "move",
                   }}
                 >
                   {isLocked && (
@@ -2870,12 +3247,13 @@ export default function Page() {
                         position: "absolute",
                         inset: 0,
                         display: "flex",
-                        justifyContent: "center",
-                        alignItems: "flex-start",
-                        pointerEvents: "none",
+                        flexDirection: "column",
+                        justifyContent: "flex-start",
+                        alignItems: "center",
                         paddingTop: lockTextTopPadding(zone.width, zone.height),
                         paddingLeft: "0.45rem",
                         paddingRight: "0.45rem",
+                        gap: "0.45rem",
                       }}
                     >
                       <div
@@ -2885,6 +3263,44 @@ export default function Page() {
                       >
                         {lockText}
                       </div>
+                      <button
+                        type="button"
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          unlockZoneWithGold(zone.id);
+                        }}
+                        style={{
+                          borderRadius: 999,
+                          border: "1px solid rgba(212, 170, 71, 0.56)",
+                          background: gold >= ZONE_GOLD_UNLOCK_COST ? "rgba(73, 53, 18, 0.92)" : "rgba(55, 65, 81, 0.92)",
+                          color: gold >= ZONE_GOLD_UNLOCK_COST ? "#f8df8b" : "#d1d5db",
+                          padding: "0.32rem 0.7rem",
+                          fontSize: Math.max(10, Math.min(13, Math.min(zone.width, zone.height) * 0.05)),
+                          fontWeight: 700,
+                        }}
+                        title={`Spend ${ZONE_GOLD_UNLOCK_COST} gold to unlock`}
+                      >
+                        Unlock for {ZONE_GOLD_UNLOCK_COST} gold
+                      </button>
+                    </div>
+                  )}
+                  {!isLocked && goldUnlockActive && (
+                    <div
+                      style={{
+                        position: "absolute",
+                        right: "0.45rem",
+                        top: "0.45rem",
+                        borderRadius: 999,
+                        background: "rgba(120, 53, 15, 0.9)",
+                        color: "#fde68a",
+                        padding: "0.2rem 0.5rem",
+                        fontSize: "0.72rem",
+                        fontWeight: 700,
+                        pointerEvents: "none",
+                      }}
+                    >
+                      Gold unlocked
                     </div>
                   )}
                 </div>
@@ -2914,10 +3330,9 @@ export default function Page() {
             <div style={{ display: "grid", gap: "0.75rem" }}>
               {zones.map((zone) => {
                 const required = requiredByZone.get(zone.id) ?? new Set<string>();
-                const isLocked =
-                  zone.enabled &&
-                  required.size > 0 &&
-                  [...required].some((todoId) => statusByTodoId.get(todoId) !== "done");
+                const zoneState = overlayState?.zones.find((entry) => entry.zone.id === zone.id);
+                const isLocked = zoneState?.isLocked ?? false;
+                const goldUnlockActive = zoneState?.goldUnlockActive ?? false;
                 return (
                   <article
                     key={zone.id}
@@ -2939,6 +3354,14 @@ export default function Page() {
                         onBlur={() => commitZoneField(zone.id, "name")}
                         style={{ flex: 1 }}
                       />
+                      <select
+                        value={zone.unlockMode}
+                        onChange={(event) => setZoneUnlockMode(zone.id, event.target.value as LockZoneUnlockMode)}
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <option value="todos">Todo unlock</option>
+                        <option value="gold">10 gold unlock</option>
+                      </select>
                       <button type="button" onClick={() => patchZone(zone.id, { enabled: !zone.enabled })}>
                         {zone.enabled ? "Disable" : "Enable"}
                       </button>
@@ -2962,12 +3385,28 @@ export default function Page() {
                     </div>
 
                     <p style={{ margin: 0, color: isLocked ? "#fca5a5" : "#86efac" }}>
-                      {isLocked ? "Locked in game" : "Unlocked in game"}
+                      {isLocked ? "Locked in game" : goldUnlockActive ? "Unlocked with gold" : "Unlocked in game"}
                     </p>
 
                     <div style={{ display: "grid", gap: "0.25rem" }}>
-                      <strong>Required todos</strong>
-                      {lockableTodos.length === 0 ? (
+                      <strong>{zone.unlockMode === "gold" ? "Unlock rule" : "Required todos"}</strong>
+                      {zone.unlockMode === "gold" ? (
+                        <>
+                          <small>Click the locked block and pay {ZONE_GOLD_UNLOCK_COST} gold to unlock it.</small>
+                          {goldUnlockActive && (
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                relockZone(zone.id);
+                              }}
+                              style={{ justifySelf: "start" }}
+                            >
+                              Re-lock zone
+                            </button>
+                          )}
+                        </>
+                      ) : lockableTodos.length === 0 ? (
                         <small>Create todos first.</small>
                       ) : (
                         lockableTodos.map((todo) => (
@@ -3027,54 +3466,79 @@ export default function Page() {
           </div>
         </div>
       )}
-      {showAiSettingsModal && (
+      {showSettingsModal && (
         <div
           className="todo-edit-modal-backdrop"
           role="presentation"
-          onClick={() => setShowAiSettingsModal(false)}
+          onClick={() => {
+            if (!isResettingGold) {
+              setShowSettingsModal(false);
+            }
+          }}
         >
           <div
-            className="todo-edit-modal ai-settings-modal"
+            className="todo-edit-modal settings-modal"
             role="dialog"
             aria-modal="true"
             onClick={(event) => event.stopPropagation()}
           >
-            <h3>AI settings</h3>
-            <label>
-              Expand provider
-              <select
-                value={expandProvider}
-                onChange={(event) => setExpandProvider(event.target.value as ExpandProvider)}
+            <h3>Settings</h3>
+            <section className="settings-section">
+              <p className="settings-section-title">AI expansion</p>
+              <p className="settings-section-copy">
+                Choose the provider used for goal expansion and store your API keys locally in this browser.
+              </p>
+              <label>
+                Expand provider
+                <select
+                  value={expandProvider}
+                  onChange={(event) => setExpandProvider(event.target.value as ExpandProvider)}
+                >
+                  <option value="gemini-flash">Gemini Flash (expand)</option>
+                  <option value="openai-gpt-4o-mini">OpenAI GPT-4o mini (expand)</option>
+                </select>
+              </label>
+              <label>
+                Gemini API key
+                <input
+                  type="password"
+                  value={geminiApiKey}
+                  onChange={(event) => setGeminiApiKey(event.target.value)}
+                  placeholder="AIza..."
+                />
+              </label>
+              <label>
+                OpenAI API key (optional)
+                <input
+                  type="password"
+                  value={openAiApiKey}
+                  onChange={(event) => setOpenAiApiKey(event.target.value)}
+                  placeholder="sk-..."
+                />
+              </label>
+              <p className="settings-hint">
+                Expansion asks for end state, intermediate states, and concrete physical actions, then creates 3-5
+                subtasks prefixed with [2m] or [5m].
+              </p>
+            </section>
+            <section className="settings-section settings-reset-card">
+              <p className="settings-section-title">Gold reset</p>
+              <p className="settings-section-copy">
+                Reset your gold count for testing without clearing goals, zones, habits, predictions, reflections, or
+                saved AI settings.
+              </p>
+              <button
+                type="button"
+                className="settings-reset-button"
+                onClick={() => void resetGoldProgress()}
+                disabled={isResettingGold}
               >
-                <option value="gemini-flash">Gemini Flash (expand)</option>
-                <option value="openai-gpt-4o-mini">OpenAI GPT-4o mini (expand)</option>
-              </select>
-            </label>
-            <label>
-              Gemini API key
-              <input
-                type="password"
-                value={geminiApiKey}
-                onChange={(event) => setGeminiApiKey(event.target.value)}
-                placeholder="AIza..."
-              />
-            </label>
-            <label>
-              OpenAI API key (optional)
-              <input
-                type="password"
-                value={openAiApiKey}
-                onChange={(event) => setOpenAiApiKey(event.target.value)}
-                placeholder="sk-..."
-              />
-            </label>
-            <p className="ai-settings-hint">
-              Expansion prompt asks for end state, intermediate states, and concrete physical actions, then creates 3-5
-              subtasks prefixed with [2m] or [5m].
-            </p>
+                {isResettingGold ? "Resetting..." : "Reset gold"}
+              </button>
+            </section>
             <div className="todo-edit-modal-actions">
-              <button type="button" onClick={() => setShowAiSettingsModal(false)}>Cancel</button>
-              <button type="button" onClick={saveAiSettings}>Save</button>
+              <button type="button" onClick={() => setShowSettingsModal(false)} disabled={isResettingGold}>Cancel</button>
+              <button type="button" onClick={saveSettings} disabled={isResettingGold}>Save</button>
             </div>
           </div>
         </div>
@@ -3082,7 +3546,7 @@ export default function Page() {
       {expansionContextTodoId && (
         <div className="todo-edit-modal-backdrop" role="presentation" onClick={closeExpansionContextModal}>
           <div
-            className="todo-edit-modal ai-settings-modal"
+            className="todo-edit-modal settings-modal"
             role="dialog"
             aria-modal="true"
             onClick={(event) => event.stopPropagation()}
@@ -3097,7 +3561,7 @@ export default function Page() {
                 placeholder="Add any extra context for the AI, constraints, desired output style, assumptions, etc."
               />
             </label>
-            <p className="ai-settings-hint">
+            <p className="settings-hint">
               This note is added to the expansion prompt for this specific todo only.
             </p>
             <div className="todo-edit-modal-actions">

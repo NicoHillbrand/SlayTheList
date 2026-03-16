@@ -9,4 +9,9 @@
   <ItemGroup>
     <PackageReference Include="System.Text.Json" Version="8.0.5" />
   </ItemGroup>
+  <ItemGroup>
+    <Content Include="..\..\..\frontend\web\public\sfx\gold-sack.wav" Link="Assets\gold-sack.wav">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
 </Project>

@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { WebSocketServer } from "ws";
 import {
   accountabilityStateSchema,
+  goldStateSchema,
   habitCheckSchema,
   habitStatusSchema,
   predictionOutcomeSchema,
@@ -13,15 +14,22 @@ import {
   type OverlayState,
 } from "@slaythelist/contracts";
 import {
+  activateZoneGoldUnlock,
+  clearZoneGoldUnlock,
   createTodo,
   createZone,
   deleteTodo,
   deleteZone,
   getAccountabilityState,
+  getGoldState,
   listOverlayState,
   listTodos,
   listZones,
   reorderTodos,
+  saveGoldState,
+  spendGold,
+  awardGold,
+  awardTodoGold,
   saveAccountabilityState,
   setZoneRequirements,
   updateTodo,
@@ -60,6 +68,11 @@ function parseOptionalFiniteNumber(value: unknown): number | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
   return value;
+}
+
+function parseZoneUnlockMode(value: unknown): "todos" | "gold" | undefined {
+  if (value === undefined) return undefined;
+  return value === "todos" || value === "gold" ? value : undefined;
 }
 
 function pruneUndefined<T extends Record<string, unknown>>(input: T): Partial<T> {
@@ -227,6 +240,39 @@ app.put("/api/accountability-state", (req, res) => {
   }
   const saved = saveAccountabilityState(parsed.data);
   ok(res, saved);
+});
+
+app.get("/api/gold-state", (_req, res) => {
+  ok(res, getGoldState());
+});
+
+app.put("/api/gold-state", (req, res) => {
+  const parsed = goldStateSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return badRequest(res, `invalid gold state: ${parsed.error.issues[0]?.message ?? "invalid payload"}`);
+  }
+  ok(res, saveGoldState(parsed.data));
+});
+
+app.post("/api/gold/award", (req, res) => {
+  const amount = req.body?.amount;
+  if (typeof amount !== "number" || !Number.isInteger(amount) || amount < 0) {
+    return badRequest(res, "amount must be a non-negative integer");
+  }
+  ok(res, awardGold(amount));
+});
+
+app.post("/api/gold/award-todo", (req, res) => {
+  const todoId = req.body?.todoId;
+  const amount = req.body?.amount;
+  if (typeof todoId !== "string" || !todoId.trim()) {
+    return badRequest(res, "todoId is required");
+  }
+  if (typeof amount !== "number" || !Number.isInteger(amount) || amount < 0) {
+    return badRequest(res, "amount must be a non-negative integer");
+  }
+  const result = awardTodoGold(todoId.trim(), amount);
+  ok(res, result);
 });
 
 app.get("/api/habits", (_req, res) => {
@@ -503,6 +549,7 @@ app.post("/api/zones", (req, res) => {
     width,
     height,
     enabled: body.enabled !== false,
+    unlockMode: parseZoneUnlockMode(body.unlockMode) ?? "todos",
   });
   ok(res, zone);
   broadcastOverlayState();
@@ -517,6 +564,7 @@ app.patch("/api/zones/:id", (req, res) => {
     width: parseOptionalFiniteNumber(patch.width),
     height: parseOptionalFiniteNumber(patch.height),
     enabled: typeof patch.enabled === "boolean" ? patch.enabled : undefined,
+    unlockMode: parseZoneUnlockMode(patch.unlockMode),
   };
   if (parsedPatch.width !== undefined && parsedPatch.width <= 0) {
     return badRequest(res, "width must be positive");
@@ -530,7 +578,8 @@ app.patch("/api/zones/:id", (req, res) => {
     parsedPatch.y === undefined &&
     parsedPatch.width === undefined &&
     parsedPatch.height === undefined &&
-    parsedPatch.enabled === undefined
+    parsedPatch.enabled === undefined &&
+    parsedPatch.unlockMode === undefined
   ) {
     return badRequest(res, "no valid zone fields provided");
   }
@@ -565,6 +614,42 @@ app.put("/api/zones/:id/requirements", (req, res) => {
   } catch (error) {
     return badRequest(res, `invalid requirements: ${(error as Error).message}`);
   }
+  ok(res, { updated: true });
+  broadcastOverlayState();
+});
+
+app.post("/api/zones/:id/gold-unlock", (req, res) => {
+  const zoneState = listOverlayState().find((entry) => entry.zone.id === req.params.id);
+  if (!zoneState) {
+    return res.status(404).json({ error: "zone not found" });
+  }
+  if (!zoneState.zone.enabled) {
+    return badRequest(res, "zone is disabled");
+  }
+  if (zoneState.zone.unlockMode === "todos" && zoneState.requiredTodoIds.length === 0) {
+    return badRequest(res, "zone has no requirements to unlock");
+  }
+  if (!zoneState.isLocked) {
+    return badRequest(res, "zone is already unlocked");
+  }
+
+  try {
+    spendGold(10);
+  } catch (error) {
+    return badRequest(res, (error as Error).message);
+  }
+  activateZoneGoldUnlock(req.params.id);
+  ok(res, { updated: true });
+  broadcastOverlayState();
+});
+
+app.delete("/api/zones/:id/gold-unlock", (req, res) => {
+  const zoneExists = listZones().some((zone) => zone.id === req.params.id);
+  if (!zoneExists) {
+    return res.status(404).json({ error: "zone not found" });
+  }
+
+  clearZoneGoldUnlock(req.params.id);
   ok(res, { updated: true });
   broadcastOverlayState();
 });

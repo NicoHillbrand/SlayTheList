@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { db } from "./db.js";
 import type {
   AccountabilityState,
+  GoldState,
   Habit,
   LockZone,
   LockZoneState,
@@ -32,6 +33,7 @@ type ZoneRow = {
   width: number;
   height: number;
   enabled: 0 | 1;
+  unlock_mode: "todos" | "gold";
   created_at: string;
   updated_at: string;
 };
@@ -40,6 +42,12 @@ type AccountabilityStateRow = {
   habits_json: string;
   predictions_json: string;
   reflections_json: string;
+  updated_at: string;
+};
+
+type GoldStateRow = {
+  gold: number;
+  rewarded_todo_ids_json: string;
   updated_at: string;
 };
 
@@ -68,6 +76,7 @@ function toZone(row: ZoneRow): LockZone {
     width: row.width,
     height: row.height,
     enabled: !!row.enabled,
+    unlockMode: row.unlock_mode ?? "todos",
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -210,8 +219,8 @@ export function createZone(input: Omit<LockZone, "id" | "createdAt" | "updatedAt
     updatedAt: now,
   };
   db.prepare(
-    `INSERT INTO lock_zones (id, name, x, y, width, height, enabled, created_at, updated_at)
-     VALUES (@id, @name, @x, @y, @width, @height, @enabled, @createdAt, @updatedAt)`,
+    `INSERT INTO lock_zones (id, name, x, y, width, height, enabled, unlock_mode, created_at, updated_at)
+     VALUES (@id, @name, @x, @y, @width, @height, @enabled, @unlockMode, @createdAt, @updatedAt)`,
   ).run({
     ...zone,
     enabled: zone.enabled ? 1 : 0,
@@ -221,7 +230,7 @@ export function createZone(input: Omit<LockZone, "id" | "createdAt" | "updatedAt
 
 export function updateZone(
   id: string,
-  patch: Partial<Pick<LockZone, "name" | "x" | "y" | "width" | "height" | "enabled">>,
+  patch: Partial<Pick<LockZone, "name" | "x" | "y" | "width" | "height" | "enabled" | "unlockMode">>,
 ): LockZone | undefined {
   const currentRow = db.prepare("SELECT * FROM lock_zones WHERE id = ?").get(id) as ZoneRow | undefined;
   if (!currentRow) {
@@ -235,9 +244,12 @@ export function updateZone(
   };
   db.prepare(
     `UPDATE lock_zones
-       SET name = ?, x = ?, y = ?, width = ?, height = ?, enabled = ?, updated_at = ?
+       SET name = ?, x = ?, y = ?, width = ?, height = ?, enabled = ?, unlock_mode = ?, updated_at = ?
      WHERE id = ?`,
-  ).run(next.name, next.x, next.y, next.width, next.height, next.enabled ? 1 : 0, next.updatedAt, id);
+  ).run(next.name, next.x, next.y, next.width, next.height, next.enabled ? 1 : 0, next.unlockMode, next.updatedAt, id);
+  if (patch.unlockMode !== undefined && patch.unlockMode !== current.unlockMode) {
+    db.prepare("DELETE FROM lock_zone_gold_unlocks WHERE zone_id = ?").run(id);
+  }
   return next;
 }
 
@@ -249,12 +261,25 @@ export function deleteZone(id: string): boolean {
 export function setZoneRequirements(zoneId: string, todoIds: string[]): void {
   const tx = db.transaction((zone: string, ids: string[]) => {
     db.prepare("DELETE FROM lock_zone_requirements WHERE zone_id = ?").run(zone);
+    db.prepare("DELETE FROM lock_zone_gold_unlocks WHERE zone_id = ?").run(zone);
     const insertStmt = db.prepare("INSERT INTO lock_zone_requirements (zone_id, todo_id) VALUES (?, ?)");
     for (const todoId of ids) {
       insertStmt.run(zone, todoId);
     }
   });
   tx(zoneId, [...new Set(todoIds)]);
+}
+
+export function activateZoneGoldUnlock(zoneId: string): void {
+  db.prepare(
+    `INSERT INTO lock_zone_gold_unlocks (zone_id, created_at)
+     VALUES (?, ?)
+     ON CONFLICT(zone_id) DO UPDATE SET created_at = excluded.created_at`,
+  ).run(zoneId, new Date().toISOString());
+}
+
+export function clearZoneGoldUnlock(zoneId: string): void {
+  db.prepare("DELETE FROM lock_zone_gold_unlocks WHERE zone_id = ?").run(zoneId);
 }
 
 function safeParseJsonArray<T>(raw: string): T[] {
@@ -301,11 +326,74 @@ export function saveAccountabilityState(state: AccountabilityState): Accountabil
   return state;
 }
 
+export function getGoldState(): GoldState {
+  const row = db
+    .prepare("SELECT gold, rewarded_todo_ids_json, updated_at FROM gold_state WHERE id = 1")
+    .get() as GoldStateRow | undefined;
+  if (!row) {
+    return { gold: 0, rewardedTodoIds: [] };
+  }
+  return {
+    gold: Math.max(0, Math.floor(row.gold ?? 0)),
+    rewardedTodoIds: safeParseJsonArray<string>(row.rewarded_todo_ids_json).filter(
+      (value): value is string => typeof value === "string",
+    ),
+  };
+}
+
+export function saveGoldState(state: GoldState): GoldState {
+  const normalized: GoldState = {
+    gold: Math.max(0, Math.floor(state.gold)),
+    rewardedTodoIds: [...new Set(state.rewardedTodoIds)],
+  };
+  db.prepare(
+    `UPDATE gold_state
+     SET gold = ?, rewarded_todo_ids_json = ?, updated_at = ?
+     WHERE id = 1`,
+  ).run(normalized.gold, JSON.stringify(normalized.rewardedTodoIds), new Date().toISOString());
+  return normalized;
+}
+
+export function awardGold(amount: number): GoldState {
+  const current = getGoldState();
+  return saveGoldState({
+    gold: current.gold + Math.max(0, Math.floor(amount)),
+    rewardedTodoIds: current.rewardedTodoIds,
+  });
+}
+
+export function awardTodoGold(todoId: string, amount: number): { state: GoldState; awarded: boolean } {
+  const current = getGoldState();
+  if (current.rewardedTodoIds.includes(todoId)) {
+    return { state: current, awarded: false };
+  }
+  const state = saveGoldState({
+    gold: current.gold + Math.max(0, Math.floor(amount)),
+    rewardedTodoIds: [...current.rewardedTodoIds, todoId],
+  });
+  return { state, awarded: true };
+}
+
+export function spendGold(amount: number): GoldState {
+  const normalizedAmount = Math.max(0, Math.floor(amount));
+  const current = getGoldState();
+  if (current.gold < normalizedAmount) {
+    throw new Error("not enough gold");
+  }
+  return saveGoldState({
+    gold: current.gold - normalizedAmount,
+    rewardedTodoIds: current.rewardedTodoIds,
+  });
+}
+
 export function listOverlayState(): LockZoneState[] {
   const zones = listZones();
   const requiredRows = db
     .prepare("SELECT zone_id, todo_id FROM lock_zone_requirements")
     .all() as Array<{ zone_id: string; todo_id: string }>;
+  const goldUnlockRows = db
+    .prepare("SELECT zone_id FROM lock_zone_gold_unlocks")
+    .all() as Array<{ zone_id: string }>;
   const todoRows = db.prepare("SELECT id, title, status, archived_at FROM todos").all() as Array<{
     id: string;
     title: string;
@@ -319,6 +407,7 @@ export function listOverlayState(): LockZoneState[] {
   const activeTodoIds = new Set(activeTodoRows.map((row) => row.id));
   const statusByTodo = new Map(activeTodoRows.map((t) => [t.id, t.status]));
   const titleByTodo = new Map(activeTodoRows.map((t) => [t.id, t.title]));
+  const goldUnlockedZoneIds = new Set(goldUnlockRows.map((row) => row.zone_id));
   const requiredByZone = new Map<string, string[]>();
   for (const row of requiredRows) {
     if (!activeTodoIds.has(row.todo_id)) continue;
@@ -332,14 +421,19 @@ export function listOverlayState(): LockZoneState[] {
     const requiredTodoTitles = requiredTodoIds
       .map((todoId) => titleByTodo.get(todoId))
       .filter((title): title is string => !!title);
+    const goldUnlockActive = goldUnlockedZoneIds.has(zone.id);
     const isLocked =
-      zone.enabled &&
-      requiredTodoIds.length > 0 &&
-      requiredTodoIds.some((todoId) => statusByTodo.get(todoId) !== "done");
+      zone.unlockMode === "gold"
+        ? zone.enabled && !goldUnlockActive
+        : zone.enabled &&
+          requiredTodoIds.length > 0 &&
+          requiredTodoIds.some((todoId) => statusByTodo.get(todoId) !== "done") &&
+          !goldUnlockActive;
     return {
       zone,
       requiredTodoIds,
       requiredTodoTitles,
+      goldUnlockActive,
       isLocked,
     };
   });

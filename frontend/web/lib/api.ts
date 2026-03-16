@@ -1,8 +1,10 @@
 import type {
   AccountabilityState,
+  GoldState,
   Habit,
   HabitStatus,
   LockZone,
+  LockZoneUnlockMode,
   OverlayState,
   Prediction,
   PredictionOutcome,
@@ -95,6 +97,7 @@ export async function createZone(input: {
   width?: number;
   height?: number;
   enabled?: boolean;
+  unlockMode?: LockZoneUnlockMode;
 }) {
   return request<LockZone>("/api/zones", {
     method: "POST",
@@ -122,6 +125,18 @@ export async function setZoneRequirements(zoneId: string, todoIds: string[]) {
   });
 }
 
+export async function purchaseZoneGoldUnlock(zoneId: string) {
+  return request<{ updated: true }>(`/api/zones/${zoneId}/gold-unlock`, {
+    method: "POST",
+  });
+}
+
+export async function clearZoneGoldUnlock(zoneId: string) {
+  return request<{ updated: true }>(`/api/zones/${zoneId}/gold-unlock`, {
+    method: "DELETE",
+  });
+}
+
 export async function getOverlayState() {
   return request<OverlayState>("/api/overlay-state");
 }
@@ -134,6 +149,31 @@ export async function saveAccountabilityState(state: AccountabilityState) {
   return request<AccountabilityState>("/api/accountability-state", {
     method: "PUT",
     body: JSON.stringify(state),
+  });
+}
+
+export async function getGoldState() {
+  return request<GoldState>("/api/gold-state");
+}
+
+export async function saveGoldState(state: GoldState) {
+  return request<GoldState>("/api/gold-state", {
+    method: "PUT",
+    body: JSON.stringify(state),
+  });
+}
+
+export async function awardGold(amount: number) {
+  return request<GoldState>("/api/gold/award", {
+    method: "POST",
+    body: JSON.stringify({ amount }),
+  });
+}
+
+export async function awardTodoGold(todoId: string, amount: number) {
+  return request<{ state: GoldState; awarded: boolean }>("/api/gold/award-todo", {
+    method: "POST",
+    body: JSON.stringify({ todoId, amount }),
   });
 }
 
