@@ -162,6 +162,11 @@ const AI_EXPAND_CONTEXT_STORAGE_KEY = "slaythelist.ai.expandContextByTodoId";
 const LEGACY_HABITS_STORAGE_KEY = "slaythelist.habits";
 const LEGACY_PREDICTIONS_STORAGE_KEY = "slaythelist.predictions";
 const LEGACY_REFLECTIONS_STORAGE_KEY = "slaythelist.reflections";
+const PREDICTION_CALIBRATION_RESET_AT_STORAGE_KEY = "slaythelist.predictions.calibrationResetAt";
+const DEFAULT_PREDICTION_CONFIDENCE = 95;
+const CALIBRATION_CHART_WIDTH = 320;
+const CALIBRATION_CHART_HEIGHT = 190;
+const CALIBRATION_CHART_PADDING = { top: 16, right: 18, bottom: 28, left: 34 };
 const ZONE_GOLD_UNLOCK_COST = 10;
 const DEFAULT_GOLD_SOUND_ID = "sack-shift";
 const GOLD_SOUND_OPTIONS: GoldSoundOption[] = [
@@ -493,8 +498,9 @@ export default function Page() {
   const [editingHabitId, setEditingHabitId] = useState<string | null>(null);
   const [predictions, setPredictions] = useState<Prediction[]>([]);
   const [newPredictionTitle, setNewPredictionTitle] = useState("");
-  const [newPredictionConfidence, setNewPredictionConfidence] = useState(70);
+  const [newPredictionConfidence, setNewPredictionConfidence] = useState(DEFAULT_PREDICTION_CONFIDENCE);
   const [goalPredictionConfidences, setGoalPredictionConfidences] = useState<Record<string, number>>({});
+  const [predictionCalibrationResetAt, setPredictionCalibrationResetAt] = useState<number | null>(null);
   const [reflections, setReflections] = useState<ReflectionEntry[]>([]);
   const [selectedReflectionDate, setSelectedReflectionDate] = useState(getDateKey(new Date()));
   const [reflectionView, setReflectionView] = useState<ReflectionView>("today");
@@ -1924,6 +1930,7 @@ export default function Page() {
       const storedGemini = window.localStorage.getItem(AI_GEMINI_API_KEY_STORAGE_KEY);
       const storedOpenAi = window.localStorage.getItem(AI_OPENAI_API_KEY_STORAGE_KEY);
       const storedExpandContext = window.localStorage.getItem(AI_EXPAND_CONTEXT_STORAGE_KEY);
+      const storedPredictionCalibrationResetAt = window.localStorage.getItem(PREDICTION_CALIBRATION_RESET_AT_STORAGE_KEY);
       if (providerRaw === "gemini-flash" || providerRaw === "openai-gpt-4o-mini") {
         setExpandProvider(providerRaw);
       }
@@ -1938,6 +1945,12 @@ export default function Page() {
           }
         }
         setExpandContextByTodoId(next);
+      }
+      if (storedPredictionCalibrationResetAt) {
+        const parsed = Number(storedPredictionCalibrationResetAt);
+        if (Number.isFinite(parsed) && parsed > 0) {
+          setPredictionCalibrationResetAt(parsed);
+        }
       }
     } catch {
       // ignore local storage access issues
@@ -1954,6 +1967,21 @@ export default function Page() {
       // ignore local storage save issues
     }
   }, [expandContextByTodoId]);
+
+  useEffect(() => {
+    try {
+      if (predictionCalibrationResetAt === null) {
+        window.localStorage.removeItem(PREDICTION_CALIBRATION_RESET_AT_STORAGE_KEY);
+      } else {
+        window.localStorage.setItem(
+          PREDICTION_CALIBRATION_RESET_AT_STORAGE_KEY,
+          String(predictionCalibrationResetAt),
+        );
+      }
+    } catch {
+      // ignore local storage save issues
+    }
+  }, [predictionCalibrationResetAt]);
 
   useEffect(() => {
     if (!focusTodoId) return;
@@ -2155,7 +2183,7 @@ export default function Page() {
       },
     ]);
     setNewPredictionTitle("");
-    setNewPredictionConfidence(70);
+    setNewPredictionConfidence(DEFAULT_PREDICTION_CONFIDENCE);
   }
 
   function setPredictionOutcome(predictionId: string, outcome: PredictionOutcome) {
@@ -2179,7 +2207,7 @@ export default function Page() {
   function addGoalPrediction(todo: Todo) {
     const goalTitle = todo.title.trim();
     if (!goalTitle) return;
-    const confidence = Math.max(1, Math.min(99, goalPredictionConfidences[todo.id] ?? 70));
+    const confidence = Math.max(1, Math.min(99, goalPredictionConfidences[todo.id] ?? DEFAULT_PREDICTION_CONFIDENCE));
     setPredictions((prev) => [
       ...prev,
       {
@@ -2191,24 +2219,88 @@ export default function Page() {
         resolvedAt: null,
       },
     ]);
-    setGoalPredictionConfidences((prev) => ({ ...prev, [todo.id]: 70 }));
+    setGoalPredictionConfidences((prev) => ({ ...prev, [todo.id]: DEFAULT_PREDICTION_CONFIDENCE }));
   }
 
+  const activePredictions = useMemo(
+    () => predictions.filter((prediction) => prediction.outcome === "pending"),
+    [predictions],
+  );
   const resolvedPredictions = useMemo(
     () => predictions.filter((prediction) => prediction.outcome !== "pending"),
     [predictions],
   );
+  const pastPredictions = useMemo(
+    () =>
+      [...resolvedPredictions].sort(
+        (a, b) => (b.resolvedAt ?? b.createdAt) - (a.resolvedAt ?? a.createdAt),
+      ),
+    [resolvedPredictions],
+  );
+  const calibrationPredictions = useMemo(
+    () =>
+      resolvedPredictions.filter(
+        (prediction) =>
+          predictionCalibrationResetAt === null ||
+          (prediction.resolvedAt ?? prediction.createdAt) >= predictionCalibrationResetAt,
+      ),
+    [predictionCalibrationResetAt, resolvedPredictions],
+  );
   const calibrationAccuracy = useMemo(() => {
-    if (resolvedPredictions.length === 0) return null;
-    const total = resolvedPredictions.length;
-    const hits = resolvedPredictions.filter((prediction) => prediction.outcome === "hit").length;
+    if (calibrationPredictions.length === 0) return null;
+    const total = calibrationPredictions.length;
+    const hits = calibrationPredictions.filter((prediction) => prediction.outcome === "hit").length;
     return Math.round((hits / total) * 100);
-  }, [resolvedPredictions]);
+  }, [calibrationPredictions]);
   const averageConfidence = useMemo(() => {
-    if (resolvedPredictions.length === 0) return null;
-    const sum = resolvedPredictions.reduce((acc, prediction) => acc + prediction.confidence, 0);
-    return Math.round(sum / resolvedPredictions.length);
-  }, [resolvedPredictions]);
+    if (calibrationPredictions.length === 0) return null;
+    const sum = calibrationPredictions.reduce((acc, prediction) => acc + prediction.confidence, 0);
+    return Math.round(sum / calibrationPredictions.length);
+  }, [calibrationPredictions]);
+  const calibrationChartPoints = useMemo(() => {
+    if (calibrationPredictions.length === 0) return [];
+    const plotWidth = CALIBRATION_CHART_WIDTH - CALIBRATION_CHART_PADDING.left - CALIBRATION_CHART_PADDING.right;
+    const plotHeight = CALIBRATION_CHART_HEIGHT - CALIBRATION_CHART_PADDING.top - CALIBRATION_CHART_PADDING.bottom;
+    const scaleX = (value: number) => CALIBRATION_CHART_PADDING.left + (value / 100) * plotWidth;
+    const scaleY = (value: number) => CALIBRATION_CHART_PADDING.top + (1 - value / 100) * plotHeight;
+    const buckets = new Map<number, { count: number; hits: number; confidenceSum: number }>();
+
+    for (const prediction of calibrationPredictions) {
+      const bucketStart = Math.min(90, Math.floor(prediction.confidence / 10) * 10);
+      const current = buckets.get(bucketStart) ?? { count: 0, hits: 0, confidenceSum: 0 };
+      current.count += 1;
+      current.confidenceSum += prediction.confidence;
+      if (prediction.outcome === "hit") current.hits += 1;
+      buckets.set(bucketStart, current);
+    }
+
+    return [...buckets.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([bucketStart, bucket]) => {
+        const avgConfidence = Math.round(bucket.confidenceSum / bucket.count);
+        const actualRate = Math.round((bucket.hits / bucket.count) * 100);
+        const label = bucketStart === 0 ? "1-9%" : `${bucketStart}-${Math.min(bucketStart + 9, 99)}%`;
+        return {
+          key: label,
+          label,
+          count: bucket.count,
+          avgConfidence,
+          actualRate,
+          cx: scaleX(avgConfidence),
+          cy: scaleY(actualRate),
+        };
+      });
+  }, [calibrationPredictions]);
+  const calibrationChartPath = useMemo(
+    () =>
+      calibrationChartPoints
+        .map((point, index) => `${index === 0 ? "M" : "L"} ${point.cx.toFixed(1)} ${point.cy.toFixed(1)}`)
+        .join(" "),
+    [calibrationChartPoints],
+  );
+  const getResolvedPredictionLabel = (outcome: PredictionOutcome) =>
+    outcome === "hit" ? "Happened" : outcome === "miss" ? "Didn't happen" : "Pending";
+  const resetPredictionCalibration = () => setPredictionCalibrationResetAt(Date.now());
   const todaysPredictionGoals = useMemo(
     () =>
       todos.filter(
@@ -3059,9 +3151,9 @@ export default function Page() {
               </nav>
             </div>
             <div className="predictions-top">
-              <p className="goals-progress">
-                Calibration: {calibrationAccuracy ?? "—"}% accuracy / {averageConfidence ?? "—"}% avg confidence
-              </p>
+              <div className="prediction-header">
+                <h3 className="prediction-heading">Predict your day</h3>
+              </div>
               <div className="prediction-add">
                 <input
                   value={newPredictionTitle}
@@ -3075,29 +3167,30 @@ export default function Page() {
                   value={newPredictionConfidence}
                   onChange={(event) => {
                     const numeric = Number(event.target.value);
-                    setNewPredictionConfidence(Number.isFinite(numeric) ? numeric : 70);
+                    setNewPredictionConfidence(
+                      Number.isFinite(numeric) ? numeric : DEFAULT_PREDICTION_CONFIDENCE,
+                    );
                   }}
                 />
                 <button type="button" onClick={addPrediction}>Add</button>
               </div>
             </div>
-            {predictions.length === 0 ? (
-              <p className="goals-empty">No predictions yet.</p>
+            {activePredictions.length === 0 ? (
+              <p className="goals-empty">
+                {pastPredictions.length === 0 ? "No predictions yet." : "No active predictions right now."}
+              </p>
             ) : (
               <ul className="goals-list">
-                {predictions.map((prediction) => (
+                {activePredictions.map((prediction) => (
                   <li key={prediction.id} className="goal-row">
                     <div className="prediction-row">
-                      <span>{prediction.title}</span>
-                      <small>{prediction.confidence}%</small>
-                    </div>
-                    <div className="prediction-actions">
-                      <button type="button" onClick={() => setPredictionOutcome(prediction.id, "hit")}>Hit</button>
-                      <button type="button" onClick={() => setPredictionOutcome(prediction.id, "miss")}>Miss</button>
-                      <button type="button" onClick={() => setPredictionOutcome(prediction.id, "pending")}>
-                        Pending
-                      </button>
-                      <button type="button" onClick={() => deletePrediction(prediction.id)}>Delete</button>
+                      <span className="prediction-title">{prediction.title}</span>
+                      <div className="goal-actions prediction-actions">
+                        <button type="button" onClick={() => setPredictionOutcome(prediction.id, "hit")}>Happened</button>
+                        <button type="button" onClick={() => setPredictionOutcome(prediction.id, "miss")}>Didn't happen</button>
+                        <button type="button" onClick={() => deletePrediction(prediction.id)}>Delete</button>
+                      </div>
+                      <small className="prediction-confidence">{prediction.confidence}%</small>
                     </div>
                   </li>
                 ))}
@@ -3118,12 +3211,12 @@ export default function Page() {
                             type="number"
                             min={1}
                             max={99}
-                            value={goalPredictionConfidences[todo.id] ?? 70}
+                            value={goalPredictionConfidences[todo.id] ?? DEFAULT_PREDICTION_CONFIDENCE}
                             onChange={(event) => {
                               const numeric = Number(event.target.value);
                               setGoalPredictionConfidences((prev) => ({
                                 ...prev,
-                                [todo.id]: Number.isFinite(numeric) ? numeric : 70,
+                                [todo.id]: Number.isFinite(numeric) ? numeric : DEFAULT_PREDICTION_CONFIDENCE,
                               }));
                             }}
                             aria-label={`Confidence for ${todo.title}`}
@@ -3135,6 +3228,149 @@ export default function Page() {
                       </li>
                     ))}
                   </ul>
+                )}
+              </div>
+            </details>
+            <details className="prediction-goals-panel">
+              <summary>Past predictions</summary>
+              <div className="prediction-goals-content">
+                {pastPredictions.length === 0 ? (
+                  <p className="goals-empty">Resolved predictions will show up here.</p>
+                ) : (
+                  <ul className="goals-list">
+                    {pastPredictions.map((prediction) => (
+                      <li key={prediction.id} className="goal-row">
+                        <div className="prediction-row">
+                          <div className="prediction-history-main">
+                            <span className="prediction-title">{prediction.title}</span>
+                            <div className="prediction-history-meta">
+                              <span
+                                className={`prediction-outcome-badge ${
+                                  prediction.outcome === "hit" ? "prediction-outcome-happened" : "prediction-outcome-not-happened"
+                                }`}
+                              >
+                                {getResolvedPredictionLabel(prediction.outcome)}
+                              </span>
+                              <span>
+                                {new Date(prediction.resolvedAt ?? prediction.createdAt).toLocaleDateString(undefined, {
+                                  month: "short",
+                                  day: "numeric",
+                                })}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="goal-actions prediction-actions">
+                            <button type="button" onClick={() => deletePrediction(prediction.id)}>Delete</button>
+                          </div>
+                          <small className="prediction-confidence">{prediction.confidence}%</small>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </details>
+            <details className="prediction-goals-panel">
+              <summary>Calibration results</summary>
+              <div className="prediction-goals-content">
+                <div className="prediction-calibration-toolbar">
+                  {predictionCalibrationResetAt ? (
+                    <p className="prediction-calibration-note">
+                      Showing results since{" "}
+                      {new Date(predictionCalibrationResetAt).toLocaleDateString(undefined, {
+                        month: "short",
+                        day: "numeric",
+                      })}
+                    </p>
+                  ) : (
+                    <span />
+                  )}
+                  <button type="button" className="prediction-calibration-reset" onClick={resetPredictionCalibration}>
+                    Reset calibration
+                  </button>
+                </div>
+                {calibrationPredictions.length === 0 ? (
+                  <p className="goals-empty">
+                    {resolvedPredictions.length === 0
+                      ? "Resolve a few predictions to see your calibration graph."
+                      : "No resolved predictions yet in the current calibration window."}
+                  </p>
+                ) : (
+                  <div className="prediction-calibration">
+                    <div className="prediction-calibration-stats">
+                      <p className="goals-progress">
+                        Accuracy: {calibrationAccuracy ?? "—"}%
+                      </p>
+                      <p className="goals-progress">
+                        Average confidence: {averageConfidence ?? "—"}%
+                      </p>
+                    </div>
+                    <div className="prediction-calibration-chart">
+                      <svg viewBox={`0 0 ${CALIBRATION_CHART_WIDTH} ${CALIBRATION_CHART_HEIGHT}`} role="img" aria-label="Calibration graph">
+                        {[0, 25, 50, 75, 100].map((tick) => {
+                          const y =
+                            CALIBRATION_CHART_PADDING.top +
+                            (1 - tick / 100) *
+                              (CALIBRATION_CHART_HEIGHT - CALIBRATION_CHART_PADDING.top - CALIBRATION_CHART_PADDING.bottom);
+                          return (
+                            <g key={`y-${tick}`}>
+                              <line
+                                x1={CALIBRATION_CHART_PADDING.left}
+                                x2={CALIBRATION_CHART_WIDTH - CALIBRATION_CHART_PADDING.right}
+                                y1={y}
+                                y2={y}
+                                className="prediction-calibration-grid"
+                              />
+                              <text x={CALIBRATION_CHART_PADDING.left - 8} y={y + 4} textAnchor="end" className="prediction-calibration-axis">
+                                {tick}
+                              </text>
+                            </g>
+                          );
+                        })}
+                        {[0, 25, 50, 75, 100].map((tick) => {
+                          const x =
+                            CALIBRATION_CHART_PADDING.left +
+                            (tick / 100) *
+                              (CALIBRATION_CHART_WIDTH - CALIBRATION_CHART_PADDING.left - CALIBRATION_CHART_PADDING.right);
+                          return (
+                            <g key={`x-${tick}`}>
+                              <line
+                                x1={x}
+                                x2={x}
+                                y1={CALIBRATION_CHART_PADDING.top}
+                                y2={CALIBRATION_CHART_HEIGHT - CALIBRATION_CHART_PADDING.bottom}
+                                className="prediction-calibration-grid"
+                              />
+                              <text
+                                x={x}
+                                y={CALIBRATION_CHART_HEIGHT - CALIBRATION_CHART_PADDING.bottom + 18}
+                                textAnchor="middle"
+                                className="prediction-calibration-axis"
+                              >
+                                {tick}
+                              </text>
+                            </g>
+                          );
+                        })}
+                        <line
+                          x1={CALIBRATION_CHART_PADDING.left}
+                          y1={CALIBRATION_CHART_HEIGHT - CALIBRATION_CHART_PADDING.bottom}
+                          x2={CALIBRATION_CHART_WIDTH - CALIBRATION_CHART_PADDING.right}
+                          y2={CALIBRATION_CHART_PADDING.top}
+                          className="prediction-calibration-target"
+                        />
+                        {calibrationChartPath ? (
+                          <path d={calibrationChartPath} className="prediction-calibration-line" />
+                        ) : null}
+                        {calibrationChartPoints.map((point) => (
+                          <g key={point.key}>
+                            <circle cx={point.cx} cy={point.cy} r={4.5} className="prediction-calibration-point" />
+                            <title>{`Confidence bucket ${point.label}: ${point.actualRate}% hit rate from ${point.count} resolved prediction${point.count === 1 ? "" : "s"} at ${point.avgConfidence}% avg confidence`}</title>
+                          </g>
+                        ))}
+                      </svg>
+                    </div>
+                  </div>
                 )}
               </div>
             </details>

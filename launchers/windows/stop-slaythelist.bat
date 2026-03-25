@@ -9,11 +9,12 @@ taskkill /F /T /FI "WINDOWTITLE eq SlayTheList Web*" >nul 2>&1
 
 REM Kill API/Web dev processes by regex signature (covers surviving shells/tabs).
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$root = [Regex]::Escape((Resolve-Path '%~dp0..\..\').Path); " ^
   "$rx = '(dev:api|@slaythelist/api run dev|tsx watch src/server.ts|dev:web|@slaythelist/web run dev|next dev)'; " ^
   "$procs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue; " ^
   "foreach ($p in $procs) { " ^
   "  $cmd = $p.CommandLine; " ^
-  "  if ($cmd -and ($cmd -match $rx)) { cmd /c taskkill /PID $($p.ProcessId) /T /F >$null 2>&1 } " ^
+  "  if ($cmd -and ($cmd -match $root) -and ($cmd -match $rx)) { cmd /c taskkill /PID $($p.ProcessId) /T /F >$null 2>&1 } " ^
   "}" >nul 2>&1
 
 REM Fallback: kill listeners on API/web ports and stop overlay process
@@ -22,7 +23,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "foreach ($title in $titles) { " ^
   "  Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -like $title } | Stop-Process -Force -ErrorAction SilentlyContinue " ^
   "}; " ^
-  "$ports = @(8788,3000); " ^
+  "$ports = @(8788); " ^
   "foreach ($port in $ports) { " ^
   "  $owners = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique; " ^
   "  foreach ($owner in $owners) { Stop-Process -Id $owner -Force -ErrorAction SilentlyContinue } " ^

@@ -12,7 +12,7 @@ const __dirname = path.dirname(__filename);
 
 const LOCAL_HOST = "localhost";
 const API_PORT = 8788;
-const PREFERRED_WEB_PORT = 3000;
+const PREFERRED_WEB_PORT = 4000;
 
 let mainWindow = null;
 let loadingWindow = null;
@@ -112,6 +112,10 @@ async function waitForUrl(url, timeoutMs, stream) {
 
 function getAppUrl() {
   return `http://${LOCAL_HOST}:${webPort}`;
+}
+
+function getCloudSocialBaseUrl() {
+  return process.env.CLOUD_SOCIAL_BASE_URL?.trim() || "";
 }
 
 function getApiHealthUrl() {
@@ -217,6 +221,7 @@ function startApi(stream) {
           NODE_ENV: "production",
           PORT: String(API_PORT),
           SLAYTHELIST_DATA_DIR: getDataDir(),
+          ...(getCloudSocialBaseUrl() ? { CLOUD_SOCIAL_BASE_URL: getCloudSocialBaseUrl() } : {}),
         },
       })
     : spawnNodeScript(args[0], ["watch", "src/server.ts"], {
@@ -224,6 +229,7 @@ function startApi(stream) {
         env: {
           PORT: String(API_PORT),
           SLAYTHELIST_DATA_DIR: getDataDir(),
+          ...(getCloudSocialBaseUrl() ? { CLOUD_SOCIAL_BASE_URL: getCloudSocialBaseUrl() } : {}),
         },
       });
 

@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Net.Http;
+using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using System.Windows.Forms;
 
@@ -17,6 +19,9 @@ internal static class Program
 
 internal sealed class LauncherForm : Form
 {
+    private const int ApiPort = 8788;
+    private const int PreferredWebPort = 4000;
+
     private readonly TextBox _logBox;
     private readonly Button _startButton;
     private readonly Button _openButton;
@@ -27,6 +32,7 @@ internal sealed class LauncherForm : Form
 
     private bool _isRunning;
     private string? _repoRoot;
+    private int _webPort = PreferredWebPort;
 
     public LauncherForm()
     {
@@ -48,7 +54,7 @@ internal sealed class LauncherForm : Form
         var exitButton = new Button { Text = "Exit", Width = 100 };
 
         _startButton.Click += async (_, _) => await StartStackAsync();
-        _openButton.Click += (_, _) => OpenBrowser("http://localhost:3000");
+        _openButton.Click += (_, _) => OpenBrowser(GetWebAppUrl());
         _stopButton.Click += (_, _) => StopStack();
         exitButton.Click += (_, _) => Close();
 
@@ -106,11 +112,17 @@ internal sealed class LauncherForm : Form
                 );
             }
 
-            StartChild("node", Quote(apiDist), _repoRoot, new Dictionary<string, string> { { "PORT", "8788" } });
-            StartChild("node", $"{Quote(nextCli)} start -p 3000", _repoRoot, null);
+            _webPort = ResolveWebPort();
+            if (_webPort != PreferredWebPort)
+            {
+                Log($"Port {PreferredWebPort} is busy; using port {_webPort} for the web app.");
+            }
 
-            await WaitForUrlAsync("http://localhost:8788/health", 15000);
-            await WaitForUrlAsync("http://localhost:3000", 30000);
+            StartChild("node", Quote(apiDist), _repoRoot, new Dictionary<string, string> { { "PORT", ApiPort.ToString() } });
+            StartChild("node", $"{Quote(nextCli)} start -p {_webPort}", _repoRoot, null);
+
+            await WaitForUrlAsync($"http://localhost:{ApiPort}/health", 15000);
+            await WaitForUrlAsync(GetWebAppUrl(), 30000);
             StartOverlayAgentIfPresent();
 
             _isRunning = true;
@@ -119,7 +131,7 @@ internal sealed class LauncherForm : Form
             _stopButton.Enabled = true;
 
             Log("Stack started successfully.");
-            OpenBrowser("http://localhost:3000");
+            OpenBrowser(GetWebAppUrl());
         }
         catch (Exception ex)
         {
@@ -252,6 +264,41 @@ internal sealed class LauncherForm : Form
         }
 
         throw new TimeoutException($"Timed out waiting for {url}");
+    }
+
+    private string GetWebAppUrl() => $"http://localhost:{_webPort}";
+
+    private static int ResolveWebPort()
+    {
+        for (var port = PreferredWebPort; port <= IPEndPoint.MaxPort; port++)
+        {
+            if (IsPortAvailable(port))
+            {
+                return port;
+            }
+        }
+
+        throw new InvalidOperationException("Could not find an open port for the web app.");
+    }
+
+    private static bool IsPortAvailable(int port)
+    {
+        TcpListener? listener = null;
+
+        try
+        {
+            listener = new TcpListener(IPAddress.Loopback, port);
+            listener.Start();
+            return true;
+        }
+        catch (SocketException)
+        {
+            return false;
+        }
+        finally
+        {
+            listener?.Stop();
+        }
     }
 
     private static string? FindRepoRoot()

@@ -179,6 +179,101 @@ export const sharedProfileSchema = z.object({
 });
 export type SharedProfile = z.infer<typeof sharedProfileSchema>;
 
+export const cloudAuthProviderSchema = z.string().min(1).max(64);
+export type CloudAuthProvider = z.infer<typeof cloudAuthProviderSchema>;
+
+export const cloudIdentityUserSchema = z.object({
+  id: z.string(),
+  username: z.string(),
+  email: z.string().email().nullable(),
+  createdAt: z.string(),
+});
+export type CloudIdentityUser = z.infer<typeof cloudIdentityUserSchema>;
+
+export const socialSnapshotSchema = z.object({
+  settings: socialSettingsSchema,
+  habits: z.array(habitSchema),
+  predictions: z.array(predictionSchema),
+  gold: goldStateSchema,
+  sourceUpdatedAt: z.string(),
+  syncedAt: z.string().optional(),
+});
+export type SocialSnapshot = z.infer<typeof socialSnapshotSchema>;
+
+export const cloudSyncStateSchema = z.enum(["idle", "pending", "success", "error"]);
+export type CloudSyncState = z.infer<typeof cloudSyncStateSchema>;
+
+export const cloudPendingAuthSchema = z.object({
+  provider: cloudAuthProviderSchema,
+  authorizationUrl: z.string(),
+  expiresAt: z.string(),
+  intervalSeconds: z.number().int().positive(),
+});
+export type CloudPendingAuth = z.infer<typeof cloudPendingAuthSchema>;
+
+export const cloudConnectionStatusSchema = z.object({
+  configured: z.boolean(),
+  connected: z.boolean(),
+  cloudBaseUrl: z.string().nullable(),
+  user: cloudIdentityUserSchema.nullable(),
+  pendingAuth: cloudPendingAuthSchema.nullable(),
+  lastSyncAt: z.string().nullable(),
+  lastSyncState: cloudSyncStateSchema,
+  lastSyncError: z.string().nullable(),
+});
+export type CloudConnectionStatus = z.infer<typeof cloudConnectionStatusSchema>;
+
+export const cloudDeviceStartRequestSchema = z.object({
+  provider: cloudAuthProviderSchema.default("generic_stub"),
+});
+export type CloudDeviceStartRequest = z.infer<typeof cloudDeviceStartRequestSchema>;
+
+export const cloudDeviceStartResponseSchema = z.object({
+  deviceCode: z.string(),
+  authorizationUrl: z.string(),
+  expiresAt: z.string(),
+  intervalSeconds: z.number().int().positive(),
+  provider: cloudAuthProviderSchema,
+});
+export type CloudDeviceStartResponse = z.infer<typeof cloudDeviceStartResponseSchema>;
+
+export const cloudDevicePollPendingSchema = z.object({
+  status: z.literal("pending"),
+});
+
+export const cloudDevicePollApprovedSchema = z.object({
+  status: z.literal("approved"),
+  accessToken: z.string(),
+  user: cloudIdentityUserSchema,
+});
+
+export const cloudDevicePollExpiredSchema = z.object({
+  status: z.literal("expired"),
+});
+
+export const cloudDevicePollResponseSchema = z.discriminatedUnion("status", [
+  cloudDevicePollPendingSchema,
+  cloudDevicePollApprovedSchema,
+  cloudDevicePollExpiredSchema,
+]);
+export type CloudDevicePollResponse = z.infer<typeof cloudDevicePollResponseSchema>;
+
+export const cloudSyncResponseSchema = z.object({
+  syncedAt: z.string(),
+  snapshot: socialSnapshotSchema,
+});
+export type CloudSyncResponse = z.infer<typeof cloudSyncResponseSchema>;
+
+export const cloudUsernameUpdateRequestSchema = z.object({
+  username: z
+    .string()
+    .trim()
+    .min(3)
+    .max(24)
+    .regex(/^[a-zA-Z0-9_]{3,24}$/),
+});
+export type CloudUsernameUpdateRequest = z.infer<typeof cloudUsernameUpdateRequestSchema>;
+
 export const gameStateDetectionMethodSchema = z.enum(["screenshot_match"]);
 export type GameStateDetectionMethod = z.infer<typeof gameStateDetectionMethodSchema>;
 

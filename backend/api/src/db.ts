@@ -191,6 +191,32 @@ CREATE TABLE IF NOT EXISTS detected_game_state (
   detected_at TEXT NOT NULL,
   FOREIGN KEY(game_state_id) REFERENCES game_states(id) ON DELETE SET NULL
 );
+
+CREATE TABLE IF NOT EXISTS local_social_settings (
+  id INTEGER PRIMARY KEY CHECK(id = 1),
+  habits_visibility TEXT NOT NULL DEFAULT 'friends' CHECK(habits_visibility IN ('private', 'friends', 'public')),
+  predictions_visibility TEXT NOT NULL DEFAULT 'friends' CHECK(predictions_visibility IN ('private', 'friends', 'public')),
+  gold_visibility TEXT NOT NULL DEFAULT 'friends' CHECK(gold_visibility IN ('private', 'friends', 'public')),
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS cloud_connection_state (
+  id INTEGER PRIMARY KEY CHECK(id = 1),
+  cloud_base_url TEXT,
+  cloud_user_id TEXT,
+  cloud_username TEXT,
+  cloud_email TEXT,
+  access_token TEXT,
+  pending_device_code TEXT,
+  pending_user_code TEXT,
+  pending_verification_uri TEXT,
+  pending_provider TEXT,
+  pending_expires_at TEXT,
+  connected_at TEXT,
+  last_sync_at TEXT,
+  last_sync_state TEXT NOT NULL DEFAULT 'idle' CHECK(last_sync_state IN ('idle', 'pending', 'success', 'error')),
+  last_sync_error TEXT
+);
 `);
 
 db.exec(`
@@ -311,4 +337,27 @@ if (!existingDetectedRow) {
   db.prepare(
     "INSERT INTO detected_game_state (id, game_state_id, confidence, detected_at) VALUES (1, NULL, 0, ?)",
   ).run(new Date().toISOString());
+}
+
+const existingLocalSocialSettingsRow = db
+  .prepare("SELECT 1 FROM local_social_settings WHERE id = 1 LIMIT 1")
+  .get() as { 1: number } | undefined;
+if (!existingLocalSocialSettingsRow) {
+  db.prepare(
+    `INSERT INTO local_social_settings
+      (id, habits_visibility, predictions_visibility, gold_visibility, updated_at)
+     VALUES (1, 'friends', 'friends', 'friends', ?)`,
+  ).run(new Date().toISOString());
+}
+
+const existingCloudConnectionRow = db
+  .prepare("SELECT 1 FROM cloud_connection_state WHERE id = 1 LIMIT 1")
+  .get() as { 1: number } | undefined;
+if (!existingCloudConnectionRow) {
+  db.prepare(
+    `INSERT INTO cloud_connection_state
+      (id, cloud_base_url, cloud_user_id, cloud_username, cloud_email, access_token, pending_device_code, pending_user_code,
+       pending_verification_uri, pending_provider, pending_expires_at, connected_at, last_sync_at, last_sync_state, last_sync_error)
+     VALUES (1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'idle', NULL)`,
+  ).run();
 }

@@ -6,6 +6,7 @@ import { WebSocketServer } from "ws";
 import {
   accountabilityStateSchema,
   authResponseSchema,
+  cloudDeviceStartRequestSchema,
   friendRequestSchema,
   friendSearchResultSchema,
   goldStateSchema,
@@ -75,6 +76,25 @@ import {
   saveSocialSettings,
   searchUsers,
 } from "./social-store.js";
+import {
+  acceptCloudFriendRequest,
+  cancelCloudFriendRequest,
+  declineCloudFriendRequest,
+  disconnectCloudConnection,
+  getCloudConnectionStatus,
+  getCloudSharedProfile,
+  getLocalSocialSettings,
+  isCloudSyncReady,
+  listCloudFriendRequests,
+  listCloudFriends,
+  pollCloudConnection,
+  saveAndSyncLocalSocialSettings,
+  searchCloudUsers,
+  sendCloudFriendRequest,
+  startCloudConnection,
+  syncCloudSnapshot,
+  updateCloudUsername,
+} from "./cloud-sync.js";
 
 const port = Number(process.env.PORT ?? 8788);
 const app = express();
@@ -139,6 +159,15 @@ function requireAuth(req: AuthedRequest, res: express.Response): SessionUser | u
     return undefined;
   }
   return req.authUser;
+}
+
+function triggerCloudSnapshotSync() {
+  if (!isCloudSyncReady()) {
+    return;
+  }
+  void syncCloudSnapshot().catch((error) => {
+    console.error("[api] cloud snapshot sync failed", error);
+  });
 }
 
 function parseUsername(value: unknown): string | undefined {
@@ -319,6 +348,148 @@ app.post("/api/auth/signout", (req, res) => {
   }
   clearSessionCookie(res);
   ok(res, { signedOut: true });
+});
+
+app.get("/api/cloud-social/status", (_req, res) => {
+  ok(res, getCloudConnectionStatus());
+});
+
+app.post("/api/cloud-social/connect/start", async (req, res) => {
+  const parsed = cloudDeviceStartRequestSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return badRequest(res, parsed.error.issues[0]?.message ?? "invalid cloud connect payload");
+  }
+  try {
+    ok(res, await startCloudConnection(parsed.data.provider));
+  } catch (error) {
+    return badRequest(res, (error as Error).message);
+  }
+});
+
+app.post("/api/cloud-social/connect/poll", async (_req, res) => {
+  try {
+    ok(res, await pollCloudConnection());
+  } catch (error) {
+    return badRequest(res, (error as Error).message);
+  }
+});
+
+app.post("/api/cloud-social/disconnect", async (_req, res) => {
+  try {
+    ok(res, await disconnectCloudConnection());
+  } catch (error) {
+    return badRequest(res, (error as Error).message);
+  }
+});
+
+app.patch("/api/cloud-social/me/username", async (req, res) => {
+  const username = typeof req.body?.username === "string" ? req.body.username.trim() : "";
+  if (!username) {
+    return badRequest(res, "username is required");
+  }
+  try {
+    ok(res, await updateCloudUsername(username));
+  } catch (error) {
+    return badRequest(res, (error as Error).message);
+  }
+});
+
+app.post("/api/cloud-social/sync", async (_req, res) => {
+  try {
+    await syncCloudSnapshot();
+    ok(res, getCloudConnectionStatus());
+  } catch (error) {
+    return badRequest(res, (error as Error).message);
+  }
+});
+
+app.get("/api/cloud-social/settings", (_req, res) => {
+  ok(res, getLocalSocialSettings());
+});
+
+app.put("/api/cloud-social/settings", async (req, res) => {
+  const parsed = socialSettingsSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return badRequest(res, `invalid social settings: ${parsed.error.issues[0]?.message ?? "invalid payload"}`);
+  }
+  try {
+    ok(res, await saveAndSyncLocalSocialSettings(parsed.data));
+  } catch (error) {
+    return badRequest(res, (error as Error).message);
+  }
+});
+
+app.get("/api/cloud-social/users", async (req, res) => {
+  const query = typeof req.query.q === "string" ? req.query.q : "";
+  try {
+    ok(res, { items: friendSearchResultSchema.array().parse((await searchCloudUsers(query)).items) });
+  } catch (error) {
+    return badRequest(res, (error as Error).message);
+  }
+});
+
+app.get("/api/cloud-social/friends", async (_req, res) => {
+  try {
+    ok(res, { items: (await listCloudFriends()).items });
+  } catch (error) {
+    return badRequest(res, (error as Error).message);
+  }
+});
+
+app.get("/api/cloud-social/friend-requests", async (_req, res) => {
+  try {
+    const requests = await listCloudFriendRequests();
+    ok(res, {
+      incoming: friendRequestSchema.array().parse(requests.incoming),
+      outgoing: friendRequestSchema.array().parse(requests.outgoing),
+    });
+  } catch (error) {
+    return badRequest(res, (error as Error).message);
+  }
+});
+
+app.post("/api/cloud-social/friend-requests", async (req, res) => {
+  const username = typeof req.body?.username === "string" ? req.body.username.trim() : "";
+  if (!username) {
+    return badRequest(res, "username is required");
+  }
+  try {
+    ok(res, friendRequestSchema.parse(await sendCloudFriendRequest(username)));
+  } catch (error) {
+    return badRequest(res, (error as Error).message);
+  }
+});
+
+app.post("/api/cloud-social/friend-requests/:id/accept", async (req, res) => {
+  try {
+    ok(res, friendRequestSchema.parse(await acceptCloudFriendRequest(req.params.id)));
+  } catch (error) {
+    return badRequest(res, (error as Error).message);
+  }
+});
+
+app.post("/api/cloud-social/friend-requests/:id/decline", async (req, res) => {
+  try {
+    ok(res, friendRequestSchema.parse(await declineCloudFriendRequest(req.params.id)));
+  } catch (error) {
+    return badRequest(res, (error as Error).message);
+  }
+});
+
+app.delete("/api/cloud-social/friend-requests/:id", async (req, res) => {
+  try {
+    ok(res, friendRequestSchema.parse(await cancelCloudFriendRequest(req.params.id)));
+  } catch (error) {
+    return badRequest(res, (error as Error).message);
+  }
+});
+
+app.get("/api/cloud-social/users/:username", async (req, res) => {
+  try {
+    ok(res, sharedProfileSchema.parse(await getCloudSharedProfile(req.params.username)));
+  } catch (error) {
+    return badRequest(res, (error as Error).message);
+  }
 });
 
 app.get("/api/social/settings", (req, res) => {
@@ -522,6 +693,7 @@ app.put("/api/accountability-state", (req, res) => {
   }
   const saved = saveAccountabilityState(parsed.data, authUser?.id);
   ok(res, saved);
+  triggerCloudSnapshotSync();
 });
 
 app.get("/api/gold-state", (req, res) => {
@@ -536,6 +708,7 @@ app.put("/api/gold-state", (req, res) => {
     return badRequest(res, `invalid gold state: ${parsed.error.issues[0]?.message ?? "invalid payload"}`);
   }
   ok(res, saveGoldState(parsed.data, authUser?.id));
+  triggerCloudSnapshotSync();
 });
 
 app.post("/api/gold/award", (req, res) => {
@@ -545,6 +718,7 @@ app.post("/api/gold/award", (req, res) => {
     return badRequest(res, "amount must be a non-negative integer");
   }
   ok(res, awardGold(amount, authUser?.id));
+  triggerCloudSnapshotSync();
 });
 
 app.post("/api/gold/award-todo", (req, res) => {
@@ -559,6 +733,7 @@ app.post("/api/gold/award-todo", (req, res) => {
   }
   const result = awardTodoGold(todoId.trim(), amount, authUser?.id);
   ok(res, result);
+  triggerCloudSnapshotSync();
 });
 
 app.get("/api/habits", (req, res) => {
@@ -588,6 +763,7 @@ app.post("/api/habits", (req, res) => {
   };
   saveAccountabilityState({ ...state, habits: [...state.habits, created] }, authUser?.id);
   ok(res, created);
+  triggerCloudSnapshotSync();
 });
 
 app.patch("/api/habits/:id", (req, res) => {
@@ -624,6 +800,7 @@ app.patch("/api/habits/:id", (req, res) => {
   nextHabits[index] = updated;
   saveAccountabilityState({ ...state, habits: nextHabits }, authUser?.id);
   ok(res, updated);
+  triggerCloudSnapshotSync();
 });
 
 app.delete("/api/habits/:id", (req, res) => {
@@ -635,6 +812,7 @@ app.delete("/api/habits/:id", (req, res) => {
   }
   saveAccountabilityState({ ...state, habits: nextHabits }, authUser?.id);
   ok(res, { deleted: true });
+  triggerCloudSnapshotSync();
 });
 
 app.get("/api/predictions", (req, res) => {
@@ -664,6 +842,7 @@ app.post("/api/predictions", (req, res) => {
   };
   saveAccountabilityState({ ...state, predictions: [...state.predictions, created] }, authUser?.id);
   ok(res, created);
+  triggerCloudSnapshotSync();
 });
 
 app.patch("/api/predictions/:id", (req, res) => {
@@ -722,6 +901,7 @@ app.patch("/api/predictions/:id", (req, res) => {
   nextPredictions[index] = updated;
   saveAccountabilityState({ ...state, predictions: nextPredictions }, authUser?.id);
   ok(res, updated);
+  triggerCloudSnapshotSync();
 });
 
 app.delete("/api/predictions/:id", (req, res) => {
@@ -733,6 +913,7 @@ app.delete("/api/predictions/:id", (req, res) => {
   }
   saveAccountabilityState({ ...state, predictions: nextPredictions }, authUser?.id);
   ok(res, { deleted: true });
+  triggerCloudSnapshotSync();
 });
 
 app.get("/api/reflections", (req, res) => {
@@ -761,6 +942,7 @@ app.post("/api/reflections", (req, res) => {
   const state = accountabilityStateSchema.parse(getAccountabilityState(authUser?.id));
   saveAccountabilityState({ ...state, reflections: [...state.reflections, created] }, authUser?.id);
   ok(res, created);
+  triggerCloudSnapshotSync();
 });
 
 app.patch("/api/reflections/:id", (req, res) => {
@@ -805,6 +987,7 @@ app.patch("/api/reflections/:id", (req, res) => {
   nextReflections[index] = updated;
   saveAccountabilityState({ ...state, reflections: nextReflections }, authUser?.id);
   ok(res, updated);
+  triggerCloudSnapshotSync();
 });
 
 app.delete("/api/reflections/:id", (req, res) => {
@@ -816,6 +999,7 @@ app.delete("/api/reflections/:id", (req, res) => {
   }
   saveAccountabilityState({ ...state, reflections: nextReflections }, authUser?.id);
   ok(res, { deleted: true });
+  triggerCloudSnapshotSync();
 });
 
 app.delete("/api/todos/:id", (req, res) => {

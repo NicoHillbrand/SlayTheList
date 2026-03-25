@@ -5,7 +5,7 @@ The current launcher is an Electron app in `desktop/app`. It is meant to be the 
 ## What it does
 
 - Starts the API on port `8788`
-- Starts the web app on `http://127.0.0.1:3000` when available, otherwise falls back to a free local port
+- Starts the web app on `http://127.0.0.1:4000` when available, otherwise falls back to a free local port
 - Waits for both services to become healthy
 - Opens the UI inside an Electron window
 - Stores launcher logs under the app's user data folder

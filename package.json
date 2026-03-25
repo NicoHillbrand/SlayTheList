@@ -11,6 +11,8 @@
   ],
   "scripts": {
     "build:contracts": "npm --workspace @slaythelist/contracts run build",
+    "dev:cloud-social": "npm run build:contracts && npm --workspace @slaythelist/cloud-social run dev",
+    "dev:cloud-test": "node scripts/start-local-cloud-test.mjs",
     "dev:web": "npm run build:contracts && npm run sync:assets && npm --workspace @slaythelist/web run dev",
     "dev:api": "npm run build:contracts && npm --workspace @slaythelist/api run dev",
     "sync:assets": "node scripts/sync-blocked-overlays.mjs",
@@ -18,7 +20,7 @@
     "desktop:package": "npm run app:package",
     "app:dev": "npm run build:contracts && npm run sync:assets && npm --workspace @slaythelist/desktop run dev",
     "app:package": "npm run sync:assets && npm run build && npm --workspace @slaythelist/desktop run package",
-    "build": "npm run build:contracts && npm run sync:assets && npm --workspace @slaythelist/api run build && npm --workspace @slaythelist/web run build",
+    "build": "npm run build:contracts && npm run sync:assets && npm --workspace @slaythelist/api run build && npm --workspace @slaythelist/cloud-social run build && npm --workspace @slaythelist/web run build",
     "lint": "npm run lint -ws --if-present",
     "typecheck": "npm run build:contracts && npm run typecheck -ws --if-present"
   },

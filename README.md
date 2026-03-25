@@ -19,7 +19,7 @@ SlayTheList combines a todo app with a local API and a desktop launcher. The cur
    - Desktop app: `npm run desktop:dev`
    - Browser workflow: `npm run dev:api` and `npm run dev:web`
 
-The desktop option starts the API on `8788`, prefers web port `3000`, falls back to a free local port if needed, and opens the UI inside an Electron window without separate terminal windows.
+The desktop option starts the API on `8788`, prefers web port `4000`, falls back to a free local port if needed, and opens the UI inside an Electron window without separate terminal windows.
 
 ## Unified Windows launcher
 

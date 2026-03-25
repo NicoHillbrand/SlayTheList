@@ -1,6 +1,7 @@
 import type {
   AccountabilityState,
   AuthResponse,
+  CloudConnectionStatus,
   DetectedGameState,
   FriendRequest,
   FriendSearchResult,
@@ -115,6 +116,94 @@ export async function cancelFriendRequest(requestId: string) {
 
 export async function getSharedProfile(username: string) {
   return request<SharedProfile>(`/api/social/users/${encodeURIComponent(username)}`);
+}
+
+export async function getCloudConnectionStatus() {
+  return request<CloudConnectionStatus>("/api/cloud-social/status");
+}
+
+export async function startCloudConnect(provider = "google") {
+  return request<CloudConnectionStatus>("/api/cloud-social/connect/start", {
+    method: "POST",
+    body: JSON.stringify({ provider }),
+  });
+}
+
+export async function pollCloudConnect() {
+  return request<CloudConnectionStatus>("/api/cloud-social/connect/poll", {
+    method: "POST",
+  });
+}
+
+export async function disconnectCloudConnect() {
+  return request<CloudConnectionStatus>("/api/cloud-social/disconnect", {
+    method: "POST",
+  });
+}
+
+export async function updateCloudUsername(username: string) {
+  return request<CloudConnectionStatus>("/api/cloud-social/me/username", {
+    method: "PATCH",
+    body: JSON.stringify({ username }),
+  });
+}
+
+export async function syncCloudSnapshot() {
+  return request<CloudConnectionStatus>("/api/cloud-social/sync", {
+    method: "POST",
+  });
+}
+
+export async function getCloudSocialSettings() {
+  return request<SocialSettings>("/api/cloud-social/settings");
+}
+
+export async function saveCloudSocialSettings(settings: SocialSettings) {
+  return request<SocialSettings>("/api/cloud-social/settings", {
+    method: "PUT",
+    body: JSON.stringify(settings),
+  });
+}
+
+export async function searchCloudSocialUsers(query: string) {
+  return request<{ items: FriendSearchResult[] }>(`/api/cloud-social/users?q=${encodeURIComponent(query)}`);
+}
+
+export async function listCloudFriends() {
+  return request<{ items: FriendSummary[] }>("/api/cloud-social/friends");
+}
+
+export async function listCloudFriendRequests() {
+  return request<{ incoming: FriendRequest[]; outgoing: FriendRequest[] }>("/api/cloud-social/friend-requests");
+}
+
+export async function sendCloudFriendRequest(username: string) {
+  return request<FriendRequest>("/api/cloud-social/friend-requests", {
+    method: "POST",
+    body: JSON.stringify({ username }),
+  });
+}
+
+export async function acceptCloudFriendRequest(requestId: string) {
+  return request<FriendRequest>(`/api/cloud-social/friend-requests/${requestId}/accept`, {
+    method: "POST",
+  });
+}
+
+export async function declineCloudFriendRequest(requestId: string) {
+  return request<FriendRequest>(`/api/cloud-social/friend-requests/${requestId}/decline`, {
+    method: "POST",
+  });
+}
+
+export async function cancelCloudFriendRequest(requestId: string) {
+  return request<FriendRequest>(`/api/cloud-social/friend-requests/${requestId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function getCloudSharedProfile(username: string) {
+  return request<SharedProfile>(`/api/cloud-social/users/${encodeURIComponent(username)}`);
 }
 
 export async function listTodos() {

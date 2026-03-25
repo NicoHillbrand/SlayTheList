@@ -1,0 +1,15 @@
+[Unit]
+Description=SlayTheList Cloud Social Service
+After=network.target
+
+[Service]
+Type=simple
+User=slaythelist
+WorkingDirectory=/opt/slaythelist
+EnvironmentFile=/etc/slaythelist/cloud-social.env
+ExecStart=/usr/bin/npm --workspace @slaythelist/cloud-social run start
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
