@@ -5,13 +5,20 @@ import { randomUUID } from "node:crypto";
 import { WebSocketServer } from "ws";
 import {
   accountabilityStateSchema,
+  authResponseSchema,
+  friendRequestSchema,
+  friendSearchResultSchema,
   goldStateSchema,
   habitCheckSchema,
   habitStatusSchema,
   predictionOutcomeSchema,
   reflectionEntrySchema,
+  sessionUserSchema,
+  sharedProfileSchema,
+  socialSettingsSchema,
   type EventEnvelope,
   type OverlayState,
+  type SessionUser,
 } from "@slaythelist/contracts";
 import {
   activateZoneGoldUnlock,
@@ -45,15 +52,45 @@ import {
   updateTodo,
   updateZone,
 } from "./store.js";
+import { SESSION_COOKIE_NAME, createSessionToken, hashPassword, hashSessionToken, parseCookieValue, verifyPassword } from "./auth.js";
 import { referenceImagesDir } from "./db.js";
 import { testDetection } from "./image-match.js";
 import { errorLogger, requestLogger } from "./logger.js";
+import {
+  acceptFriendRequest,
+  bootstrapUserSocialStateFromLegacy,
+  cancelFriendRequest,
+  createFriendRequest,
+  createSessionRecord,
+  createUserAccount,
+  declineFriendRequest,
+  deleteExpiredSessions,
+  deleteSessionByTokenHash,
+  findUserAuthByLogin,
+  getSessionUserByTokenHash,
+  getSharedProfile,
+  getSocialSettings,
+  listFriendRequests,
+  listFriends,
+  saveSocialSettings,
+  searchUsers,
+} from "./social-store.js";
 
 const port = Number(process.env.PORT ?? 8788);
 const app = express();
-app.use(cors());
+app.set("trust proxy", 1);
+app.use(
+  cors({
+    origin: true,
+    credentials: true,
+  }),
+);
 app.use(express.json({ limit: "50mb" }));
 app.use(requestLogger);
+
+type AuthedRequest = express.Request & {
+  authUser?: SessionUser;
+};
 
 function buildOverlayState(): OverlayState {
   return {
@@ -71,6 +108,56 @@ function ok(res: express.Response, payload: unknown) {
 
 function badRequest(res: express.Response, message: string) {
   res.status(400).json({ error: message });
+}
+
+function unauthorized(res: express.Response, message = "authentication required") {
+  res.status(401).json({ error: message });
+}
+
+function setSessionCookie(res: express.Response, token: string, expiresAt: Date) {
+  res.cookie(SESSION_COOKIE_NAME, token, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    expires: expiresAt,
+    path: "/",
+  });
+}
+
+function clearSessionCookie(res: express.Response) {
+  res.clearCookie(SESSION_COOKIE_NAME, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+  });
+}
+
+function requireAuth(req: AuthedRequest, res: express.Response): SessionUser | undefined {
+  if (!req.authUser) {
+    unauthorized(res);
+    return undefined;
+  }
+  return req.authUser;
+}
+
+function parseUsername(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!/^[a-zA-Z0-9_]{3,24}$/.test(trimmed)) return undefined;
+  return trimmed;
+}
+
+function parseEmail(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) return undefined;
+  return trimmed;
+}
+
+function parsePassword(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  return value.length >= 8 ? value : undefined;
 }
 
 function asFiniteNumber(value: unknown, fallback: number): number {
@@ -144,8 +231,187 @@ function parseDeadlineAt(
   return { value: baseDate.toISOString() };
 }
 
+app.use((req, _res, next) => {
+  const sessionToken = parseCookieValue(req.headers.cookie, SESSION_COOKIE_NAME);
+  if (!sessionToken) {
+    next();
+    return;
+  }
+  const authUser = getSessionUserByTokenHash(hashSessionToken(sessionToken));
+  if (authUser) {
+    (req as AuthedRequest).authUser = authUser;
+  }
+  next();
+});
+
 app.get("/health", (_req, res) => {
   ok(res, { status: "ok", timestamp: new Date().toISOString() });
+});
+
+app.get("/api/auth/me", (req, res) => {
+  const authUser = (req as AuthedRequest).authUser;
+  ok(res, { user: authUser ?? null });
+});
+
+app.post("/api/auth/signup", (req, res) => {
+  const username = parseUsername(req.body?.username);
+  const email = parseEmail(req.body?.email);
+  const password = parsePassword(req.body?.password);
+  if (!username) {
+    return badRequest(res, "username must be 3-24 characters using letters, numbers, or underscores");
+  }
+  if (!email) {
+    return badRequest(res, "email must be valid");
+  }
+  if (!password) {
+    return badRequest(res, "password must be at least 8 characters");
+  }
+  try {
+    const user = createUserAccount({
+      username,
+      email,
+      passwordHash: hashPassword(password),
+    });
+    bootstrapUserSocialStateFromLegacy(user.id);
+    const token = createSessionToken();
+    const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 30);
+    createSessionRecord(user.id, hashSessionToken(token), expiresAt.toISOString());
+    setSessionCookie(res, token, expiresAt);
+    ok(res, authResponseSchema.parse({ user }));
+  } catch (error) {
+    const message = String((error as Error).message ?? "");
+    if (message.includes("users.username_normalized")) {
+      return badRequest(res, "username is already taken");
+    }
+    if (message.includes("users.email_normalized")) {
+      return badRequest(res, "email is already registered");
+    }
+    throw error;
+  }
+});
+
+app.post("/api/auth/signin", (req, res) => {
+  const login = typeof req.body?.login === "string" ? req.body.login.trim() : "";
+  const password = typeof req.body?.password === "string" ? req.body.password : "";
+  if (!login || !password) {
+    return badRequest(res, "login and password are required");
+  }
+  const user = findUserAuthByLogin(login);
+  if (!user || !verifyPassword(password, user.passwordHash)) {
+    return unauthorized(res, "invalid credentials");
+  }
+  const token = createSessionToken();
+  const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 30);
+  createSessionRecord(user.id, hashSessionToken(token), expiresAt.toISOString());
+  setSessionCookie(res, token, expiresAt);
+  ok(
+    res,
+    authResponseSchema.parse({
+      user: sessionUserSchema.parse(user),
+    }),
+  );
+});
+
+app.post("/api/auth/signout", (req, res) => {
+  const sessionToken = parseCookieValue(req.headers.cookie, SESSION_COOKIE_NAME);
+  if (sessionToken) {
+    deleteSessionByTokenHash(hashSessionToken(sessionToken));
+  }
+  clearSessionCookie(res);
+  ok(res, { signedOut: true });
+});
+
+app.get("/api/social/settings", (req, res) => {
+  const authUser = requireAuth(req as AuthedRequest, res);
+  if (!authUser) return;
+  ok(res, getSocialSettings(authUser.id));
+});
+
+app.put("/api/social/settings", (req, res) => {
+  const authUser = requireAuth(req as AuthedRequest, res);
+  if (!authUser) return;
+  const parsed = socialSettingsSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return badRequest(res, `invalid social settings: ${parsed.error.issues[0]?.message ?? "invalid payload"}`);
+  }
+  ok(res, saveSocialSettings(authUser.id, parsed.data));
+});
+
+app.get("/api/social/users", (req, res) => {
+  const authUser = requireAuth(req as AuthedRequest, res);
+  if (!authUser) return;
+  const query = typeof req.query.q === "string" ? req.query.q : "";
+  ok(res, { items: friendSearchResultSchema.array().parse(searchUsers(authUser.id, query)) });
+});
+
+app.get("/api/social/friends", (req, res) => {
+  const authUser = requireAuth(req as AuthedRequest, res);
+  if (!authUser) return;
+  ok(res, { items: listFriends(authUser.id) });
+});
+
+app.get("/api/social/friend-requests", (req, res) => {
+  const authUser = requireAuth(req as AuthedRequest, res);
+  if (!authUser) return;
+  const requests = listFriendRequests(authUser.id);
+  ok(res, {
+    incoming: friendRequestSchema.array().parse(requests.incoming),
+    outgoing: friendRequestSchema.array().parse(requests.outgoing),
+  });
+});
+
+app.post("/api/social/friend-requests", (req, res) => {
+  const authUser = requireAuth(req as AuthedRequest, res);
+  if (!authUser) return;
+  const username = typeof req.body?.username === "string" ? req.body.username.trim() : "";
+  if (!username) {
+    return badRequest(res, "username is required");
+  }
+  try {
+    ok(res, friendRequestSchema.parse(createFriendRequest(authUser.id, username)));
+  } catch (error) {
+    return badRequest(res, (error as Error).message);
+  }
+});
+
+app.post("/api/social/friend-requests/:id/accept", (req, res) => {
+  const authUser = requireAuth(req as AuthedRequest, res);
+  if (!authUser) return;
+  try {
+    ok(res, friendRequestSchema.parse(acceptFriendRequest(req.params.id, authUser.id)));
+  } catch (error) {
+    return badRequest(res, (error as Error).message);
+  }
+});
+
+app.post("/api/social/friend-requests/:id/decline", (req, res) => {
+  const authUser = requireAuth(req as AuthedRequest, res);
+  if (!authUser) return;
+  try {
+    ok(res, friendRequestSchema.parse(declineFriendRequest(req.params.id, authUser.id)));
+  } catch (error) {
+    return badRequest(res, (error as Error).message);
+  }
+});
+
+app.delete("/api/social/friend-requests/:id", (req, res) => {
+  const authUser = requireAuth(req as AuthedRequest, res);
+  if (!authUser) return;
+  try {
+    ok(res, friendRequestSchema.parse(cancelFriendRequest(req.params.id, authUser.id)));
+  } catch (error) {
+    return badRequest(res, (error as Error).message);
+  }
+});
+
+app.get("/api/social/users/:username", (req, res) => {
+  const authUser = requireAuth(req as AuthedRequest, res);
+  if (!authUser) return;
+  try {
+    ok(res, sharedProfileSchema.parse(getSharedProfile(authUser.id, req.params.username)));
+  } catch (error) {
+    return badRequest(res, (error as Error).message);
+  }
 });
 
 app.get("/api/todos", (_req, res) => {
@@ -243,40 +509,46 @@ app.put("/api/todos/reorder", (req, res) => {
   }
 });
 
-app.get("/api/accountability-state", (_req, res) => {
-  ok(res, getAccountabilityState());
+app.get("/api/accountability-state", (req, res) => {
+  const authUser = (req as AuthedRequest).authUser;
+  ok(res, getAccountabilityState(authUser?.id));
 });
 
 app.put("/api/accountability-state", (req, res) => {
+  const authUser = (req as AuthedRequest).authUser;
   const parsed = accountabilityStateSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
     return badRequest(res, `invalid accountability state: ${parsed.error.issues[0]?.message ?? "invalid payload"}`);
   }
-  const saved = saveAccountabilityState(parsed.data);
+  const saved = saveAccountabilityState(parsed.data, authUser?.id);
   ok(res, saved);
 });
 
-app.get("/api/gold-state", (_req, res) => {
-  ok(res, getGoldState());
+app.get("/api/gold-state", (req, res) => {
+  const authUser = (req as AuthedRequest).authUser;
+  ok(res, getGoldState(authUser?.id));
 });
 
 app.put("/api/gold-state", (req, res) => {
+  const authUser = (req as AuthedRequest).authUser;
   const parsed = goldStateSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
     return badRequest(res, `invalid gold state: ${parsed.error.issues[0]?.message ?? "invalid payload"}`);
   }
-  ok(res, saveGoldState(parsed.data));
+  ok(res, saveGoldState(parsed.data, authUser?.id));
 });
 
 app.post("/api/gold/award", (req, res) => {
+  const authUser = (req as AuthedRequest).authUser;
   const amount = req.body?.amount;
   if (typeof amount !== "number" || !Number.isInteger(amount) || amount < 0) {
     return badRequest(res, "amount must be a non-negative integer");
   }
-  ok(res, awardGold(amount));
+  ok(res, awardGold(amount, authUser?.id));
 });
 
 app.post("/api/gold/award-todo", (req, res) => {
+  const authUser = (req as AuthedRequest).authUser;
   const todoId = req.body?.todoId;
   const amount = req.body?.amount;
   if (typeof todoId !== "string" || !todoId.trim()) {
@@ -285,16 +557,18 @@ app.post("/api/gold/award-todo", (req, res) => {
   if (typeof amount !== "number" || !Number.isInteger(amount) || amount < 0) {
     return badRequest(res, "amount must be a non-negative integer");
   }
-  const result = awardTodoGold(todoId.trim(), amount);
+  const result = awardTodoGold(todoId.trim(), amount, authUser?.id);
   ok(res, result);
 });
 
-app.get("/api/habits", (_req, res) => {
-  const state = accountabilityStateSchema.parse(getAccountabilityState());
+app.get("/api/habits", (req, res) => {
+  const authUser = (req as AuthedRequest).authUser;
+  const state = accountabilityStateSchema.parse(getAccountabilityState(authUser?.id));
   ok(res, { items: state.habits });
 });
 
 app.post("/api/habits", (req, res) => {
+  const authUser = (req as AuthedRequest).authUser;
   const name = req.body?.name;
   const statusInput = req.body?.status;
   if (typeof name !== "string" || !name.trim()) {
@@ -304,7 +578,7 @@ app.post("/api/habits", (req, res) => {
   if (!statusParsed.success) {
     return badRequest(res, "status must be active, archived, or idea");
   }
-  const state = accountabilityStateSchema.parse(getAccountabilityState());
+  const state = accountabilityStateSchema.parse(getAccountabilityState(authUser?.id));
   const created = {
     id: randomUUID(),
     name: name.trim(),
@@ -312,11 +586,12 @@ app.post("/api/habits", (req, res) => {
     createdAt: Date.now(),
     status: statusParsed.data,
   };
-  const saved = saveAccountabilityState({ ...state, habits: [...state.habits, created] });
+  saveAccountabilityState({ ...state, habits: [...state.habits, created] }, authUser?.id);
   ok(res, created);
 });
 
 app.patch("/api/habits/:id", (req, res) => {
+  const authUser = (req as AuthedRequest).authUser;
   const patch = req.body ?? {};
   const nextName = patch.name;
   const nextStatus = patch.status;
@@ -333,7 +608,7 @@ app.patch("/api/habits/:id", (req, res) => {
   if (!checksParsed.success) {
     return badRequest(res, "checks must be an array of { date, done }");
   }
-  const state = accountabilityStateSchema.parse(getAccountabilityState());
+  const state = accountabilityStateSchema.parse(getAccountabilityState(authUser?.id));
   const index = state.habits.findIndex((habit) => habit.id === req.params.id);
   if (index < 0) {
     return res.status(404).json({ error: "habit not found" });
@@ -347,26 +622,29 @@ app.patch("/api/habits/:id", (req, res) => {
   };
   const nextHabits = [...state.habits];
   nextHabits[index] = updated;
-  saveAccountabilityState({ ...state, habits: nextHabits });
+  saveAccountabilityState({ ...state, habits: nextHabits }, authUser?.id);
   ok(res, updated);
 });
 
 app.delete("/api/habits/:id", (req, res) => {
-  const state = accountabilityStateSchema.parse(getAccountabilityState());
+  const authUser = (req as AuthedRequest).authUser;
+  const state = accountabilityStateSchema.parse(getAccountabilityState(authUser?.id));
   const nextHabits = state.habits.filter((habit) => habit.id !== req.params.id);
   if (nextHabits.length === state.habits.length) {
     return res.status(404).json({ error: "habit not found" });
   }
-  saveAccountabilityState({ ...state, habits: nextHabits });
+  saveAccountabilityState({ ...state, habits: nextHabits }, authUser?.id);
   ok(res, { deleted: true });
 });
 
-app.get("/api/predictions", (_req, res) => {
-  const state = accountabilityStateSchema.parse(getAccountabilityState());
+app.get("/api/predictions", (req, res) => {
+  const authUser = (req as AuthedRequest).authUser;
+  const state = accountabilityStateSchema.parse(getAccountabilityState(authUser?.id));
   ok(res, { items: state.predictions });
 });
 
 app.post("/api/predictions", (req, res) => {
+  const authUser = (req as AuthedRequest).authUser;
   const title = req.body?.title;
   const confidence = req.body?.confidence;
   if (typeof title !== "string" || !title.trim()) {
@@ -375,7 +653,7 @@ app.post("/api/predictions", (req, res) => {
   if (typeof confidence !== "number" || !Number.isInteger(confidence) || confidence < 1 || confidence > 99) {
     return badRequest(res, "confidence must be an integer between 1 and 99");
   }
-  const state = accountabilityStateSchema.parse(getAccountabilityState());
+  const state = accountabilityStateSchema.parse(getAccountabilityState(authUser?.id));
   const created = {
     id: randomUUID(),
     title: title.trim(),
@@ -384,11 +662,12 @@ app.post("/api/predictions", (req, res) => {
     createdAt: Date.now(),
     resolvedAt: null,
   };
-  saveAccountabilityState({ ...state, predictions: [...state.predictions, created] });
+  saveAccountabilityState({ ...state, predictions: [...state.predictions, created] }, authUser?.id);
   ok(res, created);
 });
 
 app.patch("/api/predictions/:id", (req, res) => {
+  const authUser = (req as AuthedRequest).authUser;
   const patch = req.body ?? {};
   const nextTitle = patch.title;
   const nextConfidence = patch.confidence;
@@ -415,7 +694,7 @@ app.patch("/api/predictions/:id", (req, res) => {
   ) {
     return badRequest(res, "resolvedAt must be a number timestamp or null");
   }
-  const state = accountabilityStateSchema.parse(getAccountabilityState());
+  const state = accountabilityStateSchema.parse(getAccountabilityState(authUser?.id));
   const index = state.predictions.findIndex((prediction) => prediction.id === req.params.id);
   if (index < 0) {
     return res.status(404).json({ error: "prediction not found" });
@@ -441,26 +720,29 @@ app.patch("/api/predictions/:id", (req, res) => {
   };
   const nextPredictions = [...state.predictions];
   nextPredictions[index] = updated;
-  saveAccountabilityState({ ...state, predictions: nextPredictions });
+  saveAccountabilityState({ ...state, predictions: nextPredictions }, authUser?.id);
   ok(res, updated);
 });
 
 app.delete("/api/predictions/:id", (req, res) => {
-  const state = accountabilityStateSchema.parse(getAccountabilityState());
+  const authUser = (req as AuthedRequest).authUser;
+  const state = accountabilityStateSchema.parse(getAccountabilityState(authUser?.id));
   const nextPredictions = state.predictions.filter((prediction) => prediction.id !== req.params.id);
   if (nextPredictions.length === state.predictions.length) {
     return res.status(404).json({ error: "prediction not found" });
   }
-  saveAccountabilityState({ ...state, predictions: nextPredictions });
+  saveAccountabilityState({ ...state, predictions: nextPredictions }, authUser?.id);
   ok(res, { deleted: true });
 });
 
-app.get("/api/reflections", (_req, res) => {
-  const state = accountabilityStateSchema.parse(getAccountabilityState());
+app.get("/api/reflections", (req, res) => {
+  const authUser = (req as AuthedRequest).authUser;
+  const state = accountabilityStateSchema.parse(getAccountabilityState(authUser?.id));
   ok(res, { items: state.reflections });
 });
 
 app.post("/api/reflections", (req, res) => {
+  const authUser = (req as AuthedRequest).authUser;
   const date = req.body?.date;
   if (typeof date !== "string" || !date.trim()) {
     return badRequest(res, "date is required");
@@ -476,12 +758,13 @@ app.post("/api/reflections", (req, res) => {
     createdAt: now,
     updatedAt: now,
   });
-  const state = accountabilityStateSchema.parse(getAccountabilityState());
-  saveAccountabilityState({ ...state, reflections: [...state.reflections, created] });
+  const state = accountabilityStateSchema.parse(getAccountabilityState(authUser?.id));
+  saveAccountabilityState({ ...state, reflections: [...state.reflections, created] }, authUser?.id);
   ok(res, created);
 });
 
 app.patch("/api/reflections/:id", (req, res) => {
+  const authUser = (req as AuthedRequest).authUser;
   const patch = req.body ?? {};
   const nextDate = patch.date;
   const nextWins = patch.wins;
@@ -503,7 +786,7 @@ app.patch("/api/reflections/:id", (req, res) => {
   if (nextTomorrow !== undefined && typeof nextTomorrow !== "string") {
     return badRequest(res, "tomorrow must be a string");
   }
-  const state = accountabilityStateSchema.parse(getAccountabilityState());
+  const state = accountabilityStateSchema.parse(getAccountabilityState(authUser?.id));
   const index = state.reflections.findIndex((reflection) => reflection.id === req.params.id);
   if (index < 0) {
     return res.status(404).json({ error: "reflection not found" });
@@ -520,17 +803,18 @@ app.patch("/api/reflections/:id", (req, res) => {
   });
   const nextReflections = [...state.reflections];
   nextReflections[index] = updated;
-  saveAccountabilityState({ ...state, reflections: nextReflections });
+  saveAccountabilityState({ ...state, reflections: nextReflections }, authUser?.id);
   ok(res, updated);
 });
 
 app.delete("/api/reflections/:id", (req, res) => {
-  const state = accountabilityStateSchema.parse(getAccountabilityState());
+  const authUser = (req as AuthedRequest).authUser;
+  const state = accountabilityStateSchema.parse(getAccountabilityState(authUser?.id));
   const nextReflections = state.reflections.filter((reflection) => reflection.id !== req.params.id);
   if (nextReflections.length === state.reflections.length) {
     return res.status(404).json({ error: "reflection not found" });
   }
-  saveAccountabilityState({ ...state, reflections: nextReflections });
+  saveAccountabilityState({ ...state, reflections: nextReflections }, authUser?.id);
   ok(res, { deleted: true });
 });
 
@@ -633,6 +917,7 @@ app.put("/api/zones/:id/requirements", (req, res) => {
 });
 
 app.post("/api/zones/:id/gold-unlock", (req, res) => {
+  const authUser = (req as AuthedRequest).authUser;
   const zoneState = listOverlayState().find((entry) => entry.zone.id === req.params.id);
   if (!zoneState) {
     return res.status(404).json({ error: "zone not found" });
@@ -648,7 +933,7 @@ app.post("/api/zones/:id/gold-unlock", (req, res) => {
   }
 
   try {
-    spendGold(10);
+    spendGold(10, authUser?.id);
   } catch (error) {
     return badRequest(res, (error as Error).message);
   }
@@ -844,6 +1129,11 @@ wss.on("connection", (socket) => {
     } satisfies EventEnvelope),
   );
 });
+
+deleteExpiredSessions();
+setInterval(() => {
+  deleteExpiredSessions();
+}, 1000 * 60 * 60).unref();
 
 setInterval(() => {
   sendEvent("health", { timestamp: new Date().toISOString() });

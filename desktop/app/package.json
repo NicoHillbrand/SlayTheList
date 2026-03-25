@@ -1,0 +1,73 @@
+{
+  "name": "@slaythelist/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Desktop launcher for the SlayTheList local app stack",
+  "main": "main.mjs",
+  "scripts": {
+    "dev": "electron .",
+    "package": "electron-builder --dir"
+  },
+  "build": {
+    "appId": "com.slaythelist.desktop",
+    "productName": "SlayTheList",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.mjs"
+    ],
+    "extraResources": [
+      {
+        "from": "../../package.json",
+        "to": "app-bundle/package.json"
+      },
+      {
+        "from": "../../backend/api/dist",
+        "to": "app-bundle/backend/api/dist"
+      },
+      {
+        "from": "../../backend/api/package.json",
+        "to": "app-bundle/backend/api/package.json"
+      },
+      {
+        "from": "../../frontend/web/.next",
+        "to": "app-bundle/frontend/web/.next"
+      },
+      {
+        "from": "../../frontend/web/public",
+        "to": "app-bundle/frontend/web/public"
+      },
+      {
+        "from": "../../frontend/web/package.json",
+        "to": "app-bundle/frontend/web/package.json"
+      },
+      {
+        "from": "../../frontend/web/next.config.ts",
+        "to": "app-bundle/frontend/web/next.config.ts"
+      },
+      {
+        "from": "../../shared/contracts/dist",
+        "to": "app-bundle/shared/contracts/dist"
+      },
+      {
+        "from": "../../shared/contracts/package.json",
+        "to": "app-bundle/shared/contracts/package.json"
+      },
+      {
+        "from": "../../node_modules",
+        "to": "app-bundle/node_modules",
+        "filter": [
+          "**/*",
+          "!**/.cache/**",
+          "!**/.bin/**"
+        ]
+      }
+    ]
+  },
+  "devDependencies": {
+    "electron": "41.0.4",
+    "electron-builder": "^26.8.1"
+  }
+}

@@ -6,14 +6,21 @@
   "workspaces": [
     "frontend/*",
     "backend/*",
-    "shared/*"
+    "shared/*",
+    "desktop/*"
   ],
   "scripts": {
-    "dev:web": "npm --workspace @slaythelist/web run dev",
-    "dev:api": "npm --workspace @slaythelist/api run dev",
-    "build": "npm run build -ws --if-present",
+    "build:contracts": "npm --workspace @slaythelist/contracts run build",
+    "dev:web": "npm run build:contracts && npm run sync:assets && npm --workspace @slaythelist/web run dev",
+    "dev:api": "npm run build:contracts && npm --workspace @slaythelist/api run dev",
+    "sync:assets": "node scripts/sync-blocked-overlays.mjs",
+    "desktop:dev": "npm run app:dev",
+    "desktop:package": "npm run app:package",
+    "app:dev": "npm run build:contracts && npm run sync:assets && npm --workspace @slaythelist/desktop run dev",
+    "app:package": "npm run sync:assets && npm run build && npm --workspace @slaythelist/desktop run package",
+    "build": "npm run build:contracts && npm run sync:assets && npm --workspace @slaythelist/api run build && npm --workspace @slaythelist/web run build",
     "lint": "npm run lint -ws --if-present",
-    "typecheck": "npm run typecheck -ws --if-present"
+    "typecheck": "npm run build:contracts && npm run typecheck -ws --if-present"
   },
   "engines": {
     "node": ">=20"

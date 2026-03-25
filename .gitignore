@@ -24,3 +24,6 @@ backend/api/data/
 # .NET build output
 bin/
 obj/
+
+# Electron packaging output
+desktop/app/dist*/

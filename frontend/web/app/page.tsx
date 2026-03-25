@@ -58,6 +58,7 @@ import {
   updateZone,
   uploadReferenceImage,
 } from "../lib/api";
+import SocialModal from "./social-modal";
 
 type LoadState = "idle" | "loading" | "error";
 type ZoneRectKey = "x" | "y" | "width" | "height";
@@ -75,7 +76,7 @@ type MoveState = {
   startZoneX: number;
   startZoneY: number;
 };
-type ViewTab = "goals" | "habits" | "predictions" | "reflection" | "blocks";
+type ViewTab = "goals" | "habits" | "predictions" | "reflection" | "blocks" | "social";
 type TodoFilter = "active" | "completed" | "archived" | "all";
 type TodoRange = "daily" | "weekly" | "monthly" | "all" | "top";
 type HabitsView = "week" | "month";
@@ -493,6 +494,7 @@ export default function Page() {
   const [predictions, setPredictions] = useState<Prediction[]>([]);
   const [newPredictionTitle, setNewPredictionTitle] = useState("");
   const [newPredictionConfidence, setNewPredictionConfidence] = useState(70);
+  const [goalPredictionConfidences, setGoalPredictionConfidences] = useState<Record<string, number>>({});
   const [reflections, setReflections] = useState<ReflectionEntry[]>([]);
   const [selectedReflectionDate, setSelectedReflectionDate] = useState(getDateKey(new Date()));
   const [reflectionView, setReflectionView] = useState<ReflectionView>("today");
@@ -519,7 +521,7 @@ export default function Page() {
   const [rewardedTodoIds, setRewardedTodoIds] = useState<string[]>([]);
   const templateRef = useRef<HTMLDivElement | null>(null);
   const templateHostRef = useRef<HTMLDivElement | null>(null);
-  const todoInputRefs = useRef<Map<string, HTMLInputElement>>(new Map());
+  const todoInputRefs = useRef<Map<string, HTMLTextAreaElement>>(new Map());
   const goldAudioRefs = useRef<Map<string, HTMLAudioElement>>(new Map());
   const goldSoundTimeoutsRef = useRef<number[]>([]);
   const activeGoldAudioRef = useRef<HTMLAudioElement[]>([]);
@@ -726,6 +728,12 @@ export default function Page() {
 
   useEffect(() => {
     void refresh(true);
+  }, []);
+
+  useEffect(() => {
+    const isDesktopApp = navigator.userAgent.includes("Electron");
+    document.body.classList.toggle("desktop-app", isDesktopApp);
+    return () => document.body.classList.remove("desktop-app");
   }, []);
 
   useEffect(() => {
@@ -975,6 +983,11 @@ export default function Page() {
         setRewardedTodoIds(result.state.rewardedTodoIds);
       }
     });
+  }
+
+  function autoResizeTextarea(el: HTMLTextAreaElement) {
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
   }
 
   function commitTodoTitle(todo: Todo) {
@@ -1442,7 +1455,7 @@ export default function Page() {
     });
   }
 
-  function onTodoTitleKeyDown(todo: Todo, event: ReactKeyboardEvent<HTMLInputElement>) {
+  function onTodoTitleKeyDown(todo: Todo, event: ReactKeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === "Tab") {
       event.preventDefault();
       updateTodoIndent(todo, event.shiftKey ? -1 : 1);
@@ -1879,11 +1892,13 @@ export default function Page() {
       return true;
     });
     if (todoRange === "top" && (todoFilter === "active" || todoFilter === "all") && rangeFiltered.length > 0) {
-      const firstTopLevelIndex = rangeFiltered.findIndex((todo) => todo.indent === 0);
+      const dailyRangeFiltered = statusFiltered.filter((todo) => getViewForDeadline(todo.deadlineAt) === "daily");
+      const topSource = dailyRangeFiltered.length > 0 ? dailyRangeFiltered : rangeFiltered;
+      const firstTopLevelIndex = topSource.findIndex((todo) => todo.indent === 0);
       if (firstTopLevelIndex >= 0) {
-        const topSlice: Todo[] = [rangeFiltered[firstTopLevelIndex]];
-        for (let i = firstTopLevelIndex + 1; i < rangeFiltered.length; i += 1) {
-          const next = rangeFiltered[i];
+        const topSlice: Todo[] = [topSource[firstTopLevelIndex]];
+        for (let i = firstTopLevelIndex + 1; i < topSource.length; i += 1) {
+          const next = topSource[i];
           if (next.indent === 0) break;
           topSlice.push(next);
         }
@@ -2161,6 +2176,24 @@ export default function Page() {
     setPredictions((prev) => prev.filter((prediction) => prediction.id !== predictionId));
   }
 
+  function addGoalPrediction(todo: Todo) {
+    const goalTitle = todo.title.trim();
+    if (!goalTitle) return;
+    const confidence = Math.max(1, Math.min(99, goalPredictionConfidences[todo.id] ?? 70));
+    setPredictions((prev) => [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        title: goalTitle,
+        confidence,
+        outcome: "pending",
+        createdAt: Date.now(),
+        resolvedAt: null,
+      },
+    ]);
+    setGoalPredictionConfidences((prev) => ({ ...prev, [todo.id]: 70 }));
+  }
+
   const resolvedPredictions = useMemo(
     () => predictions.filter((prediction) => prediction.outcome !== "pending"),
     [predictions],
@@ -2176,6 +2209,17 @@ export default function Page() {
     const sum = resolvedPredictions.reduce((acc, prediction) => acc + prediction.confidence, 0);
     return Math.round(sum / resolvedPredictions.length);
   }, [resolvedPredictions]);
+  const todaysPredictionGoals = useMemo(
+    () =>
+      todos.filter(
+        (todo) =>
+          !todo.archivedAt &&
+          todo.status === "active" &&
+          getViewForDeadline(todo.deadlineAt) === "daily" &&
+          todo.title.trim().length > 0,
+      ),
+    [todos],
+  );
 
   const coreReflectionQuestions = DEFAULT_CORE_REFLECTION_QUESTIONS;
   const optionalReflectionQuestions = DEFAULT_OPTIONAL_REFLECTION_QUESTIONS;
@@ -2411,6 +2455,9 @@ export default function Page() {
                 >
                   Block Setup
                 </button>
+                <button type="button" className="goals-subtab" onClick={() => setActiveTab("social")}>
+                  Social
+                </button>
               </nav>
               <div className="goals-filters">
                 <button
@@ -2479,18 +2526,20 @@ export default function Page() {
                         onChange={(event) => toggleTodo(todo, event.currentTarget)}
                         aria-label={`Toggle ${todo.title}`}
                       />
-                      <input
+                      <textarea
                         ref={(node) => {
                           if (node) {
                             todoInputRefs.current.set(todo.id, node);
+                            autoResizeTextarea(node);
                           } else {
                             todoInputRefs.current.delete(todo.id);
                           }
                         }}
                         value={todoDrafts[todo.id] ?? todo.title}
-                        onChange={(event) =>
-                          setTodoDrafts((prev) => ({ ...prev, [todo.id]: event.target.value }))
-                        }
+                        onChange={(event) => {
+                          setTodoDrafts((prev) => ({ ...prev, [todo.id]: event.target.value }));
+                          autoResizeTextarea(event.target);
+                        }}
                         onKeyDown={(event) => onTodoTitleKeyDown(todo, event)}
                         onBlur={() => commitTodoTitle(todo)}
                         placeholder={
@@ -2501,6 +2550,7 @@ export default function Page() {
                             : undefined
                         }
                         className="goal-title-input"
+                        rows={1}
                       />
                       <div className="goal-actions">
                         {!todo.archivedAt && (
@@ -2573,6 +2623,9 @@ export default function Page() {
                 </button>
                 <button type="button" className="goals-subtab" onClick={() => setActiveTab("blocks")}>
                   Block Setup
+                </button>
+                <button type="button" className="goals-subtab" onClick={() => setActiveTab("social")}>
+                  Social
                 </button>
               </nav>
               <div className="goals-filters">
@@ -3000,6 +3053,9 @@ export default function Page() {
                 <button type="button" className="goals-subtab" onClick={() => setActiveTab("blocks")}>
                   Block Setup
                 </button>
+                <button type="button" className="goals-subtab" onClick={() => setActiveTab("social")}>
+                  Social
+                </button>
               </nav>
             </div>
             <div className="predictions-top">
@@ -3047,6 +3103,41 @@ export default function Page() {
                 ))}
               </ul>
             )}
+            <details className="prediction-goals-panel">
+              <summary>Add from today's goals</summary>
+              <div className="prediction-goals-content">
+                {todaysPredictionGoals.length === 0 ? (
+                  <p className="goals-empty">No active daily goals to pull from.</p>
+                ) : (
+                  <ul className="prediction-goals-list">
+                    {todaysPredictionGoals.map((todo) => (
+                      <li key={todo.id} className="prediction-goal-item">
+                        <span className="prediction-goal-label">{todo.title}</span>
+                        <div className="prediction-goal-actions">
+                          <input
+                            type="number"
+                            min={1}
+                            max={99}
+                            value={goalPredictionConfidences[todo.id] ?? 70}
+                            onChange={(event) => {
+                              const numeric = Number(event.target.value);
+                              setGoalPredictionConfidences((prev) => ({
+                                ...prev,
+                                [todo.id]: Number.isFinite(numeric) ? numeric : 70,
+                              }));
+                            }}
+                            aria-label={`Confidence for ${todo.title}`}
+                          />
+                          <button type="button" onClick={() => addGoalPrediction(todo)}>
+                            Add
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </details>
           </section>
           )}
 
@@ -3064,6 +3155,9 @@ export default function Page() {
                 </button>
                 <button type="button" className="goals-subtab" onClick={() => setActiveTab("blocks")}>
                   Block Setup
+                </button>
+                <button type="button" className="goals-subtab" onClick={() => setActiveTab("social")}>
+                  Social
                 </button>
               </nav>
               <div className="goals-filters">
@@ -3229,6 +3323,13 @@ export default function Page() {
                 onClick={() => setActiveTab("blocks")}
               >
                 Block Setup
+              </button>
+              <button
+                type="button"
+                className="goals-subtab"
+                onClick={() => setActiveTab("social")}
+              >
+                Social
               </button>
             </nav>
           </div>
@@ -4060,6 +4161,34 @@ export default function Page() {
           )}
 
           </div>
+          </section>
+          )}
+
+          {activeTab === "social" && (
+          <section className="tab-pane goals-board">
+            <div className="goals-topbar">
+              <nav className="goals-subtabs" aria-label="Accountability sections">
+                <button type="button" className="goals-subtab" onClick={() => setActiveTab("goals")}>
+                  Goals
+                </button>
+                <button type="button" className="goals-subtab" onClick={() => setActiveTab("habits")}>
+                  Habits
+                </button>
+                <button type="button" className="goals-subtab" onClick={() => setActiveTab("predictions")}>
+                  Predictions
+                </button>
+                <button type="button" className="goals-subtab" onClick={() => setActiveTab("reflection")}>
+                  Reflection
+                </button>
+                <button type="button" className="goals-subtab" onClick={() => setActiveTab("blocks")}>
+                  Block Setup
+                </button>
+                <button type="button" className="goals-subtab active" onClick={() => setActiveTab("social")}>
+                  Social
+                </button>
+              </nav>
+            </div>
+            <SocialModal embedded />
           </section>
           )}
           </div>

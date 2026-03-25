@@ -2,7 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 
-const dataDir = path.join(process.cwd(), "data");
+const configuredDataDir = process.env.SLAYTHELIST_DATA_DIR?.trim();
+const defaultDataDir = path.join(process.cwd(), "data");
+export const dataDir = configuredDataDir
+  ? path.resolve(configuredDataDir)
+  : defaultDataDir;
 fs.mkdirSync(dataDir, { recursive: true });
 
 export const referenceImagesDir = path.join(dataDir, "reference-images");
@@ -87,6 +91,73 @@ CREATE TABLE IF NOT EXISTS gold_state (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  username TEXT NOT NULL,
+  username_normalized TEXT NOT NULL UNIQUE,
+  email TEXT NOT NULL,
+  email_normalized TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS user_accountability_state (
+  user_id TEXT PRIMARY KEY,
+  habits_json TEXT NOT NULL DEFAULT '[]',
+  predictions_json TEXT NOT NULL DEFAULT '[]',
+  reflections_json TEXT NOT NULL DEFAULT '[]',
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS user_gold_state (
+  user_id TEXT PRIMARY KEY,
+  gold INTEGER NOT NULL DEFAULT 0,
+  rewarded_todo_ids_json TEXT NOT NULL DEFAULT '[]',
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS user_social_settings (
+  user_id TEXT PRIMARY KEY,
+  habits_visibility TEXT NOT NULL DEFAULT 'friends' CHECK(habits_visibility IN ('private', 'friends', 'public')),
+  predictions_visibility TEXT NOT NULL DEFAULT 'friends' CHECK(predictions_visibility IN ('private', 'friends', 'public')),
+  gold_visibility TEXT NOT NULL DEFAULT 'friends' CHECK(gold_visibility IN ('private', 'friends', 'public')),
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS friend_requests (
+  id TEXT PRIMARY KEY,
+  sender_user_id TEXT NOT NULL,
+  receiver_user_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('pending', 'accepted', 'declined', 'cancelled')),
+  created_at TEXT NOT NULL,
+  responded_at TEXT,
+  FOREIGN KEY(sender_user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY(receiver_user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS friendships (
+  user_low_id TEXT NOT NULL,
+  user_high_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(user_low_id, user_high_id),
+  FOREIGN KEY(user_low_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY(user_high_id) REFERENCES users(id) ON DELETE CASCADE,
+  CHECK(user_low_id < user_high_id)
+);
+
 CREATE TABLE IF NOT EXISTS game_states (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -120,6 +191,13 @@ CREATE TABLE IF NOT EXISTS detected_game_state (
   detected_at TEXT NOT NULL,
   FOREIGN KEY(game_state_id) REFERENCES game_states(id) ON DELETE SET NULL
 );
+`);
+
+db.exec(`
+CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_friend_requests_sender ON friend_requests(sender_user_id, status);
+CREATE INDEX IF NOT EXISTS idx_friend_requests_receiver ON friend_requests(receiver_user_id, status);
 `);
 
 function migrateTodoStatusToActive() {

@@ -44,6 +44,7 @@ type ZoneRow = {
 };
 
 type AccountabilityStateRow = {
+  user_id?: string;
   habits_json: string;
   predictions_json: string;
   reflections_json: string;
@@ -51,6 +52,7 @@ type AccountabilityStateRow = {
 };
 
 type GoldStateRow = {
+  user_id?: string;
   gold: number;
   rewarded_todo_ids_json: string;
   updated_at: string;
@@ -296,12 +298,20 @@ function safeParseJsonArray<T>(raw: string): T[] {
   }
 }
 
-export function getAccountabilityState(): AccountabilityState {
-  const row = db
-    .prepare(
-      "SELECT habits_json, predictions_json, reflections_json, updated_at FROM accountability_state WHERE id = 1",
-    )
-    .get() as AccountabilityStateRow | undefined;
+export function getAccountabilityState(userId?: string): AccountabilityState {
+  const row = userId
+    ? (db
+        .prepare(
+          `SELECT user_id, habits_json, predictions_json, reflections_json, updated_at
+           FROM user_accountability_state
+           WHERE user_id = ?`,
+        )
+        .get(userId) as AccountabilityStateRow | undefined)
+    : (db
+        .prepare(
+          "SELECT habits_json, predictions_json, reflections_json, updated_at FROM accountability_state WHERE id = 1",
+        )
+        .get() as AccountabilityStateRow | undefined);
   if (!row) {
     return {
       habits: [],
@@ -316,25 +326,51 @@ export function getAccountabilityState(): AccountabilityState {
   };
 }
 
-export function saveAccountabilityState(state: AccountabilityState): AccountabilityState {
+export function saveAccountabilityState(state: AccountabilityState, userId?: string): AccountabilityState {
   const updatedAt = new Date().toISOString();
-  db.prepare(
-    `UPDATE accountability_state
-     SET habits_json = ?, predictions_json = ?, reflections_json = ?, updated_at = ?
-     WHERE id = 1`,
-  ).run(
-    JSON.stringify(state.habits),
-    JSON.stringify(state.predictions),
-    JSON.stringify(state.reflections),
-    updatedAt,
-  );
+  if (userId) {
+    db.prepare(
+      `INSERT INTO user_accountability_state (user_id, habits_json, predictions_json, reflections_json, updated_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(user_id) DO UPDATE SET
+         habits_json = excluded.habits_json,
+         predictions_json = excluded.predictions_json,
+         reflections_json = excluded.reflections_json,
+         updated_at = excluded.updated_at`,
+    ).run(
+      userId,
+      JSON.stringify(state.habits),
+      JSON.stringify(state.predictions),
+      JSON.stringify(state.reflections),
+      updatedAt,
+    );
+  } else {
+    db.prepare(
+      `UPDATE accountability_state
+       SET habits_json = ?, predictions_json = ?, reflections_json = ?, updated_at = ?
+       WHERE id = 1`,
+    ).run(
+      JSON.stringify(state.habits),
+      JSON.stringify(state.predictions),
+      JSON.stringify(state.reflections),
+      updatedAt,
+    );
+  }
   return state;
 }
 
-export function getGoldState(): GoldState {
-  const row = db
-    .prepare("SELECT gold, rewarded_todo_ids_json, updated_at FROM gold_state WHERE id = 1")
-    .get() as GoldStateRow | undefined;
+export function getGoldState(userId?: string): GoldState {
+  const row = userId
+    ? (db
+        .prepare(
+          `SELECT user_id, gold, rewarded_todo_ids_json, updated_at
+           FROM user_gold_state
+           WHERE user_id = ?`,
+        )
+        .get(userId) as GoldStateRow | undefined)
+    : (db
+        .prepare("SELECT gold, rewarded_todo_ids_json, updated_at FROM gold_state WHERE id = 1")
+        .get() as GoldStateRow | undefined);
   if (!row) {
     return { gold: 0, rewardedTodoIds: [] };
   }
@@ -346,49 +382,61 @@ export function getGoldState(): GoldState {
   };
 }
 
-export function saveGoldState(state: GoldState): GoldState {
+export function saveGoldState(state: GoldState, userId?: string): GoldState {
   const normalized: GoldState = {
     gold: Math.max(0, Math.floor(state.gold)),
     rewardedTodoIds: [...new Set(state.rewardedTodoIds)],
   };
-  db.prepare(
-    `UPDATE gold_state
-     SET gold = ?, rewarded_todo_ids_json = ?, updated_at = ?
-     WHERE id = 1`,
-  ).run(normalized.gold, JSON.stringify(normalized.rewardedTodoIds), new Date().toISOString());
+  const updatedAt = new Date().toISOString();
+  if (userId) {
+    db.prepare(
+      `INSERT INTO user_gold_state (user_id, gold, rewarded_todo_ids_json, updated_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(user_id) DO UPDATE SET
+         gold = excluded.gold,
+         rewarded_todo_ids_json = excluded.rewarded_todo_ids_json,
+         updated_at = excluded.updated_at`,
+    ).run(userId, normalized.gold, JSON.stringify(normalized.rewardedTodoIds), updatedAt);
+  } else {
+    db.prepare(
+      `UPDATE gold_state
+       SET gold = ?, rewarded_todo_ids_json = ?, updated_at = ?
+       WHERE id = 1`,
+    ).run(normalized.gold, JSON.stringify(normalized.rewardedTodoIds), updatedAt);
+  }
   return normalized;
 }
 
-export function awardGold(amount: number): GoldState {
-  const current = getGoldState();
+export function awardGold(amount: number, userId?: string): GoldState {
+  const current = getGoldState(userId);
   return saveGoldState({
     gold: current.gold + Math.max(0, Math.floor(amount)),
     rewardedTodoIds: current.rewardedTodoIds,
-  });
+  }, userId);
 }
 
-export function awardTodoGold(todoId: string, amount: number): { state: GoldState; awarded: boolean } {
-  const current = getGoldState();
+export function awardTodoGold(todoId: string, amount: number, userId?: string): { state: GoldState; awarded: boolean } {
+  const current = getGoldState(userId);
   if (current.rewardedTodoIds.includes(todoId)) {
     return { state: current, awarded: false };
   }
   const state = saveGoldState({
     gold: current.gold + Math.max(0, Math.floor(amount)),
     rewardedTodoIds: [...current.rewardedTodoIds, todoId],
-  });
+  }, userId);
   return { state, awarded: true };
 }
 
-export function spendGold(amount: number): GoldState {
+export function spendGold(amount: number, userId?: string): GoldState {
   const normalizedAmount = Math.max(0, Math.floor(amount));
-  const current = getGoldState();
+  const current = getGoldState(userId);
   if (current.gold < normalizedAmount) {
     throw new Error("not enough gold");
   }
   return saveGoldState({
     gold: current.gold - normalizedAmount,
     rewardedTodoIds: current.rewardedTodoIds,
-  });
+  }, userId);
 }
 
 // ---------------------------------------------------------------------------

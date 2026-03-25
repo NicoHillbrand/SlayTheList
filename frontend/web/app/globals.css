@@ -22,12 +22,20 @@ body {
   overflow: hidden;
 }
 
+body.desktop-app {
+  background-position: calc(100% + 115px) center;
+}
+
 main {
   max-width: 1120px;
   margin: 0 auto;
   padding: 1.5rem;
   height: 100vh;
   overflow: hidden;
+}
+
+body.desktop-app main {
+  padding-top: 2.75rem;
 }
 
 .app-shell {
@@ -53,6 +61,16 @@ main {
 
 .app-header p {
   margin: 0;
+}
+
+.app-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.social-launch-button {
+  white-space: nowrap;
 }
 
 .gold-counter {
@@ -240,6 +258,12 @@ main {
   color: inherit;
   padding: 0.25rem 0.15rem;
   flex: 1;
+  resize: none;
+  overflow: hidden;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: 1.4;
+  word-break: break-word;
 }
 
 .goal-title-input:focus {
@@ -276,8 +300,13 @@ main {
 
 .goal-main {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.4rem;
+}
+
+.goal-main input[type="checkbox"],
+.goal-main .goal-drag-handle {
+  margin-top: 0.3rem;
 }
 
 .goal-drag-handle {
@@ -309,6 +338,8 @@ main {
   opacity: 0;
   pointer-events: none;
   transition: opacity 120ms ease-in-out;
+  margin-top: 0.3rem;
+  flex-shrink: 0;
 }
 
 .goal-row:hover .goal-actions,
@@ -668,6 +699,55 @@ main {
   flex-wrap: wrap;
 }
 
+.prediction-goals-panel {
+  margin-top: 0.9rem;
+  border: 1px solid rgba(187, 180, 164, 0.18);
+  border-radius: 14px;
+  background: rgba(10, 16, 33, 0.48);
+}
+
+.prediction-goals-panel summary {
+  cursor: pointer;
+  padding: 0.8rem 0.95rem;
+  color: #d7d1c4;
+  font-weight: 600;
+}
+
+.prediction-goals-content {
+  padding: 0 0.95rem 0.95rem;
+}
+
+.prediction-goals-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.55rem;
+}
+
+.prediction-goal-item {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.prediction-goal-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.prediction-goal-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.prediction-goal-actions input[type="number"] {
+  width: 5rem;
+}
+
 .reflection-grid {
   display: grid;
   gap: 0.55rem;
@@ -784,6 +864,160 @@ main {
 
 .settings-modal {
   width: min(560px, calc(100vw - 2rem));
+}
+
+.social-modal {
+  width: min(1100px, calc(100vw - 2rem));
+  max-height: min(90vh, 54rem);
+  overflow: auto;
+}
+
+.social-inline-shell {
+  display: grid;
+  gap: 1rem;
+}
+
+.social-modal-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+  margin-bottom: 1rem;
+}
+
+.social-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  gap: 1rem;
+}
+
+.social-sidebar {
+  display: grid;
+  gap: 0.9rem;
+  align-content: start;
+}
+
+.social-card {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.9rem;
+  border-radius: 10px;
+  border: 1px solid rgba(173, 142, 84, 0.2);
+  background: rgba(14, 20, 31, 0.72);
+}
+
+.social-profile-card {
+  min-height: 28rem;
+  align-content: start;
+}
+
+.social-auth-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.social-form {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.social-list {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0;
+  padding-left: 1rem;
+}
+
+.social-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.social-inline-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.social-account-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.social-link-button,
+.social-friend-button {
+  justify-self: start;
+  background: rgba(29, 40, 60, 0.82);
+}
+
+.social-friend-button.active {
+  border-color: #f2cb7d;
+  background: rgba(99, 77, 39, 0.5);
+}
+
+.social-pill-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.social-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.22rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid rgba(173, 142, 84, 0.36);
+  background: rgba(31, 42, 61, 0.88);
+  color: #ead8a7;
+  font-size: 0.78rem;
+}
+
+.social-profile-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.social-profile-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
+.social-profile-header h4,
+.social-profile-section h5 {
+  margin: 0;
+}
+
+.social-profile-section {
+  display: grid;
+  gap: 0.5rem;
+  padding-top: 0.8rem;
+  border-top: 1px solid rgba(173, 142, 84, 0.16);
+}
+
+.social-empty-state {
+  display: grid;
+  place-items: center;
+  min-height: 24rem;
+  text-align: center;
+}
+
+.social-gold-value {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: #f8df8b;
+}
+
+.social-error {
+  margin: 0 0 1rem;
+  color: #fda4af;
 }
 
 .settings-section {
@@ -906,5 +1140,17 @@ h2 {
 
   .reflection-grid {
     grid-template-columns: 1fr;
+  }
+
+  .social-layout,
+  .social-auth-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .social-profile-header,
+  .social-account-row,
+  .social-modal-header {
+    grid-template-columns: 1fr;
+    display: grid;
   }
 }

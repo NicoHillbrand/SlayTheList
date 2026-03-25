@@ -1,57 +1,95 @@
 # SlayTheList
 
-SlayTheList combines a browser todo app with a Windows game overlay that blocks configured regions of the game screen until required todos are completed.
+SlayTheList combines a todo app with a local API and a desktop launcher. The current cross-platform focus is the `frontend/web` + `backend/api` stack; the game overlay remains Windows-only for now.
 
 ## Packages
 
 - `frontend/web`: Next.js app for todo management and lock-zone editing
-- `backend/api`: Express + WebSocket API for todo persistence and overlay synchronization
+- `backend/api`: Express + WebSocket API for todo persistence and local app services
 - `shared/contracts`: Shared TypeScript types and validation schemas
-- `desktop/overlay-agent`: WPF overlay client that tracks Slay the Spire 2 window and blocks clicks in locked rectangles
+- `desktop/app`: Electron launcher that starts the local stack without visible shells
+- `desktop/overlay-agent`: Windows-only WPF overlay client
 
 ## Quick start
 
 1. Install dependencies:
    - `npm install`
-2. Run backend API:
+2. Double-click `launch-slaythelist.bat`
+3. Choose how you want to run STL:
+   - Desktop app: `npm run desktop:dev`
+   - Browser workflow: `npm run dev:api` and `npm run dev:web`
+
+The desktop option starts the API on `8788`, prefers web port `3000`, falls back to a free local port if needed, and opens the UI inside an Electron window without separate terminal windows.
+
+## Unified Windows launcher
+
+If you want one double-click entry point on Windows, use:
+
+- `launch-slaythelist.bat`
+
+It lets you choose:
+
+- Browser mode
+- Browser mode with hidden shells
+- Desktop mode
+- Stop running SlayTheList processes
+
+If you want a no-console launcher window, use:
+
+- `launch-slaythelist-hidden.vbs`
+
+That gives you the same mode choices from a small prompt without leaving a batch window open.
+
+## Desktop option
+
+If you prefer STL as a desktop app instead of a browser tab:
+
+- `npm run desktop:dev`
+
+The older alias still works:
+
+- `npm run app:dev`
+
+## Manual browser development
+
+If you want to run the services directly in the browser:
+
+1. Start the API:
    - `npm run dev:api`
-3. Run web app:
+2. Start the web app:
    - `npm run dev:web`
-4. Run Windows overlay agent from Visual Studio:
-   - Open `desktop/overlay-agent/SlayTheList.OverlayAgent.sln`
 
-Default local port is `8788` for API/WebSocket.
+`npm run dev:web` now syncs blocked overlay images into `frontend/web/public/blocked-overlays` automatically.
 
-## One-click Batch Launcher
+## Packaged desktop build
 
-- Double-click `start-slaythelist.bat` from repo root.
-- It starts API + web in separate terminals, checks for port conflicts, and opens the browser.
-- To stop API + web + overlay together, run `stop-slaythelist.bat`.
-- To stop + rebuild + restart everything in one click, run `restart-slaythelist.bat`.
+To build the production app assets and create an unpacked desktop bundle:
 
-## Blocked Area Images
+- `npm run desktop:package`
 
-- Desktop/game overlay images: `assets/blocked-overlays`
-- Web test UI images: `frontend/web/public/blocked-overlays`
-- `start-slaythelist.bat` auto-copies common image files from `assets/blocked-overlays` into `frontend/web/public/blocked-overlays` on startup.
+The older alias still works:
 
-## One-Click Launcher
+- `npm run app:package`
 
-If you want a single executable instead of running terminals, see:
+See `docs/desktop-launcher.md` for details.
 
-- `docs/desktop-launcher.md`
+## Windows-only overlay tools
+
+The legacy batch launchers and the overlay agent are still Windows-specific:
+
+- `launchers/windows/start-slaythelist.bat`
+- `launchers/windows/start-slaythelist-hidden.bat`
+- `launchers/windows/stop-slaythelist.bat`
+- `launchers/windows/restart-slaythelist.bat`
+- `desktop/overlay-agent`
+
+They are no longer required for running the core app on macOS.
 
 ## API usage from CLI/agents
 
 For command-line usage patterns (including PowerShell examples suitable for Claude Code), see:
 
 - `docs/agent-api-usage.md`
-
-## MVP constraints
-
-- Supports windowed/borderless game modes.
-- Manual todo completion drives lock/unlock state.
-- AI todo expansion and screenshot verification are planned for phase 2.
 
 ## Validation
 

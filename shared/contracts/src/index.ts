@@ -85,6 +85,100 @@ export const goldStateSchema = z.object({
 });
 export type GoldState = z.infer<typeof goldStateSchema>;
 
+export const socialVisibilitySchema = z.enum(["private", "friends", "public"]);
+export type SocialVisibility = z.infer<typeof socialVisibilitySchema>;
+
+export const userProfileSchema = z.object({
+  id: z.string(),
+  username: z.string(),
+  email: z.string().email(),
+  createdAt: z.string(),
+});
+export type UserProfile = z.infer<typeof userProfileSchema>;
+
+export const sessionUserSchema = userProfileSchema.pick({
+  id: true,
+  username: true,
+  email: true,
+  createdAt: true,
+});
+export type SessionUser = z.infer<typeof sessionUserSchema>;
+
+export const authResponseSchema = z.object({
+  user: sessionUserSchema,
+});
+export type AuthResponse = z.infer<typeof authResponseSchema>;
+
+export const socialSettingsSchema = z.object({
+  habitsVisibility: socialVisibilitySchema.default("friends"),
+  predictionsVisibility: socialVisibilitySchema.default("friends"),
+  goldVisibility: socialVisibilitySchema.default("friends"),
+});
+export type SocialSettings = z.infer<typeof socialSettingsSchema>;
+
+export const friendRelationshipSchema = z.enum([
+  "self",
+  "friend",
+  "incoming_request",
+  "outgoing_request",
+  "none",
+]);
+export type FriendRelationship = z.infer<typeof friendRelationshipSchema>;
+
+export const friendRequestStatusSchema = z.enum(["pending", "accepted", "declined", "cancelled"]);
+export type FriendRequestStatus = z.infer<typeof friendRequestStatusSchema>;
+
+export const friendSummarySchema = z.object({
+  id: z.string(),
+  username: z.string(),
+  createdAt: z.string(),
+});
+export type FriendSummary = z.infer<typeof friendSummarySchema>;
+
+export const friendRequestSchema = z.object({
+  id: z.string(),
+  sender: friendSummarySchema,
+  receiver: friendSummarySchema,
+  status: friendRequestStatusSchema,
+  createdAt: z.string(),
+  respondedAt: z.string().nullable(),
+});
+export type FriendRequest = z.infer<typeof friendRequestSchema>;
+
+export const friendSearchResultSchema = z.object({
+  user: friendSummarySchema,
+  relationship: friendRelationshipSchema,
+});
+export type FriendSearchResult = z.infer<typeof friendSearchResultSchema>;
+
+export const sharedProfileSectionSchema = z.object({
+  visibility: socialVisibilitySchema,
+  canView: z.boolean(),
+});
+export type SharedProfileSection = z.infer<typeof sharedProfileSectionSchema>;
+
+export const sharedProfileSchema = z.object({
+  user: friendSummarySchema,
+  relationship: friendRelationshipSchema,
+  settings: socialSettingsSchema,
+  habits: z.object({
+    visibility: socialVisibilitySchema,
+    canView: z.boolean(),
+    items: z.array(habitSchema),
+  }),
+  predictions: z.object({
+    visibility: socialVisibilitySchema,
+    canView: z.boolean(),
+    items: z.array(predictionSchema),
+  }),
+  gold: z.object({
+    visibility: socialVisibilitySchema,
+    canView: z.boolean(),
+    state: goldStateSchema.nullable(),
+  }),
+});
+export type SharedProfile = z.infer<typeof sharedProfileSchema>;
+
 export const gameStateDetectionMethodSchema = z.enum(["screenshot_match"]);
 export type GameStateDetectionMethod = z.infer<typeof gameStateDetectionMethodSchema>;
 

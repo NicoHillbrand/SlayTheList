@@ -1,7 +1,8 @@
 @echo off
 setlocal ENABLEDELAYEDEXPANSION
 
-set "ROOT=%~dp0"
+set "ROOT=%~dp0..\..\"
+for %%I in ("%ROOT%") do set "ROOT=%%~fI"
 set "NO_PAUSE=%~1"
 cd /d "%ROOT%"
 
@@ -74,5 +75,5 @@ echo - Web terminal: SlayTheList Web
 if defined OVERLAY_EXE echo - Overlay app: SlayTheList Overlay
 echo - Browser: http://localhost:3000
 echo.
-echo To stop everything at once, run: stop-slaythelist.bat
+echo To stop everything at once, run: launch-slaythelist.bat and choose Stop
 exit /b 0

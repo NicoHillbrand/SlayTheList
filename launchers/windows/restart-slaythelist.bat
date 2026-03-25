@@ -1,13 +1,14 @@
 @echo off
 setlocal
 
-set "ROOT=%~dp0"
+set "ROOT=%~dp0..\..\"
+for %%I in ("%ROOT%") do set "ROOT=%%~fI"
 cd /d "%ROOT%"
 
 echo Restarting SlayTheList...
 echo.
 
-call "%ROOT%stop-slaythelist.bat"
+call "%ROOT%launchers\windows\stop-slaythelist.bat"
 timeout /t 1 >nul
 
 if not exist "%ROOT%node_modules" (
@@ -44,7 +45,7 @@ if defined DOTNET_EXE (
 )
 
 echo Starting services...
-call "%ROOT%start-slaythelist.bat" --no-pause
+call "%ROOT%launchers\windows\start-slaythelist.bat" --no-pause
 if errorlevel 1 (
   echo.
   echo Startup failed.
