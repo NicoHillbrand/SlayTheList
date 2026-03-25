@@ -5,7 +5,6 @@ import { randomUUID } from "node:crypto";
 import { WebSocketServer } from "ws";
 import {
   accountabilityStateSchema,
-  authResponseSchema,
   cloudDeviceStartRequestSchema,
   friendRequestSchema,
   friendSearchResultSchema,
@@ -14,12 +13,10 @@ import {
   habitStatusSchema,
   predictionOutcomeSchema,
   reflectionEntrySchema,
-  sessionUserSchema,
   sharedProfileSchema,
   socialSettingsSchema,
   type EventEnvelope,
   type OverlayState,
-  type SessionUser,
 } from "@slaythelist/contracts";
 import {
   activateZoneGoldUnlock,
@@ -53,29 +50,9 @@ import {
   updateTodo,
   updateZone,
 } from "./store.js";
-import { SESSION_COOKIE_NAME, createSessionToken, hashPassword, hashSessionToken, parseCookieValue, verifyPassword } from "./auth.js";
 import { referenceImagesDir } from "./db.js";
 import { testDetection } from "./image-match.js";
 import { errorLogger, requestLogger } from "./logger.js";
-import {
-  acceptFriendRequest,
-  bootstrapUserSocialStateFromLegacy,
-  cancelFriendRequest,
-  createFriendRequest,
-  createSessionRecord,
-  createUserAccount,
-  declineFriendRequest,
-  deleteExpiredSessions,
-  deleteSessionByTokenHash,
-  findUserAuthByLogin,
-  getSessionUserByTokenHash,
-  getSharedProfile,
-  getSocialSettings,
-  listFriendRequests,
-  listFriends,
-  saveSocialSettings,
-  searchUsers,
-} from "./social-store.js";
 import {
   acceptCloudFriendRequest,
   cancelCloudFriendRequest,
@@ -108,10 +85,6 @@ app.use(
 app.use(express.json({ limit: "50mb" }));
 app.use(requestLogger);
 
-type AuthedRequest = express.Request & {
-  authUser?: SessionUser;
-};
-
 function buildOverlayState(): OverlayState {
   return {
     gameWindow: { titleHint: "Slay the Spire 2" },
@@ -130,37 +103,6 @@ function badRequest(res: express.Response, message: string) {
   res.status(400).json({ error: message });
 }
 
-function unauthorized(res: express.Response, message = "authentication required") {
-  res.status(401).json({ error: message });
-}
-
-function setSessionCookie(res: express.Response, token: string, expiresAt: Date) {
-  res.cookie(SESSION_COOKIE_NAME, token, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    expires: expiresAt,
-    path: "/",
-  });
-}
-
-function clearSessionCookie(res: express.Response) {
-  res.clearCookie(SESSION_COOKIE_NAME, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    path: "/",
-  });
-}
-
-function requireAuth(req: AuthedRequest, res: express.Response): SessionUser | undefined {
-  if (!req.authUser) {
-    unauthorized(res);
-    return undefined;
-  }
-  return req.authUser;
-}
-
 function triggerCloudSnapshotSync() {
   if (!isCloudSyncReady()) {
     return;
@@ -168,25 +110,6 @@ function triggerCloudSnapshotSync() {
   void syncCloudSnapshot().catch((error) => {
     console.error("[api] cloud snapshot sync failed", error);
   });
-}
-
-function parseUsername(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  if (!/^[a-zA-Z0-9_]{3,24}$/.test(trimmed)) return undefined;
-  return trimmed;
-}
-
-function parseEmail(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) return undefined;
-  return trimmed;
-}
-
-function parsePassword(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  return value.length >= 8 ? value : undefined;
 }
 
 function asFiniteNumber(value: unknown, fallback: number): number {
@@ -260,94 +183,8 @@ function parseDeadlineAt(
   return { value: baseDate.toISOString() };
 }
 
-app.use((req, _res, next) => {
-  const sessionToken = parseCookieValue(req.headers.cookie, SESSION_COOKIE_NAME);
-  if (!sessionToken) {
-    next();
-    return;
-  }
-  const authUser = getSessionUserByTokenHash(hashSessionToken(sessionToken));
-  if (authUser) {
-    (req as AuthedRequest).authUser = authUser;
-  }
-  next();
-});
-
 app.get("/health", (_req, res) => {
   ok(res, { status: "ok", timestamp: new Date().toISOString() });
-});
-
-app.get("/api/auth/me", (req, res) => {
-  const authUser = (req as AuthedRequest).authUser;
-  ok(res, { user: authUser ?? null });
-});
-
-app.post("/api/auth/signup", (req, res) => {
-  const username = parseUsername(req.body?.username);
-  const email = parseEmail(req.body?.email);
-  const password = parsePassword(req.body?.password);
-  if (!username) {
-    return badRequest(res, "username must be 3-24 characters using letters, numbers, or underscores");
-  }
-  if (!email) {
-    return badRequest(res, "email must be valid");
-  }
-  if (!password) {
-    return badRequest(res, "password must be at least 8 characters");
-  }
-  try {
-    const user = createUserAccount({
-      username,
-      email,
-      passwordHash: hashPassword(password),
-    });
-    bootstrapUserSocialStateFromLegacy(user.id);
-    const token = createSessionToken();
-    const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 30);
-    createSessionRecord(user.id, hashSessionToken(token), expiresAt.toISOString());
-    setSessionCookie(res, token, expiresAt);
-    ok(res, authResponseSchema.parse({ user }));
-  } catch (error) {
-    const message = String((error as Error).message ?? "");
-    if (message.includes("users.username_normalized")) {
-      return badRequest(res, "username is already taken");
-    }
-    if (message.includes("users.email_normalized")) {
-      return badRequest(res, "email is already registered");
-    }
-    throw error;
-  }
-});
-
-app.post("/api/auth/signin", (req, res) => {
-  const login = typeof req.body?.login === "string" ? req.body.login.trim() : "";
-  const password = typeof req.body?.password === "string" ? req.body.password : "";
-  if (!login || !password) {
-    return badRequest(res, "login and password are required");
-  }
-  const user = findUserAuthByLogin(login);
-  if (!user || !verifyPassword(password, user.passwordHash)) {
-    return unauthorized(res, "invalid credentials");
-  }
-  const token = createSessionToken();
-  const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 30);
-  createSessionRecord(user.id, hashSessionToken(token), expiresAt.toISOString());
-  setSessionCookie(res, token, expiresAt);
-  ok(
-    res,
-    authResponseSchema.parse({
-      user: sessionUserSchema.parse(user),
-    }),
-  );
-});
-
-app.post("/api/auth/signout", (req, res) => {
-  const sessionToken = parseCookieValue(req.headers.cookie, SESSION_COOKIE_NAME);
-  if (sessionToken) {
-    deleteSessionByTokenHash(hashSessionToken(sessionToken));
-  }
-  clearSessionCookie(res);
-  ok(res, { signedOut: true });
 });
 
 app.get("/api/cloud-social/status", (_req, res) => {
@@ -487,99 +324,6 @@ app.delete("/api/cloud-social/friend-requests/:id", async (req, res) => {
 app.get("/api/cloud-social/users/:username", async (req, res) => {
   try {
     ok(res, sharedProfileSchema.parse(await getCloudSharedProfile(req.params.username)));
-  } catch (error) {
-    return badRequest(res, (error as Error).message);
-  }
-});
-
-app.get("/api/social/settings", (req, res) => {
-  const authUser = requireAuth(req as AuthedRequest, res);
-  if (!authUser) return;
-  ok(res, getSocialSettings(authUser.id));
-});
-
-app.put("/api/social/settings", (req, res) => {
-  const authUser = requireAuth(req as AuthedRequest, res);
-  if (!authUser) return;
-  const parsed = socialSettingsSchema.safeParse(req.body ?? {});
-  if (!parsed.success) {
-    return badRequest(res, `invalid social settings: ${parsed.error.issues[0]?.message ?? "invalid payload"}`);
-  }
-  ok(res, saveSocialSettings(authUser.id, parsed.data));
-});
-
-app.get("/api/social/users", (req, res) => {
-  const authUser = requireAuth(req as AuthedRequest, res);
-  if (!authUser) return;
-  const query = typeof req.query.q === "string" ? req.query.q : "";
-  ok(res, { items: friendSearchResultSchema.array().parse(searchUsers(authUser.id, query)) });
-});
-
-app.get("/api/social/friends", (req, res) => {
-  const authUser = requireAuth(req as AuthedRequest, res);
-  if (!authUser) return;
-  ok(res, { items: listFriends(authUser.id) });
-});
-
-app.get("/api/social/friend-requests", (req, res) => {
-  const authUser = requireAuth(req as AuthedRequest, res);
-  if (!authUser) return;
-  const requests = listFriendRequests(authUser.id);
-  ok(res, {
-    incoming: friendRequestSchema.array().parse(requests.incoming),
-    outgoing: friendRequestSchema.array().parse(requests.outgoing),
-  });
-});
-
-app.post("/api/social/friend-requests", (req, res) => {
-  const authUser = requireAuth(req as AuthedRequest, res);
-  if (!authUser) return;
-  const username = typeof req.body?.username === "string" ? req.body.username.trim() : "";
-  if (!username) {
-    return badRequest(res, "username is required");
-  }
-  try {
-    ok(res, friendRequestSchema.parse(createFriendRequest(authUser.id, username)));
-  } catch (error) {
-    return badRequest(res, (error as Error).message);
-  }
-});
-
-app.post("/api/social/friend-requests/:id/accept", (req, res) => {
-  const authUser = requireAuth(req as AuthedRequest, res);
-  if (!authUser) return;
-  try {
-    ok(res, friendRequestSchema.parse(acceptFriendRequest(req.params.id, authUser.id)));
-  } catch (error) {
-    return badRequest(res, (error as Error).message);
-  }
-});
-
-app.post("/api/social/friend-requests/:id/decline", (req, res) => {
-  const authUser = requireAuth(req as AuthedRequest, res);
-  if (!authUser) return;
-  try {
-    ok(res, friendRequestSchema.parse(declineFriendRequest(req.params.id, authUser.id)));
-  } catch (error) {
-    return badRequest(res, (error as Error).message);
-  }
-});
-
-app.delete("/api/social/friend-requests/:id", (req, res) => {
-  const authUser = requireAuth(req as AuthedRequest, res);
-  if (!authUser) return;
-  try {
-    ok(res, friendRequestSchema.parse(cancelFriendRequest(req.params.id, authUser.id)));
-  } catch (error) {
-    return badRequest(res, (error as Error).message);
-  }
-});
-
-app.get("/api/social/users/:username", (req, res) => {
-  const authUser = requireAuth(req as AuthedRequest, res);
-  if (!authUser) return;
-  try {
-    ok(res, sharedProfileSchema.parse(getSharedProfile(authUser.id, req.params.username)));
   } catch (error) {
     return badRequest(res, (error as Error).message);
   }
@@ -1083,7 +827,6 @@ app.put("/api/zones/:id/requirements", (req, res) => {
 });
 
 app.post("/api/zones/:id/gold-unlock", (req, res) => {
-  const authUser = (req as AuthedRequest).authUser;
   const zoneState = listOverlayState().find((entry) => entry.zone.id === req.params.id);
   if (!zoneState) {
     return res.status(404).json({ error: "zone not found" });
@@ -1099,7 +842,7 @@ app.post("/api/zones/:id/gold-unlock", (req, res) => {
   }
 
   try {
-    spendGold(10, authUser?.id);
+    spendGold(10);
   } catch (error) {
     return badRequest(res, (error as Error).message);
   }
@@ -1295,11 +1038,6 @@ wss.on("connection", (socket) => {
     } satisfies EventEnvelope),
   );
 });
-
-deleteExpiredSessions();
-setInterval(() => {
-  deleteExpiredSessions();
-}, 1000 * 60 * 60).unref();
 
 setInterval(() => {
   sendEvent("health", { timestamp: new Date().toISOString() });

@@ -1,6 +1,5 @@
 import type {
   AccountabilityState,
-  AuthResponse,
   CloudConnectionStatus,
   DetectedGameState,
   FriendRequest,
@@ -17,7 +16,6 @@ import type {
   Prediction,
   PredictionOutcome,
   ReflectionEntry,
-  SessionUser,
   SharedProfile,
   SocialSettings,
   Todo,
@@ -40,82 +38,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(text || `${res.status} ${res.statusText}`);
   }
   return (await res.json()) as T;
-}
-
-export async function getCurrentUser() {
-  return request<{ user: SessionUser | null }>("/api/auth/me");
-}
-
-export async function signUp(input: { username: string; email: string; password: string }) {
-  return request<AuthResponse>("/api/auth/signup", {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
-}
-
-export async function signIn(input: { login: string; password: string }) {
-  return request<AuthResponse>("/api/auth/signin", {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
-}
-
-export async function signOut() {
-  return request<{ signedOut: true }>("/api/auth/signout", {
-    method: "POST",
-  });
-}
-
-export async function getSocialSettings() {
-  return request<SocialSettings>("/api/social/settings");
-}
-
-export async function saveSocialSettings(settings: SocialSettings) {
-  return request<SocialSettings>("/api/social/settings", {
-    method: "PUT",
-    body: JSON.stringify(settings),
-  });
-}
-
-export async function searchSocialUsers(query: string) {
-  return request<{ items: FriendSearchResult[] }>(`/api/social/users?q=${encodeURIComponent(query)}`);
-}
-
-export async function listFriends() {
-  return request<{ items: FriendSummary[] }>("/api/social/friends");
-}
-
-export async function listFriendRequests() {
-  return request<{ incoming: FriendRequest[]; outgoing: FriendRequest[] }>("/api/social/friend-requests");
-}
-
-export async function sendFriendRequest(username: string) {
-  return request<FriendRequest>("/api/social/friend-requests", {
-    method: "POST",
-    body: JSON.stringify({ username }),
-  });
-}
-
-export async function acceptFriendRequest(requestId: string) {
-  return request<FriendRequest>(`/api/social/friend-requests/${requestId}/accept`, {
-    method: "POST",
-  });
-}
-
-export async function declineFriendRequest(requestId: string) {
-  return request<FriendRequest>(`/api/social/friend-requests/${requestId}/decline`, {
-    method: "POST",
-  });
-}
-
-export async function cancelFriendRequest(requestId: string) {
-  return request<FriendRequest>(`/api/social/friend-requests/${requestId}`, {
-    method: "DELETE",
-  });
-}
-
-export async function getSharedProfile(username: string) {
-  return request<SharedProfile>(`/api/social/users/${encodeURIComponent(username)}`);
 }
 
 export async function getCloudConnectionStatus() {
