@@ -152,16 +152,11 @@ const DEFAULT_OPTIONAL_REFLECTION_QUESTIONS: ReflectionQuestion[] = [
 ];
 
 const GOLD_PER_TODO = 5;
-const GOLD_STORAGE_KEY = "slaythelist.gold";
-const REWARDED_TODOS_STORAGE_KEY = "slaythelist.gold.rewardedTodoIds";
 const ZONE_IMAGE_OVERRIDES_STORAGE_KEY = "slaythelist.zoneImageOverrides";
 const AI_EXPAND_PROVIDER_STORAGE_KEY = "slaythelist.ai.expandProvider";
 const AI_GEMINI_API_KEY_STORAGE_KEY = "slaythelist.ai.geminiApiKey";
 const AI_OPENAI_API_KEY_STORAGE_KEY = "slaythelist.ai.openAiApiKey";
 const AI_EXPAND_CONTEXT_STORAGE_KEY = "slaythelist.ai.expandContextByTodoId";
-const LEGACY_HABITS_STORAGE_KEY = "slaythelist.habits";
-const LEGACY_PREDICTIONS_STORAGE_KEY = "slaythelist.predictions";
-const LEGACY_REFLECTIONS_STORAGE_KEY = "slaythelist.reflections";
 const PREDICTION_CALIBRATION_RESET_AT_STORAGE_KEY = "slaythelist.predictions.calibrationResetAt";
 const DEFAULT_PREDICTION_CONFIDENCE = 95;
 const CALIBRATION_CHART_WIDTH = 320;
@@ -690,29 +685,8 @@ export default function Page() {
         getGoldState(),
       ]);
       setTodos(todoData.items);
-      let nextGoldState = fetchedGoldState;
-      if (fetchedGoldState.gold === 0 && fetchedGoldState.rewardedTodoIds.length === 0) {
-        try {
-          const rawGold = window.localStorage.getItem(GOLD_STORAGE_KEY);
-          const parsedGold = rawGold ? Number(rawGold) : 0;
-          const rawRewarded = window.localStorage.getItem(REWARDED_TODOS_STORAGE_KEY);
-          const parsedRewarded = rawRewarded ? (JSON.parse(rawRewarded) as unknown) : [];
-          const migratedGold = Number.isFinite(parsedGold) && parsedGold >= 0 ? Math.floor(parsedGold) : 0;
-          const migratedRewarded = Array.isArray(parsedRewarded)
-            ? parsedRewarded.filter((value): value is string => typeof value === "string")
-            : [];
-          if (migratedGold > 0 || migratedRewarded.length > 0) {
-            nextGoldState = await saveGoldState({
-              gold: migratedGold,
-              rewardedTodoIds: migratedRewarded,
-            });
-          }
-        } catch {
-          // ignore invalid legacy local storage values
-        }
-      }
-      setGold(nextGoldState.gold);
-      setRewardedTodoIds(nextGoldState.rewardedTodoIds);
+      setGold(fetchedGoldState.gold);
+      setRewardedTodoIds(fetchedGoldState.rewardedTodoIds);
       setZones(zoneData.items);
       setOverlayState(overlayData);
       setGameStates(overlayData.gameStates ?? []);
@@ -865,48 +839,9 @@ export default function Page() {
   useEffect(() => {
     void runAction(async () => {
       const state = await getAccountabilityState();
-      let nextHabits = state.habits;
-      let nextPredictions = state.predictions;
-      let nextReflections = state.reflections;
-
-      const isApiEmpty =
-        nextHabits.length === 0 && nextPredictions.length === 0 && nextReflections.length === 0;
-      if (isApiEmpty) {
-        try {
-          const rawHabits = window.localStorage.getItem(LEGACY_HABITS_STORAGE_KEY);
-          const rawPredictions = window.localStorage.getItem(LEGACY_PREDICTIONS_STORAGE_KEY);
-          const rawReflections = window.localStorage.getItem(LEGACY_REFLECTIONS_STORAGE_KEY);
-          if (rawHabits) {
-            const parsed = JSON.parse(rawHabits) as Habit[];
-            if (Array.isArray(parsed)) nextHabits = parsed;
-          }
-          if (rawPredictions) {
-            const parsed = JSON.parse(rawPredictions) as Prediction[];
-            if (Array.isArray(parsed)) nextPredictions = parsed;
-          }
-          if (rawReflections) {
-            const parsed = JSON.parse(rawReflections) as ReflectionEntry[];
-            if (Array.isArray(parsed)) nextReflections = parsed;
-          }
-          if (
-            nextHabits.length > 0 ||
-            nextPredictions.length > 0 ||
-            nextReflections.length > 0
-          ) {
-            await saveAccountabilityState({
-              habits: nextHabits,
-              predictions: nextPredictions,
-              reflections: nextReflections,
-            });
-          }
-        } catch {
-          // ignore invalid local storage migration values
-        }
-      }
-
-      setHabits(nextHabits.map((habit) => ({ ...habit, status: habit.status ?? "active" })));
-      setPredictions(nextPredictions);
-      setReflections(nextReflections);
+      setHabits(state.habits.map((habit) => ({ ...habit, status: habit.status ?? "active" })));
+      setPredictions(state.predictions);
+      setReflections(state.reflections);
       accountabilityLoadedRef.current = true;
     });
   }, []);
@@ -1140,11 +1075,6 @@ export default function Page() {
       const nextGoldState = await saveGoldState({ gold: 0, rewardedTodoIds: [] });
       setGold(nextGoldState.gold);
       setRewardedTodoIds(nextGoldState.rewardedTodoIds);
-      try {
-        [GOLD_STORAGE_KEY, REWARDED_TODOS_STORAGE_KEY].forEach((key) => window.localStorage.removeItem(key));
-      } catch {
-        // ignore local storage access issues
-      }
       setShowSettingsModal(false);
     } catch (err) {
       setError(toErrorMessage(err));

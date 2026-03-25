@@ -681,48 +681,42 @@ app.put("/api/todos/reorder", (req, res) => {
 });
 
 app.get("/api/accountability-state", (req, res) => {
-  const authUser = (req as AuthedRequest).authUser;
-  ok(res, getAccountabilityState(authUser?.id));
+  ok(res, getAccountabilityState());
 });
 
 app.put("/api/accountability-state", (req, res) => {
-  const authUser = (req as AuthedRequest).authUser;
   const parsed = accountabilityStateSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
     return badRequest(res, `invalid accountability state: ${parsed.error.issues[0]?.message ?? "invalid payload"}`);
   }
-  const saved = saveAccountabilityState(parsed.data, authUser?.id);
+  const saved = saveAccountabilityState(parsed.data);
   ok(res, saved);
   triggerCloudSnapshotSync();
 });
 
 app.get("/api/gold-state", (req, res) => {
-  const authUser = (req as AuthedRequest).authUser;
-  ok(res, getGoldState(authUser?.id));
+  ok(res, getGoldState());
 });
 
 app.put("/api/gold-state", (req, res) => {
-  const authUser = (req as AuthedRequest).authUser;
   const parsed = goldStateSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
     return badRequest(res, `invalid gold state: ${parsed.error.issues[0]?.message ?? "invalid payload"}`);
   }
-  ok(res, saveGoldState(parsed.data, authUser?.id));
+  ok(res, saveGoldState(parsed.data));
   triggerCloudSnapshotSync();
 });
 
 app.post("/api/gold/award", (req, res) => {
-  const authUser = (req as AuthedRequest).authUser;
   const amount = req.body?.amount;
   if (typeof amount !== "number" || !Number.isInteger(amount) || amount < 0) {
     return badRequest(res, "amount must be a non-negative integer");
   }
-  ok(res, awardGold(amount, authUser?.id));
+  ok(res, awardGold(amount));
   triggerCloudSnapshotSync();
 });
 
 app.post("/api/gold/award-todo", (req, res) => {
-  const authUser = (req as AuthedRequest).authUser;
   const todoId = req.body?.todoId;
   const amount = req.body?.amount;
   if (typeof todoId !== "string" || !todoId.trim()) {
@@ -731,19 +725,17 @@ app.post("/api/gold/award-todo", (req, res) => {
   if (typeof amount !== "number" || !Number.isInteger(amount) || amount < 0) {
     return badRequest(res, "amount must be a non-negative integer");
   }
-  const result = awardTodoGold(todoId.trim(), amount, authUser?.id);
+  const result = awardTodoGold(todoId.trim(), amount);
   ok(res, result);
   triggerCloudSnapshotSync();
 });
 
 app.get("/api/habits", (req, res) => {
-  const authUser = (req as AuthedRequest).authUser;
-  const state = accountabilityStateSchema.parse(getAccountabilityState(authUser?.id));
+  const state = accountabilityStateSchema.parse(getAccountabilityState());
   ok(res, { items: state.habits });
 });
 
 app.post("/api/habits", (req, res) => {
-  const authUser = (req as AuthedRequest).authUser;
   const name = req.body?.name;
   const statusInput = req.body?.status;
   if (typeof name !== "string" || !name.trim()) {
@@ -753,7 +745,7 @@ app.post("/api/habits", (req, res) => {
   if (!statusParsed.success) {
     return badRequest(res, "status must be active, archived, or idea");
   }
-  const state = accountabilityStateSchema.parse(getAccountabilityState(authUser?.id));
+  const state = accountabilityStateSchema.parse(getAccountabilityState());
   const created = {
     id: randomUUID(),
     name: name.trim(),
@@ -761,13 +753,12 @@ app.post("/api/habits", (req, res) => {
     createdAt: Date.now(),
     status: statusParsed.data,
   };
-  saveAccountabilityState({ ...state, habits: [...state.habits, created] }, authUser?.id);
+  saveAccountabilityState({ ...state, habits: [...state.habits, created] });
   ok(res, created);
   triggerCloudSnapshotSync();
 });
 
 app.patch("/api/habits/:id", (req, res) => {
-  const authUser = (req as AuthedRequest).authUser;
   const patch = req.body ?? {};
   const nextName = patch.name;
   const nextStatus = patch.status;
@@ -784,7 +775,7 @@ app.patch("/api/habits/:id", (req, res) => {
   if (!checksParsed.success) {
     return badRequest(res, "checks must be an array of { date, done }");
   }
-  const state = accountabilityStateSchema.parse(getAccountabilityState(authUser?.id));
+  const state = accountabilityStateSchema.parse(getAccountabilityState());
   const index = state.habits.findIndex((habit) => habit.id === req.params.id);
   if (index < 0) {
     return res.status(404).json({ error: "habit not found" });
@@ -798,31 +789,28 @@ app.patch("/api/habits/:id", (req, res) => {
   };
   const nextHabits = [...state.habits];
   nextHabits[index] = updated;
-  saveAccountabilityState({ ...state, habits: nextHabits }, authUser?.id);
+  saveAccountabilityState({ ...state, habits: nextHabits });
   ok(res, updated);
   triggerCloudSnapshotSync();
 });
 
 app.delete("/api/habits/:id", (req, res) => {
-  const authUser = (req as AuthedRequest).authUser;
-  const state = accountabilityStateSchema.parse(getAccountabilityState(authUser?.id));
+  const state = accountabilityStateSchema.parse(getAccountabilityState());
   const nextHabits = state.habits.filter((habit) => habit.id !== req.params.id);
   if (nextHabits.length === state.habits.length) {
     return res.status(404).json({ error: "habit not found" });
   }
-  saveAccountabilityState({ ...state, habits: nextHabits }, authUser?.id);
+  saveAccountabilityState({ ...state, habits: nextHabits });
   ok(res, { deleted: true });
   triggerCloudSnapshotSync();
 });
 
 app.get("/api/predictions", (req, res) => {
-  const authUser = (req as AuthedRequest).authUser;
-  const state = accountabilityStateSchema.parse(getAccountabilityState(authUser?.id));
+  const state = accountabilityStateSchema.parse(getAccountabilityState());
   ok(res, { items: state.predictions });
 });
 
 app.post("/api/predictions", (req, res) => {
-  const authUser = (req as AuthedRequest).authUser;
   const title = req.body?.title;
   const confidence = req.body?.confidence;
   if (typeof title !== "string" || !title.trim()) {
@@ -831,7 +819,7 @@ app.post("/api/predictions", (req, res) => {
   if (typeof confidence !== "number" || !Number.isInteger(confidence) || confidence < 1 || confidence > 99) {
     return badRequest(res, "confidence must be an integer between 1 and 99");
   }
-  const state = accountabilityStateSchema.parse(getAccountabilityState(authUser?.id));
+  const state = accountabilityStateSchema.parse(getAccountabilityState());
   const created = {
     id: randomUUID(),
     title: title.trim(),
@@ -840,13 +828,12 @@ app.post("/api/predictions", (req, res) => {
     createdAt: Date.now(),
     resolvedAt: null,
   };
-  saveAccountabilityState({ ...state, predictions: [...state.predictions, created] }, authUser?.id);
+  saveAccountabilityState({ ...state, predictions: [...state.predictions, created] });
   ok(res, created);
   triggerCloudSnapshotSync();
 });
 
 app.patch("/api/predictions/:id", (req, res) => {
-  const authUser = (req as AuthedRequest).authUser;
   const patch = req.body ?? {};
   const nextTitle = patch.title;
   const nextConfidence = patch.confidence;
@@ -873,7 +860,7 @@ app.patch("/api/predictions/:id", (req, res) => {
   ) {
     return badRequest(res, "resolvedAt must be a number timestamp or null");
   }
-  const state = accountabilityStateSchema.parse(getAccountabilityState(authUser?.id));
+  const state = accountabilityStateSchema.parse(getAccountabilityState());
   const index = state.predictions.findIndex((prediction) => prediction.id === req.params.id);
   if (index < 0) {
     return res.status(404).json({ error: "prediction not found" });
@@ -899,31 +886,28 @@ app.patch("/api/predictions/:id", (req, res) => {
   };
   const nextPredictions = [...state.predictions];
   nextPredictions[index] = updated;
-  saveAccountabilityState({ ...state, predictions: nextPredictions }, authUser?.id);
+  saveAccountabilityState({ ...state, predictions: nextPredictions });
   ok(res, updated);
   triggerCloudSnapshotSync();
 });
 
 app.delete("/api/predictions/:id", (req, res) => {
-  const authUser = (req as AuthedRequest).authUser;
-  const state = accountabilityStateSchema.parse(getAccountabilityState(authUser?.id));
+  const state = accountabilityStateSchema.parse(getAccountabilityState());
   const nextPredictions = state.predictions.filter((prediction) => prediction.id !== req.params.id);
   if (nextPredictions.length === state.predictions.length) {
     return res.status(404).json({ error: "prediction not found" });
   }
-  saveAccountabilityState({ ...state, predictions: nextPredictions }, authUser?.id);
+  saveAccountabilityState({ ...state, predictions: nextPredictions });
   ok(res, { deleted: true });
   triggerCloudSnapshotSync();
 });
 
 app.get("/api/reflections", (req, res) => {
-  const authUser = (req as AuthedRequest).authUser;
-  const state = accountabilityStateSchema.parse(getAccountabilityState(authUser?.id));
+  const state = accountabilityStateSchema.parse(getAccountabilityState());
   ok(res, { items: state.reflections });
 });
 
 app.post("/api/reflections", (req, res) => {
-  const authUser = (req as AuthedRequest).authUser;
   const date = req.body?.date;
   if (typeof date !== "string" || !date.trim()) {
     return badRequest(res, "date is required");
@@ -939,14 +923,13 @@ app.post("/api/reflections", (req, res) => {
     createdAt: now,
     updatedAt: now,
   });
-  const state = accountabilityStateSchema.parse(getAccountabilityState(authUser?.id));
-  saveAccountabilityState({ ...state, reflections: [...state.reflections, created] }, authUser?.id);
+  const state = accountabilityStateSchema.parse(getAccountabilityState());
+  saveAccountabilityState({ ...state, reflections: [...state.reflections, created] });
   ok(res, created);
   triggerCloudSnapshotSync();
 });
 
 app.patch("/api/reflections/:id", (req, res) => {
-  const authUser = (req as AuthedRequest).authUser;
   const patch = req.body ?? {};
   const nextDate = patch.date;
   const nextWins = patch.wins;
@@ -968,7 +951,7 @@ app.patch("/api/reflections/:id", (req, res) => {
   if (nextTomorrow !== undefined && typeof nextTomorrow !== "string") {
     return badRequest(res, "tomorrow must be a string");
   }
-  const state = accountabilityStateSchema.parse(getAccountabilityState(authUser?.id));
+  const state = accountabilityStateSchema.parse(getAccountabilityState());
   const index = state.reflections.findIndex((reflection) => reflection.id === req.params.id);
   if (index < 0) {
     return res.status(404).json({ error: "reflection not found" });
@@ -985,19 +968,18 @@ app.patch("/api/reflections/:id", (req, res) => {
   });
   const nextReflections = [...state.reflections];
   nextReflections[index] = updated;
-  saveAccountabilityState({ ...state, reflections: nextReflections }, authUser?.id);
+  saveAccountabilityState({ ...state, reflections: nextReflections });
   ok(res, updated);
   triggerCloudSnapshotSync();
 });
 
 app.delete("/api/reflections/:id", (req, res) => {
-  const authUser = (req as AuthedRequest).authUser;
-  const state = accountabilityStateSchema.parse(getAccountabilityState(authUser?.id));
+  const state = accountabilityStateSchema.parse(getAccountabilityState());
   const nextReflections = state.reflections.filter((reflection) => reflection.id !== req.params.id);
   if (nextReflections.length === state.reflections.length) {
     return res.status(404).json({ error: "reflection not found" });
   }
-  saveAccountabilityState({ ...state, reflections: nextReflections }, authUser?.id);
+  saveAccountabilityState({ ...state, reflections: nextReflections });
   ok(res, { deleted: true });
   triggerCloudSnapshotSync();
 });

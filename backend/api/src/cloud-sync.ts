@@ -46,6 +46,12 @@ type CloudConnectionRow = {
   last_sync_error: string | null;
 };
 
+const DEFAULT_SOCIAL_SETTINGS: SocialSettings = {
+  habitsVisibility: "friends",
+  predictionsVisibility: "friends",
+  goldVisibility: "friends",
+};
+
 function configuredCloudBaseUrl() {
   return process.env.CLOUD_SOCIAL_BASE_URL?.trim() || null;
 }
@@ -98,6 +104,16 @@ function updateConnectionRow(patch: Partial<CloudConnectionRow>) {
     next.last_sync_state,
     next.last_sync_error,
   );
+}
+
+function getLocalSocialSettingsRow(): LocalSocialSettingsRow | undefined {
+  return db
+    .prepare(
+      `SELECT habits_visibility, predictions_visibility, gold_visibility
+       FROM local_social_settings
+       WHERE id = 1`,
+    )
+    .get() as LocalSocialSettingsRow | undefined;
 }
 
 function connectedUserFromRow(row: CloudConnectionRow): CloudIdentityUser | null {
@@ -165,19 +181,9 @@ export function isCloudSyncReady() {
 }
 
 export function getLocalSocialSettings(): SocialSettings {
-  const row = db
-    .prepare(
-      `SELECT habits_visibility, predictions_visibility, gold_visibility
-       FROM local_social_settings
-       WHERE id = 1`,
-    )
-    .get() as LocalSocialSettingsRow | undefined;
+  const row = getLocalSocialSettingsRow();
   if (!row) {
-    return {
-      habitsVisibility: "friends",
-      predictionsVisibility: "friends",
-      goldVisibility: "friends",
-    };
+    return DEFAULT_SOCIAL_SETTINGS;
   }
   return {
     habitsVisibility: row.habits_visibility,
@@ -187,17 +193,13 @@ export function getLocalSocialSettings(): SocialSettings {
 }
 
 export function saveLocalSocialSettings(settings: SocialSettings) {
+  const parsed = socialSettingsSchema.parse(settings);
   db.prepare(
     `UPDATE local_social_settings
      SET habits_visibility = ?, predictions_visibility = ?, gold_visibility = ?, updated_at = ?
      WHERE id = 1`,
-  ).run(
-    settings.habitsVisibility,
-    settings.predictionsVisibility,
-    settings.goldVisibility,
-    new Date().toISOString(),
-  );
-  return settings;
+  ).run(parsed.habitsVisibility, parsed.predictionsVisibility, parsed.goldVisibility, new Date().toISOString());
+  return parsed;
 }
 
 export function buildLocalSocialSnapshot(): SocialSnapshot {
@@ -367,7 +369,7 @@ export async function syncCloudSnapshot() {
 }
 
 export async function saveAndSyncLocalSocialSettings(settings: SocialSettings) {
-  const saved = saveLocalSocialSettings(socialSettingsSchema.parse(settings));
+  const saved = saveLocalSocialSettings(settings);
   const status = getCloudConnectionStatus();
   if (status.connected) {
     await syncCloudSnapshot();
