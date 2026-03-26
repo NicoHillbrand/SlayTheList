@@ -2,15 +2,28 @@
 
 import {
   CSSProperties,
-  DragEvent as ReactDragEvent,
+  Dispatch,
   FormEvent,
   KeyboardEvent as ReactKeyboardEvent,
+  MutableRefObject,
   PointerEvent,
+  SetStateAction,
   useEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragStartEvent,
+} from "@dnd-kit/core";
+import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { CSS as DndCSS } from "@dnd-kit/utilities";
 import type {
   GameState,
   GameStateReferenceImage,
@@ -471,6 +484,137 @@ function calculateHabitWeekStreak(habit: Habit, weekStart: Date, weekEnd: Date) 
     currentStart.setDate(currentStart.getDate() - 7);
     currentEnd.setDate(currentEnd.getDate() - 7);
   }
+}
+
+function SortableGoalRow({
+  todo,
+  todoRange,
+  todoFilter,
+  todoDrafts,
+  expandingTodoId,
+  expandContextByTodoId,
+  todoInputRefs,
+  toggleTodo,
+  autoResizeTextarea,
+  onTodoTitleKeyDown,
+  commitTodoTitle,
+  handleExpandTodo,
+  openExpansionContextModal,
+  openEditModal,
+  setTodoArchived,
+  removeTodo,
+  setTodoDrafts,
+}: {
+  todo: Todo;
+  todoRange: TodoRange;
+  todoFilter: TodoFilter;
+  todoDrafts: Record<string, string>;
+  expandingTodoId: string | null;
+  expandContextByTodoId: Record<string, string>;
+  todoInputRefs: MutableRefObject<Map<string, HTMLTextAreaElement>>;
+  toggleTodo: (todo: Todo, el: HTMLInputElement) => void;
+  autoResizeTextarea: (el: HTMLTextAreaElement) => void;
+  onTodoTitleKeyDown: (todo: Todo, event: ReactKeyboardEvent<HTMLTextAreaElement>) => void;
+  commitTodoTitle: (todo: Todo) => void;
+  handleExpandTodo: (todo: Todo) => void;
+  openExpansionContextModal: (todo: Todo) => void;
+  openEditModal: (todo: Todo) => void;
+  setTodoArchived: (todo: Todo, archived: boolean) => void;
+  removeTodo: (id: string) => void;
+  setTodoDrafts: Dispatch<SetStateAction<Record<string, string>>>;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: todo.id });
+  const style: CSSProperties = {
+    transform: DndCSS.Transform.toString(transform),
+    transition,
+    marginLeft: `${todo.indent * 18}px`,
+    opacity: isDragging ? 0 : 1,
+  };
+  return (
+    <li ref={setNodeRef} style={style} className={`goal-row ${todo.status === "done" ? "done" : ""}`}>
+      <div className="goal-main">
+        <button
+          type="button"
+          className="goal-drag-handle"
+          aria-label="Drag to reorder"
+          {...attributes}
+          {...listeners}
+        >
+          ⋮⋮
+        </button>
+        <input
+          type="checkbox"
+          checked={todo.status === "done"}
+          onChange={(event) => toggleTodo(todo, event.currentTarget)}
+          aria-label={`Toggle ${todo.title}`}
+        />
+        <textarea
+          ref={(node) => {
+            if (node) {
+              todoInputRefs.current.set(todo.id, node);
+              autoResizeTextarea(node);
+            } else {
+              todoInputRefs.current.delete(todo.id);
+            }
+          }}
+          value={todoDrafts[todo.id] ?? todo.title}
+          onChange={(event) => {
+            setTodoDrafts((prev) => ({ ...prev, [todo.id]: event.target.value }));
+            autoResizeTextarea(event.target);
+          }}
+          onKeyDown={(event) => onTodoTitleKeyDown(todo, event)}
+          onBlur={() => commitTodoTitle(todo)}
+          placeholder={
+            todo.title === ""
+              ? todoRange === "all"
+                ? "Add an item..."
+                : `Add a ${todoRange} item...`
+              : undefined
+          }
+          className="goal-title-input"
+          rows={1}
+        />
+        <div className="goal-actions">
+          {!todo.archivedAt && (
+            <button
+              type="button"
+              className="goal-expand-btn"
+              onClick={() => handleExpandTodo(todo)}
+              disabled={expandingTodoId === todo.id}
+              title="AI expand into 3-5 subtasks"
+              aria-label="AI expand into 3-5 subtasks"
+            >
+              {expandingTodoId === todo.id ? "…" : "+"}
+            </button>
+          )}
+          {!todo.archivedAt && (
+            <button
+              type="button"
+              className={`goal-context-btn ${expandContextByTodoId[todo.id] ? "has-context" : ""}`}
+              onClick={() => openExpansionContextModal(todo)}
+              title="Add expansion context"
+              aria-label="Add expansion context"
+            >
+              <span className="goal-context-icon" aria-hidden="true">🎤</span>
+            </button>
+          )}
+          {!todo.archivedAt && (
+            <button type="button" onClick={() => openEditModal(todo)}>Edit</button>
+          )}
+          {todo.archivedAt ? (
+            <>
+              <button type="button" onClick={() => setTodoArchived(todo, false)}>Restore</button>
+              <button type="button" onClick={() => removeTodo(todo.id)}>Delete</button>
+            </>
+          ) : todo.status === "done" || todoFilter === "completed" ? (
+            <button type="button" onClick={() => setTodoArchived(todo, true)}>Archive</button>
+          ) : (
+            <button type="button" onClick={() => removeTodo(todo.id)}>Delete</button>
+          )}
+        </div>
+      </div>
+    </li>
+  );
 }
 
 export default function Page() {
@@ -991,30 +1135,24 @@ export default function Page() {
     });
   }
 
-  function onTodoDragStart(todoId: string, event: ReactDragEvent<HTMLButtonElement>) {
-    setDraggingTodoId(todoId);
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", todoId);
+  const todoSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+
+  function handleTodoDragStart(event: DragStartEvent) {
+    setDraggingTodoId(event.active.id as string);
   }
 
-  function onTodoDrop(targetTodoId: string, event: ReactDragEvent<HTMLLIElement>) {
-    const draggedId = draggingTodoId || event.dataTransfer.getData("text/plain");
-    if (!draggedId || draggedId === targetTodoId) {
-      setDraggingTodoId(null);
-      return;
-    }
-    const visibleIds = filteredTodos.map((todo) => todo.id);
-    const fromIndex = visibleIds.indexOf(draggedId);
-    const toIndex = visibleIds.indexOf(targetTodoId);
-    if (fromIndex < 0 || toIndex < 0) {
-      setDraggingTodoId(null);
-      return;
-    }
-    const reorderedVisibleIds = [...visibleIds];
-    const [moved] = reorderedVisibleIds.splice(fromIndex, 1);
-    reorderedVisibleIds.splice(toIndex, 0, moved);
+  function handleTodoDragEnd(event: DragEndEvent) {
     setDraggingTodoId(null);
-    applyVisibleReorder(reorderedVisibleIds);
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const visibleIds = filteredTodos.map((t) => t.id);
+    const fromIndex = visibleIds.indexOf(active.id as string);
+    const toIndex = visibleIds.indexOf(over.id as string);
+    if (fromIndex < 0 || toIndex < 0) return;
+    const reordered = [...visibleIds];
+    const [moved] = reordered.splice(fromIndex, 1);
+    reordered.splice(toIndex, 0, moved);
+    applyVisibleReorder(reordered);
   }
 
   function copyVisibleGoalsToClipboard() {
@@ -1817,10 +1955,23 @@ export default function Page() {
       return true;
     });
     const rangeFiltered = statusFiltered.filter((todo) => {
-      if (todoFilter === "completed" || todoFilter === "archived" || todoRange === "all") {
+      if (todoFilter === "archived" || todoRange === "all") return true;
+      if (todoRange === "top") return true;
+      if (todoFilter === "completed") {
+        if (!todo.completedAt) return false;
+        const completedDate = new Date(todo.completedAt);
+        if (!Number.isFinite(completedDate.getTime())) return false;
+        const now = new Date();
+        const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        if (todoRange === "daily") return completedDate >= startOfToday;
+        const dayOfWeek = now.getDay();
+        const daysToMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+        const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysToMonday);
+        if (todoRange === "weekly") return completedDate >= startOfWeek;
+        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        if (todoRange === "monthly") return completedDate >= startOfMonth;
         return true;
       }
-      if (todoRange === "top") return true;
       const view = getViewForDeadline(todo.deadlineAt);
       if (todoRange === "monthly") return view === "daily" || view === "weekly" || view === "monthly";
       if (todoRange === "weekly") return view === "daily" || view === "weekly";
@@ -2522,100 +2673,51 @@ export default function Page() {
             {filteredTodos.length === 0 ? (
               <p className="goals-empty">No goals yet.</p>
             ) : (
-              <ul className="goals-list" onDragOver={(event) => event.preventDefault()}>
-                {filteredTodos.map((todo) => (
-                  <li
-                    key={todo.id}
-                    className={`goal-row ${todo.status === "done" ? "done" : ""}`}
-                    style={{ marginLeft: `${todo.indent * 18}px` }}
-                    onDragOver={(event) => event.preventDefault()}
-                    onDrop={(event) => onTodoDrop(todo.id, event)}
-                  >
-                    <div className="goal-main">
-                      <button
-                        type="button"
-                        className="goal-drag-handle"
-                        draggable
-                        onDragStart={(event) => onTodoDragStart(todo.id, event)}
-                        onDragEnd={() => setDraggingTodoId(null)}
-                        aria-label="Drag to reorder"
-                      >
-                        ⋮⋮
-                      </button>
-                      <input
-                        type="checkbox"
-                        checked={todo.status === "done"}
-                        onChange={(event) => toggleTodo(todo, event.currentTarget)}
-                        aria-label={`Toggle ${todo.title}`}
+              <DndContext
+                sensors={todoSensors}
+                onDragStart={handleTodoDragStart}
+                onDragEnd={handleTodoDragEnd}
+              >
+                <SortableContext items={filteredTodos.map((t) => t.id)} strategy={verticalListSortingStrategy}>
+                  <ul className="goals-list">
+                    {filteredTodos.map((todo) => (
+                      <SortableGoalRow
+                        key={todo.id}
+                        todo={todo}
+                        todoRange={todoRange}
+                        todoFilter={todoFilter}
+                        todoDrafts={todoDrafts}
+                        expandingTodoId={expandingTodoId}
+                        expandContextByTodoId={expandContextByTodoId}
+                        todoInputRefs={todoInputRefs}
+                        toggleTodo={toggleTodo}
+                        autoResizeTextarea={autoResizeTextarea}
+                        onTodoTitleKeyDown={onTodoTitleKeyDown}
+                        commitTodoTitle={commitTodoTitle}
+                        handleExpandTodo={handleExpandTodo}
+                        openExpansionContextModal={openExpansionContextModal}
+                        openEditModal={openEditModal}
+                        setTodoArchived={setTodoArchived}
+                        removeTodo={removeTodo}
+                        setTodoDrafts={setTodoDrafts}
                       />
-                      <textarea
-                        ref={(node) => {
-                          if (node) {
-                            todoInputRefs.current.set(todo.id, node);
-                            autoResizeTextarea(node);
-                          } else {
-                            todoInputRefs.current.delete(todo.id);
-                          }
-                        }}
-                        value={todoDrafts[todo.id] ?? todo.title}
-                        onChange={(event) => {
-                          setTodoDrafts((prev) => ({ ...prev, [todo.id]: event.target.value }));
-                          autoResizeTextarea(event.target);
-                        }}
-                        onKeyDown={(event) => onTodoTitleKeyDown(todo, event)}
-                        onBlur={() => commitTodoTitle(todo)}
-                        placeholder={
-                          todo.title === ""
-                            ? todoRange === "all"
-                              ? "Add an item..."
-                              : `Add a ${todoRange} item...`
-                            : undefined
-                        }
-                        className="goal-title-input"
-                        rows={1}
-                      />
-                      <div className="goal-actions">
-                        {!todo.archivedAt && (
-                          <button
-                            type="button"
-                            className="goal-expand-btn"
-                            onClick={() => handleExpandTodo(todo)}
-                            disabled={expandingTodoId === todo.id}
-                            title="AI expand into 3-5 subtasks"
-                            aria-label="AI expand into 3-5 subtasks"
-                          >
-                            {expandingTodoId === todo.id ? "…" : "+"}
-                          </button>
-                        )}
-                        {!todo.archivedAt && (
-                          <button
-                            type="button"
-                            className={`goal-context-btn ${expandContextByTodoId[todo.id] ? "has-context" : ""}`}
-                            onClick={() => openExpansionContextModal(todo)}
-                            title="Add expansion context"
-                            aria-label="Add expansion context"
-                          >
-                            <span className="goal-context-icon" aria-hidden="true">🎤</span>
-                          </button>
-                        )}
-                        {!todo.archivedAt && (
-                          <button type="button" onClick={() => openEditModal(todo)}>Edit</button>
-                        )}
-                        {todo.archivedAt ? (
-                          <>
-                            <button type="button" onClick={() => setTodoArchived(todo, false)}>Restore</button>
-                            <button type="button" onClick={() => removeTodo(todo.id)}>Delete</button>
-                          </>
-                        ) : todo.status === "done" || todoFilter === "completed" ? (
-                          <button type="button" onClick={() => setTodoArchived(todo, true)}>Archive</button>
-                        ) : (
-                          <button type="button" onClick={() => removeTodo(todo.id)}>Delete</button>
-                        )}
+                    ))}
+                  </ul>
+                </SortableContext>
+                <DragOverlay>
+                  {draggingTodoId ? (() => {
+                    const draggedTodo = todos.find((t) => t.id === draggingTodoId);
+                    return draggedTodo ? (
+                      <div className="goal-row goal-row-dragging">
+                        <div className="goal-main">
+                          <button type="button" className="goal-drag-handle" aria-hidden="true">⋮⋮</button>
+                          <span className="goal-title-input">{draggedTodo.title || "…"}</span>
+                        </div>
                       </div>
-                    </div>
-                  </li>
-                ))}
-              </ul>
+                    ) : null;
+                  })() : null}
+                </DragOverlay>
+              </DndContext>
             )}
             {todoFilter !== "completed" &&
               todoFilter !== "archived" &&

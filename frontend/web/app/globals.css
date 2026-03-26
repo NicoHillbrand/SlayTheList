@@ -304,9 +304,12 @@ body.desktop-app main {
   gap: 0.4rem;
 }
 
-.goal-main input[type="checkbox"],
 .goal-main .goal-drag-handle {
   margin-top: 0.3rem;
+}
+
+.goal-main input[type="checkbox"] {
+  margin-top: 0.53rem;
 }
 
 .goal-drag-handle {
@@ -325,6 +328,14 @@ body.desktop-app main {
 
 .goal-main input[type="checkbox"] {
   accent-color: #9a7d4e;
+}
+
+.goal-row-dragging {
+  background: #2a2720;
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  opacity: 0.95;
+  cursor: grabbing;
 }
 
 .goal-row.done .goal-title-input {
