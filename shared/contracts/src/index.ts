@@ -283,6 +283,7 @@ export const gameStateSchema = z.object({
   enabled: z.boolean(),
   detectionMethod: gameStateDetectionMethodSchema,
   matchThreshold: z.number().min(0).max(1),
+  alwaysDetect: z.boolean(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -295,6 +296,16 @@ export const gameStateReferenceImageSchema = z.object({
   createdAt: z.string(),
 });
 export type GameStateReferenceImage = z.infer<typeof gameStateReferenceImageSchema>;
+
+export const gameStateDetectionRegionSchema = z.object({
+  id: z.string(),
+  gameStateId: z.string(),
+  x: z.number().nonnegative(),
+  y: z.number().nonnegative(),
+  width: z.number().positive(),
+  height: z.number().positive(),
+});
+export type GameStateDetectionRegion = z.infer<typeof gameStateDetectionRegionSchema>;
 
 export const detectedGameStateSchema = z.object({
   gameStateId: z.string().nullable(),
@@ -316,6 +327,8 @@ export const lockZoneSchema = z.object({
   height: z.number().positive(),
   enabled: z.boolean(),
   unlockMode: lockZoneUnlockModeSchema,
+  cooldownEnabled: z.boolean(),
+  cooldownSeconds: z.number().int().positive(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -332,6 +345,7 @@ export const lockZoneStateSchema = z.object({
   requiredTodoIds: z.array(z.string()),
   requiredTodoTitles: z.array(z.string()),
   goldUnlockActive: z.boolean(),
+  cooldownExpiresAt: z.string().nullable(),
   isLocked: z.boolean(),
   activeForGameStateIds: z.array(z.string()),
   activeForCurrentState: z.boolean(),

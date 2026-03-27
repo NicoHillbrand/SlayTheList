@@ -325,6 +325,14 @@ export function revokeAccessToken(token: string) {
   db.prepare("DELETE FROM access_tokens WHERE token_hash = ?").run(hashOpaqueToken(token));
 }
 
+export function deleteExpiredAccessTokens(): void {
+  db.prepare("DELETE FROM access_tokens WHERE expires_at <= ?").run(new Date().toISOString());
+}
+
+// Purge expired tokens on startup and every hour to prevent unbounded table growth
+deleteExpiredAccessTokens();
+setInterval(() => deleteExpiredAccessTokens(), 60 * 60 * 1000).unref();
+
 export function updateCloudUsername(userId: string, username: string) {
   const trimmed = username.trim();
   if (!isValidUsername(trimmed)) {

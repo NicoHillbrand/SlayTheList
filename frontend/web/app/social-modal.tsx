@@ -327,9 +327,9 @@ export default function SocialModal({ open = false, onClose, embedded = false }:
 
       {!status?.configured ? (
         <section className="social-card">
-          <p className="settings-section-title">Cloud service not configured</p>
+          <p className="settings-section-title">Cloud sync unavailable</p>
           <p className="settings-section-copy">
-            Set `CLOUD_SOCIAL_BASE_URL` on the local API to point at your VPS or a local cloud-social dev server.
+            The cloud service URL has been explicitly unset. Remove the <code>CLOUD_SOCIAL_BASE_URL</code> override to restore the default server.
           </p>
         </section>
       ) : !status.connected ? (

@@ -103,12 +103,21 @@ app.post("/api/oauth/google/start", (_req, res) => {
   }
 });
 
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#x27;");
+}
+
 app.get("/api/oauth/google/callback", async (req, res) => {
   const state = typeof req.query.state === "string" ? req.query.state.trim() : "";
   const code = typeof req.query.code === "string" ? req.query.code.trim() : "";
   const error = typeof req.query.error === "string" ? req.query.error : "";
   if (error) {
-    res.status(400).send(`<html><body><h1>Google sign-in failed</h1><p>${error}</p></body></html>`);
+    res.status(400).send(`<html><body><h1>Google sign-in failed</h1><p>${escapeHtml(error)}</p></body></html>`);
     return;
   }
   if (!state || !code) {
@@ -118,11 +127,11 @@ app.get("/api/oauth/google/callback", async (req, res) => {
   try {
     const user = await completeGoogleAuthorization({ state, code });
     res.send(
-      `<html><body><h1>Connected</h1><p>@${user.username} is now linked to SlayTheList cloud sync. You can close this window.</p></body></html>`,
+      `<html><body><h1>Connected</h1><p>@${escapeHtml(user.username)} is now linked to SlayTheList cloud sync. You can close this window.</p></body></html>`,
     );
   } catch (callbackError) {
     res.status(400).send(
-      `<html><body><h1>Google sign-in failed</h1><p>${String((callbackError as Error).message ?? "Unknown error")}</p></body></html>`,
+      `<html><body><h1>Google sign-in failed</h1><p>${escapeHtml(String((callbackError as Error).message ?? "Unknown error"))}</p></body></html>`,
     );
   }
 });

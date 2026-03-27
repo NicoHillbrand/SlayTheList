@@ -52,8 +52,10 @@ const DEFAULT_SOCIAL_SETTINGS: SocialSettings = {
   goldVisibility: "friends",
 };
 
+const DEFAULT_CLOUD_BASE_URL = "https://slaythelist.nicohillbrand.com";
+
 function configuredCloudBaseUrl() {
-  return process.env.CLOUD_SOCIAL_BASE_URL?.trim() || null;
+  return process.env.CLOUD_SOCIAL_BASE_URL?.trim() || DEFAULT_CLOUD_BASE_URL;
 }
 
 function getConnectionRow(): CloudConnectionRow {
