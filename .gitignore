@@ -27,3 +27,6 @@ obj/
 
 # Electron packaging output
 desktop/app/dist*/
+
+# Claude Code local settings (user-specific permissions)
+.claude/settings.local.json

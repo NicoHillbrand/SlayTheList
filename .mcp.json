@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "slaythelist": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["tsx", "src/mcp.ts"],
+      "cwd": "backend/api"
+    }
+  }
+}
