@@ -34,6 +34,22 @@ function ensureLockZoneColumn(name: string, definition: string) {
   db.exec(`ALTER TABLE lock_zones ADD COLUMN ${name} ${definition};`);
 }
 
+function ensureLockZoneGoldUnlockColumn(name: string, definition: string) {
+  const existing = db
+    .prepare("SELECT 1 FROM pragma_table_info('lock_zone_gold_unlocks') WHERE name = ? LIMIT 1")
+    .get(name) as { 1: number } | undefined;
+  if (existing) return;
+  db.exec(`ALTER TABLE lock_zone_gold_unlocks ADD COLUMN ${name} ${definition};`);
+}
+
+function ensureGameStateColumn(name: string, definition: string) {
+  const existing = db
+    .prepare("SELECT 1 FROM pragma_table_info('game_states') WHERE name = ? LIMIT 1")
+    .get(name) as { 1: number } | undefined;
+  if (existing) return;
+  db.exec(`ALTER TABLE game_states ADD COLUMN ${name} ${definition};`);
+}
+
 db.exec(`
 CREATE TABLE IF NOT EXISTS todos (
   id TEXT PRIMARY KEY,
@@ -184,6 +200,16 @@ CREATE TABLE IF NOT EXISTS lock_zone_game_states (
   FOREIGN KEY(game_state_id) REFERENCES game_states(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS game_state_detection_regions (
+  id TEXT PRIMARY KEY,
+  game_state_id TEXT NOT NULL,
+  x REAL NOT NULL,
+  y REAL NOT NULL,
+  width REAL NOT NULL,
+  height REAL NOT NULL,
+  FOREIGN KEY(game_state_id) REFERENCES game_states(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS detected_game_state (
   id INTEGER PRIMARY KEY CHECK(id = 1),
   game_state_id TEXT,
@@ -311,6 +337,10 @@ ensureTodoColumn("deadline_at", "TEXT");
 ensureTodoColumn("archived_at", "TEXT");
 ensureTodoColumn("completed_at", "TEXT");
 ensureLockZoneColumn("unlock_mode", "TEXT NOT NULL DEFAULT 'todos' CHECK(unlock_mode IN ('todos', 'gold'))");
+ensureLockZoneColumn("cooldown_enabled", "INTEGER NOT NULL DEFAULT 0");
+ensureLockZoneColumn("cooldown_seconds", "INTEGER NOT NULL DEFAULT 3600");
+ensureLockZoneGoldUnlockColumn("expires_at", "TEXT");
+ensureGameStateColumn("always_detect", "INTEGER NOT NULL DEFAULT 0");
 
 const existingStateRow = db
   .prepare("SELECT 1 FROM accountability_state WHERE id = 1 LIMIT 1")

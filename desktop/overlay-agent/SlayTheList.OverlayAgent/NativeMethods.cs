@@ -63,6 +63,17 @@ internal static class NativeMethods
     [DllImport("user32.dll")]
     public static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
 
+    [DllImport("user32.dll")]
+    public static extern int GetSystemMetrics(int nIndex);
+
+    [DllImport("gdi32.dll")]
+    public static extern bool BitBlt(IntPtr hdc, int nXDest, int nYDest, int nWidth, int nHeight,
+        IntPtr hdcSrc, int nXSrc, int nYSrc, uint dwRop);
+
+    private const int SmCxScreen = 0;
+    private const int SmCyScreen = 1;
+    private const uint SrcCopy = 0x00CC0020;
+
     [StructLayout(LayoutKind.Sequential)]
     public struct RECT
     {
@@ -127,6 +138,38 @@ internal static class NativeMethods
         SelectObject(hdcMem, hOld);
         DeleteDC(hdcMem);
         ReleaseDC(hWnd, hdcWindow);
+
+        try
+        {
+            using var bitmap = System.Drawing.Image.FromHbitmap(hBitmap);
+            DeleteObject(hBitmap);
+            using var ms = new System.IO.MemoryStream();
+            bitmap.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+            return ms.ToArray();
+        }
+        catch
+        {
+            DeleteObject(hBitmap);
+            return null;
+        }
+    }
+
+    public static byte[]? CaptureScreen()
+    {
+        var width = GetSystemMetrics(SmCxScreen);
+        var height = GetSystemMetrics(SmCyScreen);
+        if (width <= 0 || height <= 0) return null;
+
+        var hdcScreen = GetDC(IntPtr.Zero);
+        var hdcMem = CreateCompatibleDC(hdcScreen);
+        var hBitmap = CreateCompatibleBitmap(hdcScreen, width, height);
+        var hOld = SelectObject(hdcMem, hBitmap);
+
+        BitBlt(hdcMem, 0, 0, width, height, hdcScreen, 0, 0, SrcCopy);
+
+        SelectObject(hdcMem, hOld);
+        DeleteDC(hdcMem);
+        ReleaseDC(IntPtr.Zero, hdcScreen);
 
         try
         {

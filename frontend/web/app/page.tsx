@@ -26,6 +26,7 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-
 import { CSS as DndCSS } from "@dnd-kit/utilities";
 import type {
   GameState,
+  GameStateDetectionRegion,
   GameStateReferenceImage,
   Habit,
   HabitStatus,
@@ -49,6 +50,7 @@ import {
   getAccountabilityState,
   getGoldState,
   getOverlayState,
+  listDetectionRegions as listDetectionRegionsApi,
   listReferenceImages,
   listTodos,
   listZones,
@@ -59,11 +61,13 @@ import {
   saveGoldState,
   saveAccountabilityState,
   setDetectedGameState as setDetectedGameStateApi,
+  setDetectionRegions as setDetectionRegionsApi,
   testDetection as testDetectionApi,
   type DetectionTestResult,
   setZoneGameStates as setZoneGameStatesApi,
   awardGold as awardGoldApi,
   awardTodoGold as awardTodoGoldApi,
+  deductGold as deductGoldApi,
   setTodoStatus,
   setZoneRequirements,
   updateGameState as updateGameStateApi,
@@ -317,6 +321,27 @@ function getViewForDeadline(deadlineAt: string | null): TodoRange {
   return "all";
 }
 
+function getSubTodos(todo: Todo, allTodos: Todo[]): Todo[] {
+  const idx = allTodos.findIndex((t) => t.id === todo.id);
+  if (idx === -1) return [];
+  const subs: Todo[] = [];
+  for (let i = idx + 1; i < allTodos.length; i++) {
+    if (allTodos[i].indent <= todo.indent) break;
+    subs.push(allTodos[i]);
+  }
+  return subs;
+}
+
+function getParentTodo(todo: Todo, allTodos: Todo[]): Todo | null {
+  if (todo.indent === 0) return null;
+  const idx = allTodos.findIndex((t) => t.id === todo.id);
+  if (idx === -1) return null;
+  for (let i = idx - 1; i >= 0; i--) {
+    if (allTodos[i].indent < todo.indent) return allTodos[i];
+  }
+  return null;
+}
+
 function deadlineToDateInput(deadlineAt: string | null): string {
   if (!deadlineAt) return "";
   const date = new Date(deadlineAt);
@@ -503,6 +528,7 @@ function SortableGoalRow({
   openEditModal,
   setTodoArchived,
   removeTodo,
+  pushToNextDay,
   setTodoDrafts,
 }: {
   todo: Todo;
@@ -521,6 +547,7 @@ function SortableGoalRow({
   openEditModal: (todo: Todo) => void;
   setTodoArchived: (todo: Todo, archived: boolean) => void;
   removeTodo: (id: string) => void;
+  pushToNextDay: (todo: Todo) => void;
   setTodoDrafts: Dispatch<SetStateAction<Record<string, string>>>;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: todo.id });
@@ -596,6 +623,15 @@ function SortableGoalRow({
               aria-label="Add expansion context"
             >
               <span className="goal-context-icon" aria-hidden="true">🎤</span>
+            </button>
+          )}
+          {!todo.archivedAt && todo.status !== "done" && !!todo.deadlineAt && (
+            <button
+              type="button"
+              onClick={() => pushToNextDay(todo)}
+              title="Push deadline to next day (sub-todos move too)"
+            >
+              +1d
             </button>
           )}
           {!todo.archivedAt && (
@@ -679,6 +715,9 @@ export default function Page() {
   const [newGameStateName, setNewGameStateName] = useState("");
   const [selectedGameStateId, setSelectedGameStateId] = useState<string | null>(null);
   const [gameStateRefImages, setGameStateRefImages] = useState<Map<string, GameStateReferenceImage[]>>(new Map());
+  const [gameStateDetectionRegions, setGameStateDetectionRegions] = useState<Map<string, GameStateDetectionRegion[]>>(new Map());
+  const [regionDrag, setRegionDrag] = useState<{ gsId: string; startX: number; startY: number; currentX: number; currentY: number; active: boolean } | null>(null);
+  const [, setCooldownTick] = useState(0);
   const [blockSubtab, setBlockSubtab] = useState<"zones" | "game-states">("zones");
   const [detectionTestResults, setDetectionTestResults] = useState<DetectionTestResult[] | null>(null);
   const [detectionTestImage, setDetectionTestImage] = useState<string | null>(null);
@@ -861,19 +900,51 @@ export default function Page() {
   }, []);
 
   useEffect(() => {
-    const ws = new WebSocket(overlayWebSocketUrl());
-    ws.onmessage = (event) => {
-      try {
-        const parsed = JSON.parse(event.data) as { type?: string };
-        if (parsed.type === "overlay_state") {
-          void refresh(false);
+    let ws: WebSocket | null = null;
+    let backoffMs = 1000;
+    let stopped = false;
+    let retryTimer: number | undefined;
+
+    function connect() {
+      if (stopped) return;
+      ws = new WebSocket(overlayWebSocketUrl());
+      ws.onmessage = (event) => {
+        try {
+          const parsed = JSON.parse(event.data) as { type?: string };
+          if (parsed.type === "overlay_state") {
+            void refresh(false);
+          }
+        } catch {
+          // ignore non-json payloads
         }
-      } catch {
-        // ignore non-json payloads
-      }
+      };
+      ws.onclose = () => {
+        if (!stopped) {
+          retryTimer = window.setTimeout(() => {
+            backoffMs = Math.min(backoffMs * 2, 16_000);
+            connect();
+          }, backoffMs);
+        }
+      };
+      ws.onerror = () => {
+        ws?.close();
+      };
+    }
+
+    connect();
+    return () => {
+      stopped = true;
+      window.clearTimeout(retryTimer);
+      ws?.close();
     };
-    return () => ws.close();
   }, []);
+
+  useEffect(() => {
+    const hasActiveCooldown = overlayState?.zones.some((z) => z.cooldownExpiresAt != null) ?? false;
+    if (!hasActiveCooldown) return;
+    const id = window.setInterval(() => setCooldownTick((t) => t + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [overlayState]);
 
   useEffect(() => {
     const uniqueSources = [...new Set(GOLD_SOUND_OPTIONS.flatMap((option) => option.steps.map((step) => step.src)))];
@@ -1010,6 +1081,7 @@ export default function Page() {
   useEffect(() => {
     if (!selectedGameStateId) return;
     void loadRefImages(selectedGameStateId);
+    void loadDetectionRegions(selectedGameStateId);
   }, [selectedGameStateId]);
 
   useEffect(() => {
@@ -1178,13 +1250,46 @@ export default function Page() {
 
   function saveEditModal() {
     if (!editingTodoId) return;
+    const editingTodo = todos.find((t) => t.id === editingTodoId);
+    if (!editingTodo) return;
     const nextTitle = editTitle;
+    let newDeadline = dateInputToDeadline(editDeadline);
+
+    // Clamp sub-todo deadline: can't be earlier than parent's deadline
+    if (newDeadline) {
+      const parent = getParentTodo(editingTodo, todos);
+      if (parent?.deadlineAt && new Date(newDeadline) < new Date(parent.deadlineAt)) {
+        newDeadline = parent.deadlineAt;
+      }
+    }
+
     void runAction(async () => {
-      await updateTodo(editingTodoId, {
-        title: nextTitle,
-        deadlineAt: dateInputToDeadline(editDeadline),
-      });
+      await updateTodo(editingTodoId, { title: nextTitle, deadlineAt: newDeadline });
+      // Bump any sub-todos that are now earlier than the new deadline
+      if (newDeadline) {
+        const newDeadlineDate = new Date(newDeadline);
+        for (const sub of getSubTodos(editingTodo, todos)) {
+          if (!sub.deadlineAt || new Date(sub.deadlineAt) < newDeadlineDate) {
+            await updateTodo(sub.id, { deadlineAt: newDeadline });
+          }
+        }
+      }
       closeEditModal();
+      await refresh();
+    });
+  }
+
+  function pushToNextDay(todo: Todo) {
+    void runAction(async () => {
+      const base = todo.deadlineAt ? new Date(todo.deadlineAt) : new Date();
+      const next = new Date(base.getFullYear(), base.getMonth(), base.getDate() + 1, 23, 59, 59);
+      const newDeadline = next.toISOString();
+      await updateTodo(todo.id, { deadlineAt: newDeadline });
+      for (const sub of getSubTodos(todo, todos)) {
+        if (!sub.deadlineAt || new Date(sub.deadlineAt) < next) {
+          await updateTodo(sub.id, { deadlineAt: newDeadline });
+        }
+      }
       await refresh();
     });
   }
@@ -1620,6 +1725,16 @@ export default function Page() {
     });
   }
 
+  function setZoneCooldown(zoneId: string, cooldownEnabled: boolean, cooldownSeconds: number) {
+    setZones((previous) =>
+      previous.map((zone) => (zone.id === zoneId ? { ...zone, cooldownEnabled, cooldownSeconds } : zone)),
+    );
+    void runAction(async () => {
+      await updateZone(zoneId, { cooldownEnabled, cooldownSeconds });
+      await refresh();
+    });
+  }
+
   function unlockZoneWithGold(zoneId: string) {
     const zoneState = overlayState?.zones.find((entry) => entry.zone.id === zoneId);
     if (!zoneState) return;
@@ -1673,7 +1788,7 @@ export default function Page() {
     });
   }
 
-  function patchGameState(id: string, patch: Partial<{ name: string; enabled: boolean; matchThreshold: number }>) {
+  function patchGameState(id: string, patch: Partial<{ name: string; enabled: boolean; matchThreshold: number; alwaysDetect: boolean }>) {
     void runAction(async () => {
       const updated = await updateGameStateApi(id, patch);
       setGameStates((prev) => prev.map((gs) => (gs.id === updated.id ? updated : gs)));
@@ -1683,6 +1798,58 @@ export default function Page() {
   async function loadRefImages(gameStateId: string) {
     const result = await listReferenceImages(gameStateId);
     setGameStateRefImages((prev) => new Map(prev).set(gameStateId, result.items));
+  }
+
+  async function loadDetectionRegions(gameStateId: string) {
+    const result = await listDetectionRegionsApi(gameStateId);
+    setGameStateDetectionRegions((prev) => new Map(prev).set(gameStateId, result.items));
+  }
+
+  async function saveDetectionRegionsForState(gameStateId: string, regions: GameStateDetectionRegion[]) {
+    const saved = await setDetectionRegionsApi(gameStateId, regions.map(({ x, y, width, height }) => ({ x, y, width, height })));
+    setGameStateDetectionRegions((prev) => new Map(prev).set(gameStateId, saved.items));
+  }
+
+  function onRegionEditorPointerDown(gsId: string, event: React.PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const rect = event.currentTarget.getBoundingClientRect();
+    const scaleX = 1280 / rect.width;
+    const scaleY = 720 / rect.height;
+    const x = (event.clientX - rect.left) * scaleX;
+    const y = (event.clientY - rect.top) * scaleY;
+    setRegionDrag({ gsId, startX: x, startY: y, currentX: x, currentY: y, active: false });
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function onRegionEditorPointerMove(gsId: string, event: React.PointerEvent<HTMLDivElement>) {
+    if (!regionDrag || regionDrag.gsId !== gsId) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const scaleX = 1280 / rect.width;
+    const scaleY = 720 / rect.height;
+    const x = Math.max(0, Math.min(1280, (event.clientX - rect.left) * scaleX));
+    const y = Math.max(0, Math.min(720, (event.clientY - rect.top) * scaleY));
+    setRegionDrag((prev) => prev ? { ...prev, currentX: x, currentY: y, active: true } : prev);
+  }
+
+  function onRegionEditorPointerUp(gsId: string, event: React.PointerEvent<HTMLDivElement>) {
+    if (!regionDrag || regionDrag.gsId !== gsId) { setRegionDrag(null); return; }
+    const x = Math.min(regionDrag.startX, regionDrag.currentX);
+    const y = Math.min(regionDrag.startY, regionDrag.currentY);
+    const width = Math.abs(regionDrag.startX - regionDrag.currentX);
+    const height = Math.abs(regionDrag.startY - regionDrag.currentY);
+    setRegionDrag(null);
+    if (width < 10 || height < 10) return;
+    const existing = gameStateDetectionRegions.get(gsId) ?? [];
+    const newRegion: GameStateDetectionRegion = { id: crypto.randomUUID(), gameStateId: gsId, x, y, width, height };
+    const updated = [...existing, newRegion];
+    void saveDetectionRegionsForState(gsId, updated);
+  }
+
+  function removeDetectionRegion(gsId: string, regionId: string) {
+    const existing = gameStateDetectionRegions.get(gsId) ?? [];
+    const updated = existing.filter((r) => r.id !== regionId);
+    void saveDetectionRegionsForState(gsId, updated);
   }
 
   function handleRefImageUpload(gameStateId: string, files: FileList | null) {
@@ -1941,11 +2108,20 @@ export default function Page() {
     return [...others, ...selected];
   }, [zones, selectedZoneIds]);
   const progress = useMemo(() => {
-    const activeTodos = todos.filter((todo) => !todo.archivedAt);
-    if (activeTodos.length === 0) return 0;
-    const done = activeTodos.filter((todo) => todo.status === "done").length;
-    return Math.round((done / activeTodos.length) * 100);
-  }, [todos]);
+    const nonArchived = todos.filter((todo) => !todo.archivedAt);
+    const rangeForProgress = todoRange === "top" ? "daily" : todoRange;
+    const inView = rangeForProgress === "all"
+      ? nonArchived
+      : nonArchived.filter((todo) => {
+          const view = getViewForDeadline(todo.deadlineAt);
+          if (rangeForProgress === "monthly") return view === "daily" || view === "weekly" || view === "monthly";
+          if (rangeForProgress === "weekly") return view === "daily" || view === "weekly";
+          return view === "daily";
+        });
+    if (inView.length === 0) return 0;
+    const done = inView.filter((todo) => todo.status === "done").length;
+    return Math.round((done / inView.length) * 100);
+  }, [todos, todoRange]);
 
   const filteredTodos = useMemo(() => {
     const statusFiltered = todos.filter((todo) => {
@@ -2146,6 +2322,15 @@ export default function Page() {
     });
   }
 
+  function deductHabitGold(streak: number) {
+    const deductAmount = 4 + streak;
+    void runAction(async () => {
+      const nextGoldState = await deductGoldApi(deductAmount);
+      setGold(nextGoldState.gold);
+      setRewardedTodoIds(nextGoldState.rewardedTodoIds);
+    });
+  }
+
   function addHabit(status: HabitStatus = "active") {
     const nextName = newHabitName.trim();
     if (!nextName) return;
@@ -2163,62 +2348,67 @@ export default function Page() {
   }
 
   function toggleHabitDay(habitId: string, dateKey: string, sourceElement: HTMLElement | null = null) {
-    let rewardedHabit: Habit | null = null;
-    let streak = 0;
+    const habit = habits.find((h) => h.id === habitId);
+    if (!habit) return;
+    const hasCheck = habit.checks.some((check) => check.date === dateKey && check.done);
+    if (!hasCheck) {
+      const nextHabit = {
+        ...habit,
+        checks: [...habit.checks.filter((check) => check.date !== dateKey), { date: dateKey, done: true }],
+      };
+      const streak = calculateHabitDayStreak(nextHabit, dateKey);
+      awardHabitGold(streak, sourceElement);
+    } else {
+      const streak = calculateHabitDayStreak(habit, dateKey);
+      deductHabitGold(streak);
+    }
     setHabits((prev) =>
-      prev.map((habit) => {
-        if (habit.id !== habitId) return habit;
-        const hasCheck = habit.checks.some((check) => check.date === dateKey && check.done);
-        const nextHabit = {
-          ...habit,
+      prev.map((h) => {
+        if (h.id !== habitId) return h;
+        return {
+          ...h,
           checks: hasCheck
-            ? habit.checks.filter((check) => check.date !== dateKey)
-            : [...habit.checks.filter((check) => check.date !== dateKey), { date: dateKey, done: true }],
+            ? h.checks.filter((check) => check.date !== dateKey)
+            : [...h.checks.filter((check) => check.date !== dateKey), { date: dateKey, done: true }],
         };
-        if (!hasCheck) {
-          rewardedHabit = nextHabit;
-          streak = calculateHabitDayStreak(nextHabit, dateKey);
-        }
-        return nextHabit;
       }),
     );
-    if (rewardedHabit) {
-      awardHabitGold(streak, sourceElement);
-    }
   }
 
   function toggleHabitWeek(habitId: string, weekStart: Date, weekEnd: Date, sourceElement: HTMLElement | null = null) {
-    let rewardedHabit: Habit | null = null;
-    let streak = 0;
+    const habit = habits.find((h) => h.id === habitId);
+    if (!habit) return;
+    const doneInWeek = habit.checks.some((check) => {
+      if (!check.done) return false;
+      const checkDate = parseDateKey(check.date);
+      return checkDate >= weekStart && checkDate <= weekEnd;
+    });
+    if (!doneInWeek) {
+      const nextHabit = {
+        ...habit,
+        checks: [...habit.checks, { date: getDateKey(weekEnd), done: true }],
+      };
+      const streak = calculateHabitWeekStreak(nextHabit, weekStart, weekEnd);
+      awardHabitGold(streak, sourceElement);
+    } else {
+      const streak = calculateHabitWeekStreak(habit, weekStart, weekEnd);
+      deductHabitGold(streak);
+    }
     setHabits((prev) =>
-      prev.map((habit) => {
-        if (habit.id !== habitId) return habit;
-        const doneInWeek = habit.checks.some((check) => {
-          if (!check.done) return false;
-          const checkDate = parseDateKey(check.date);
-          return checkDate >= weekStart && checkDate <= weekEnd;
-        });
+      prev.map((h) => {
+        if (h.id !== habitId) return h;
         if (doneInWeek) {
           return {
-            ...habit,
-            checks: habit.checks.filter((check) => {
+            ...h,
+            checks: h.checks.filter((check) => {
               const checkDate = parseDateKey(check.date);
               return checkDate < weekStart || checkDate > weekEnd;
             }),
           };
         }
-        const nextHabit = {
-          ...habit,
-          checks: [...habit.checks, { date: getDateKey(weekEnd), done: true }],
-        };
-        rewardedHabit = nextHabit;
-        streak = calculateHabitWeekStreak(nextHabit, weekStart, weekEnd);
-        return nextHabit;
+        return { ...h, checks: [...h.checks, { date: getDateKey(weekEnd), done: true }] };
       }),
     );
-    if (rewardedHabit) {
-      awardHabitGold(streak, sourceElement);
-    }
   }
 
   function deleteHabit(habitId: string) {
@@ -2699,6 +2889,7 @@ export default function Page() {
                         openEditModal={openEditModal}
                         setTodoArchived={setTodoArchived}
                         removeTodo={removeTodo}
+                        pushToNextDay={pushToNextDay}
                         setTodoDrafts={setTodoDrafts}
                       />
                     ))}
@@ -3912,6 +4103,8 @@ export default function Page() {
                 const zoneState = overlayState?.zones.find((entry) => entry.zone.id === zone.id);
                 const isLocked = zoneState?.isLocked ?? false;
                 const goldUnlockActive = zoneState?.goldUnlockActive ?? false;
+                const cooldownExpiresAt = zoneState?.cooldownExpiresAt ?? null;
+                const cooldownRemainingSec = cooldownExpiresAt ? Math.max(0, Math.round((new Date(cooldownExpiresAt).getTime() - Date.now()) / 1000)) : null;
                 return (
                   <article
                     key={zone.id}
@@ -3964,7 +4157,11 @@ export default function Page() {
                     </div>
 
                     <p style={{ margin: 0, color: isLocked ? "#fca5a5" : "#86efac" }}>
-                      {isLocked ? "Locked in game" : goldUnlockActive ? "Unlocked with gold" : "Unlocked in game"}
+                      {isLocked ? "Locked in game" : goldUnlockActive
+                        ? cooldownRemainingSec !== null
+                          ? `Unlocked with gold — re-locks in ${cooldownRemainingSec}s`
+                          : "Unlocked with gold"
+                        : "Unlocked in game"}
                     </p>
 
                     <div style={{ display: "grid", gap: "0.25rem" }}>
@@ -3972,6 +4169,31 @@ export default function Page() {
                       {zone.unlockMode === "gold" ? (
                         <>
                           <small>Click the locked block and pay {ZONE_GOLD_UNLOCK_COST} gold to unlock it.</small>
+                          <label style={{ display: "flex", gap: "0.4rem", alignItems: "center", marginTop: "0.25rem" }} onClick={(e) => e.stopPropagation()}>
+                            <input
+                              type="checkbox"
+                              checked={zone.cooldownEnabled}
+                              onChange={() => setZoneCooldown(zone.id, !zone.cooldownEnabled, zone.cooldownSeconds)}
+                            />
+                            <small>Auto re-lock after cooldown</small>
+                          </label>
+                          {zone.cooldownEnabled && (
+                            <label style={{ display: "flex", gap: "0.4rem", alignItems: "center" }} onClick={(e) => e.stopPropagation()}>
+                              <small>Cooldown (seconds):</small>
+                              <input
+                                type="number"
+                                min={60}
+                                step={60}
+                                value={zone.cooldownSeconds}
+                                onChange={(e) => {
+                                  const v = Number(e.target.value);
+                                  setZones((prev) => prev.map((z) => z.id === zone.id ? { ...z, cooldownSeconds: v } : z));
+                                }}
+                                onBlur={() => setZoneCooldown(zone.id, zone.cooldownEnabled, zone.cooldownSeconds)}
+                                style={{ width: 80 }}
+                              />
+                            </label>
+                          )}
                           {goldUnlockActive && (
                             <button
                               type="button"
@@ -4288,6 +4510,18 @@ export default function Page() {
                         <small>{(gs.matchThreshold * 100).toFixed(0)}%</small>
                       </label>
                       <small style={{ opacity: 0.5 }}>Method: {gs.detectionMethod.replace(/_/g, " ")}</small>
+                      <label
+                        onClick={(event) => event.stopPropagation()}
+                        style={{ display: "flex", gap: "0.3rem", alignItems: "center", cursor: "pointer" }}
+                        title="When enabled, this state is detected continuously even when the game window is not in focus (captures full primary screen instead of just the game window)"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={gs.alwaysDetect}
+                          onChange={() => patchGameState(gs.id, { alwaysDetect: !gs.alwaysDetect })}
+                        />
+                        <small>Always detect</small>
+                      </label>
                     </div>
 
                     <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
@@ -4322,6 +4556,7 @@ export default function Page() {
                     </div>
 
                     {isSelected && (
+                      <>
                       <div style={{ borderTop: "1px solid #374151", paddingTop: "0.5rem" }}>
                         <strong>Reference Screenshots</strong>
                         <p style={{ opacity: 0.7, fontSize: "0.85rem", margin: "0.25rem 0 0.5rem" }}>
@@ -4419,6 +4654,73 @@ export default function Page() {
                           </div>
                         )}
                       </div>
+
+                      {/* Detection Region Editor */}
+                      <div style={{ borderTop: "1px solid #374151", paddingTop: "0.5rem" }}>
+                        <strong>Detection Regions</strong>
+                        <p style={{ opacity: 0.7, fontSize: "0.85rem", margin: "0.25rem 0 0.5rem" }}>
+                          Drag to draw boxes on the image below to restrict detection to specific areas (e.g. a logo in the corner). Leave empty to compare the full image.
+                        </p>
+                        {(() => {
+                          const regions = gameStateDetectionRegions.get(gs.id) ?? [];
+                          const bgImage = refImages[0] ? referenceImageUrl(gs.id, refImages[0].filename) : undefined;
+                          const activeDrag = regionDrag?.gsId === gs.id && regionDrag.active ? regionDrag : null;
+                          const dragPreviewX = activeDrag ? Math.min(activeDrag.startX, activeDrag.currentX) : 0;
+                          const dragPreviewY = activeDrag ? Math.min(activeDrag.startY, activeDrag.currentY) : 0;
+                          const dragPreviewW = activeDrag ? Math.abs(activeDrag.startX - activeDrag.currentX) : 0;
+                          const dragPreviewH = activeDrag ? Math.abs(activeDrag.startY - activeDrag.currentY) : 0;
+                          return (
+                            <div
+                              onClick={(e) => e.stopPropagation()}
+                              onPointerDown={(e) => onRegionEditorPointerDown(gs.id, e)}
+                              onPointerMove={(e) => onRegionEditorPointerMove(gs.id, e)}
+                              onPointerUp={(e) => onRegionEditorPointerUp(gs.id, e)}
+                              style={{
+                                position: "relative",
+                                width: "100%",
+                                aspectRatio: "16/9",
+                                background: bgImage ? `url(${bgImage}) center/cover` : "#1f2937",
+                                border: "1px solid #4b5563",
+                                borderRadius: "6px",
+                                cursor: "crosshair",
+                                userSelect: "none",
+                                overflow: "hidden",
+                              }}
+                            >
+                              {!bgImage && (
+                                <span style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", opacity: 0.4, fontSize: "0.8rem", pointerEvents: "none" }}>
+                                  Upload a reference image to use as background
+                                </span>
+                              )}
+                              {regions.map((region) => {
+                                const left = `${(region.x / 1280) * 100}%`;
+                                const top = `${(region.y / 720) * 100}%`;
+                                const width = `${(region.width / 1280) * 100}%`;
+                                const height = `${(region.height / 720) * 100}%`;
+                                return (
+                                  <div key={region.id} style={{ position: "absolute", left, top, width, height, border: "2px solid #60a5fa", background: "rgba(96,165,250,0.15)", boxSizing: "border-box" }}>
+                                    <button
+                                      type="button"
+                                      onPointerDown={(e) => e.stopPropagation()}
+                                      onClick={(e) => { e.stopPropagation(); removeDetectionRegion(gs.id, region.id); }}
+                                      style={{ position: "absolute", top: 2, right: 2, background: "rgba(0,0,0,0.7)", color: "#fca5a5", border: "none", borderRadius: "50%", width: 18, height: 18, fontSize: 11, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0 }}
+                                    >×</button>
+                                  </div>
+                                );
+                              })}
+                              {activeDrag && (
+                                <div style={{ position: "absolute", left: `${(dragPreviewX / 1280) * 100}%`, top: `${(dragPreviewY / 720) * 100}%`, width: `${(dragPreviewW / 1280) * 100}%`, height: `${(dragPreviewH / 720) * 100}%`, border: "2px dashed #f59e0b", background: "rgba(245,158,11,0.1)", boxSizing: "border-box", pointerEvents: "none" }} />
+                              )}
+                            </div>
+                          );
+                        })()}
+                        {(gameStateDetectionRegions.get(gs.id) ?? []).length > 0 && (
+                          <button type="button" onClick={(e) => { e.stopPropagation(); void saveDetectionRegionsForState(gs.id, []); }} style={{ marginTop: "0.4rem", fontSize: "0.8rem", color: "#fca5a5" }}>
+                            Clear all regions
+                          </button>
+                        )}
+                      </div>
+                      </>
                     )}
                   </article>
                 );

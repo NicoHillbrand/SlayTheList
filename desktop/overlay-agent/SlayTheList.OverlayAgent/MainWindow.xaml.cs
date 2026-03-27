@@ -47,6 +47,7 @@ public partial class MainWindow : Window
     private string _lastDetectionLabel = "—";
     private double _lastDetectionScore;
     private bool _detectionRunning;
+    private bool _taskManagerClearedState;
 
     [DllImport("winmm.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool PlaySound(string? soundName, IntPtr moduleHandle, uint soundFlags);
@@ -126,6 +127,19 @@ public partial class MainWindow : Window
         }
     }
 
+    private bool HasAlwaysDetectState()
+    {
+        return (_lastOverlayState?.GameStates ?? []).Any(gs => gs.AlwaysDetect && gs.Enabled);
+    }
+
+    private bool IsTaskManagerForeground()
+    {
+        var foreground = NativeMethods.GetForegroundWindow();
+        if (foreground == IntPtr.Zero) return false;
+        var title = NativeMethods.GetWindowTitle(foreground);
+        return title.Contains("Task Manager", StringComparison.OrdinalIgnoreCase);
+    }
+
     private async Task RunDetectionLoop()
     {
         // Wait for initial connection and game state data
@@ -137,11 +151,36 @@ public partial class MainWindow : Window
             {
                 await Task.Delay(DetectionIntervalMs);
 
-                if (!_isGameInForeground || _gameWindowHandle == IntPtr.Zero)
-                    continue;
-
                 var hasGameStates = (_lastOverlayState?.GameStates.Count ?? 0) > 0;
                 if (!hasGameStates)
+                    continue;
+
+                // Task Manager open → force clear game state so all blocks close/hide.
+                // Only fire the API call once on the transition into Task Manager focus.
+                if (IsTaskManagerForeground())
+                {
+                    if (!_taskManagerClearedState && !_detectionRunning)
+                    {
+                        _detectionRunning = true;
+                        try
+                        {
+                            var clearBody = System.Text.Json.JsonSerializer.Serialize(new { gameStateId = (string?)null, confidence = 0.0 });
+                            using var clearContent = new StringContent(clearBody, Encoding.UTF8, "application/json");
+                            await _httpClient.PutAsync($"{_apiBaseUrl}/api/detected-game-state", clearContent);
+                            _taskManagerClearedState = true;
+                        }
+                        catch { /* ignore */ }
+                        finally { _detectionRunning = false; }
+                    }
+                    continue;
+                }
+                // Task Manager no longer in foreground — allow detection to run again next tick.
+                _taskManagerClearedState = false;
+
+                var alwaysDetect = HasAlwaysDetectState();
+                var canDetectGameWindow = _isGameInForeground && _gameWindowHandle != IntPtr.Zero;
+
+                if (!canDetectGameWindow && !alwaysDetect)
                     continue;
 
                 if (_detectionRunning)
@@ -150,7 +189,7 @@ public partial class MainWindow : Window
                 _detectionRunning = true;
                 try
                 {
-                    await RunSingleDetection();
+                    await RunSingleDetection(alwaysDetect && !canDetectGameWindow);
                 }
                 finally
                 {
@@ -164,9 +203,11 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task RunSingleDetection()
+    private async Task RunSingleDetection(bool useFullScreen = false)
     {
-        var screenshotBytes = NativeMethods.CaptureWindow(_gameWindowHandle);
+        var screenshotBytes = useFullScreen
+            ? NativeMethods.CaptureScreen()
+            : NativeMethods.CaptureWindow(_gameWindowHandle);
         if (screenshotBytes is null || screenshotBytes.Length == 0)
         {
             Dispatcher.Invoke(() =>

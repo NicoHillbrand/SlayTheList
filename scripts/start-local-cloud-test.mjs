@@ -63,7 +63,7 @@ process.on("SIGTERM", () => shutdown(0));
 console.log("Starting local cloud social test stack...");
 console.log("Cloud social: http://localhost:8790");
 console.log("API:          http://localhost:8788");
-console.log("Web:          http://localhost:3000");
+console.log("Web:          http://localhost:4000");
 
 const cloudBaseUrl = process.env.CLOUD_SOCIAL_BASE_URL?.trim() || "http://localhost:8790";
 

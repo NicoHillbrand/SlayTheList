@@ -4,6 +4,10 @@ import path from "node:path";
 import { referenceImagesDir } from "./db.js";
 
 const COMPARE_SIZE = 64;
+const TEMPLATE_WIDTH = 1280;
+const TEMPLATE_HEIGHT = 720;
+
+export type DetectionRegion = { x: number; y: number; width: number; height: number };
 
 async function toNormalizedPixels(input: Buffer): Promise<Float32Array> {
   const { data, info } = await sharp(input)
@@ -17,6 +21,51 @@ async function toNormalizedPixels(input: Buffer): Promise<Float32Array> {
     pixels[i] = data[i] / 255;
   }
   return pixels;
+}
+
+async function toNormalizedPixelsWithRegions(
+  input: Buffer,
+  regions: DetectionRegion[],
+): Promise<Float32Array> {
+  if (regions.length === 0) {
+    return toNormalizedPixels(input);
+  }
+
+  // Scale full image to template size first for consistent coordinate space
+  const scaledBuffer = await sharp(input)
+    .resize(TEMPLATE_WIDTH, TEMPLATE_HEIGHT, { fit: "fill" })
+    .toBuffer();
+
+  const regionArrays: Float32Array[] = [];
+  for (const region of regions) {
+    const left = Math.max(0, Math.round(region.x));
+    const top = Math.max(0, Math.round(region.y));
+    const width = Math.min(TEMPLATE_WIDTH - left, Math.max(1, Math.round(region.width)));
+    const height = Math.min(TEMPLATE_HEIGHT - top, Math.max(1, Math.round(region.height)));
+
+    const { data, info } = await sharp(scaledBuffer)
+      .extract({ left, top, width, height })
+      .resize(COMPARE_SIZE, COMPARE_SIZE, { fit: "fill" })
+      .grayscale()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+
+    const pixels = new Float32Array(info.width * info.height);
+    for (let i = 0; i < pixels.length; i++) {
+      pixels[i] = data[i] / 255;
+    }
+    regionArrays.push(pixels);
+  }
+
+  // Concatenate all regions into one feature vector
+  const totalLen = regionArrays.reduce((sum, arr) => sum + arr.length, 0);
+  const combined = new Float32Array(totalLen);
+  let offset = 0;
+  for (const arr of regionArrays) {
+    combined.set(arr, offset);
+    offset += arr.length;
+  }
+  return combined;
 }
 
 function computeSimilarity(a: Float32Array, b: Float32Array): number {
@@ -50,6 +99,8 @@ function computeSimilarity(a: Float32Array, b: Float32Array): number {
 }
 
 function histogramSimilarity(a: Float32Array, b: Float32Array): number {
+  if (a.length === 0 || b.length === 0) return 0;
+
   const bins = 32;
   const histA = new Float32Array(bins);
   const histB = new Float32Array(bins);
@@ -87,18 +138,21 @@ export async function testDetection(
   testImageBuffer: Buffer,
   gameStates: Array<{ id: string; name: string }>,
   referenceImages: Map<string, Array<{ id: string; filename: string }>>,
+  detectionRegions?: Map<string, DetectionRegion[]>,
 ): Promise<MatchResult[]> {
-  const testPixels = await toNormalizedPixels(testImageBuffer);
   const results: MatchResult[] = [];
 
   for (const gs of gameStates) {
+    const regions = detectionRegions?.get(gs.id) ?? [];
+    const testPixels = await toNormalizedPixelsWithRegions(testImageBuffer, regions);
+
     const refs = referenceImages.get(gs.id) ?? [];
     for (const ref of refs) {
       const filePath = path.join(referenceImagesDir, gs.id, ref.filename);
       if (!fs.existsSync(filePath)) continue;
 
       const refBuffer = fs.readFileSync(filePath);
-      const refPixels = await toNormalizedPixels(refBuffer);
+      const refPixels = await toNormalizedPixelsWithRegions(refBuffer, regions);
 
       const ncc = computeSimilarity(testPixels, refPixels);
       const hist = histogramSimilarity(testPixels, refPixels);

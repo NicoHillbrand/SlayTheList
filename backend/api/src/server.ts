@@ -19,7 +19,7 @@ import {
   type OverlayState,
 } from "@slaythelist/contracts";
 import {
-  activateZoneGoldUnlock,
+  spendGoldAndActivateUnlock,
   addReferenceImage,
   clearZoneGoldUnlock,
   createGameState,
@@ -32,6 +32,7 @@ import {
   getAccountabilityState,
   getDetectedGameState,
   getGoldState,
+  listDetectionRegions,
   listGameStates,
   listOverlayState,
   listReferenceImages,
@@ -40,10 +41,11 @@ import {
   reorderTodos,
   saveGoldState,
   setDetectedGameState,
+  setDetectionRegions,
   setZoneGameStates,
-  spendGold,
   awardGold,
   awardTodoGold,
+  deductGold,
   saveAccountabilityState,
   setZoneRequirements,
   updateGameState,
@@ -460,6 +462,15 @@ app.post("/api/gold/award", (req, res) => {
   triggerCloudSnapshotSync();
 });
 
+app.post("/api/gold/deduct", (req, res) => {
+  const amount = req.body?.amount;
+  if (typeof amount !== "number" || !Number.isInteger(amount) || amount < 0) {
+    return badRequest(res, "amount must be a non-negative integer");
+  }
+  ok(res, deductGold(amount));
+  triggerCloudSnapshotSync();
+});
+
 app.post("/api/gold/award-todo", (req, res) => {
   const todoId = req.body?.todoId;
   const amount = req.body?.amount;
@@ -758,6 +769,10 @@ app.post("/api/zones", (req, res) => {
     height,
     enabled: body.enabled !== false,
     unlockMode: parseZoneUnlockMode(body.unlockMode) ?? "todos",
+    cooldownEnabled: body.cooldownEnabled === true,
+    cooldownSeconds: typeof body.cooldownSeconds === "number" && body.cooldownSeconds > 0
+      ? Math.floor(body.cooldownSeconds)
+      : 3600,
   });
   ok(res, zone);
   broadcastOverlayState();
@@ -773,6 +788,10 @@ app.patch("/api/zones/:id", (req, res) => {
     height: parseOptionalFiniteNumber(patch.height),
     enabled: typeof patch.enabled === "boolean" ? patch.enabled : undefined,
     unlockMode: parseZoneUnlockMode(patch.unlockMode),
+    cooldownEnabled: typeof patch.cooldownEnabled === "boolean" ? patch.cooldownEnabled : undefined,
+    cooldownSeconds: typeof patch.cooldownSeconds === "number" && patch.cooldownSeconds > 0
+      ? Math.floor(patch.cooldownSeconds)
+      : undefined,
   };
   if (parsedPatch.width !== undefined && parsedPatch.width <= 0) {
     return badRequest(res, "width must be positive");
@@ -787,7 +806,9 @@ app.patch("/api/zones/:id", (req, res) => {
     parsedPatch.width === undefined &&
     parsedPatch.height === undefined &&
     parsedPatch.enabled === undefined &&
-    parsedPatch.unlockMode === undefined
+    parsedPatch.unlockMode === undefined &&
+    parsedPatch.cooldownEnabled === undefined &&
+    parsedPatch.cooldownSeconds === undefined
   ) {
     return badRequest(res, "no valid zone fields provided");
   }
@@ -842,11 +863,10 @@ app.post("/api/zones/:id/gold-unlock", (req, res) => {
   }
 
   try {
-    spendGold(10);
+    spendGoldAndActivateUnlock(req.params.id, 10);
   } catch (error) {
     return badRequest(res, (error as Error).message);
   }
-  activateZoneGoldUnlock(req.params.id);
   ok(res, { updated: true });
   broadcastOverlayState();
 });
@@ -893,15 +913,44 @@ app.patch("/api/game-states/:id", (req, res) => {
   if (typeof patch.matchThreshold === "number" && patch.matchThreshold >= 0 && patch.matchThreshold <= 1) {
     parsedPatch.matchThreshold = patch.matchThreshold;
   }
+  if (typeof patch.alwaysDetect === "boolean") parsedPatch.alwaysDetect = patch.alwaysDetect;
   if (Object.keys(parsedPatch).length === 0) {
     return badRequest(res, "no valid fields provided");
   }
-  const updated = updateGameState(req.params.id, parsedPatch as Partial<{ name: string; enabled: boolean; matchThreshold: number }>);
+  const updated = updateGameState(req.params.id, parsedPatch as Partial<{ name: string; enabled: boolean; matchThreshold: number; alwaysDetect: boolean }>);
   if (!updated) {
     return res.status(404).json({ error: "game state not found" });
   }
   ok(res, updated);
   broadcastOverlayState();
+});
+
+app.get("/api/game-states/:id/detection-regions", (req, res) => {
+  const stateExists = listGameStates().some((gs) => gs.id === req.params.id);
+  if (!stateExists) {
+    return res.status(404).json({ error: "game state not found" });
+  }
+  ok(res, { items: listDetectionRegions(req.params.id) });
+});
+
+app.put("/api/game-states/:id/detection-regions", (req, res) => {
+  const stateExists = listGameStates().some((gs) => gs.id === req.params.id);
+  if (!stateExists) {
+    return res.status(404).json({ error: "game state not found" });
+  }
+  const regions = req.body?.regions;
+  if (!Array.isArray(regions)) {
+    return badRequest(res, "regions must be an array");
+  }
+  for (const r of regions) {
+    if (typeof r !== "object" || r === null) return badRequest(res, "each region must be an object");
+    if (typeof r.x !== "number" || typeof r.y !== "number" || typeof r.width !== "number" || typeof r.height !== "number") {
+      return badRequest(res, "each region must have numeric x, y, width, height");
+    }
+    if (r.width <= 0 || r.height <= 0) return badRequest(res, "region width and height must be positive");
+  }
+  const saved = setDetectionRegions(req.params.id, regions as Array<{ x: number; y: number; width: number; height: number }>);
+  ok(res, { items: saved });
 });
 
 app.delete("/api/game-states/:id", (req, res) => {
@@ -921,6 +970,9 @@ app.post("/api/game-states/:id/reference-images", (req, res) => {
   const filename = req.body?.filename;
   if (typeof imageData !== "string" || !imageData) {
     return badRequest(res, "imageData (base64) is required");
+  }
+  if (imageData.length > 10_000_000) {
+    return badRequest(res, "imageData is too large (max ~7.5 MB)");
   }
   if (typeof filename !== "string" || !filename.trim()) {
     return badRequest(res, "filename is required");
@@ -950,6 +1002,11 @@ app.put("/api/zones/:id/game-states", (req, res) => {
   if (!zoneExists) {
     return res.status(404).json({ error: "zone not found" });
   }
+  const existingGameStateIds = new Set(listGameStates().map((gs) => gs.id));
+  const unknownId = gameStateIds.find((id: string) => !existingGameStateIds.has(id));
+  if (unknownId) {
+    return badRequest(res, `game state not found: ${unknownId}`);
+  }
   setZoneGameStates(req.params.id, gameStateIds);
   ok(res, { updated: true });
   broadcastOverlayState();
@@ -978,14 +1035,22 @@ app.post("/api/game-states/test-detection", async (req, res) => {
   if (typeof imageData !== "string" || !imageData) {
     return badRequest(res, "imageData (base64) is required");
   }
+  if (imageData.length > 10_000_000) {
+    return badRequest(res, "imageData is too large (max ~7.5 MB)");
+  }
   try {
     const testBuffer = Buffer.from(imageData, "base64");
     const states = listGameStates();
     const refMap = new Map<string, Array<{ id: string; filename: string }>>();
+    const regionsMap = new Map<string, import("./image-match.js").DetectionRegion[]>();
     for (const gs of states) {
       refMap.set(gs.id, listReferenceImages(gs.id));
+      const regions = listDetectionRegions(gs.id);
+      if (regions.length > 0) {
+        regionsMap.set(gs.id, regions);
+      }
     }
-    const results = await testDetection(testBuffer, states, refMap);
+    const results = await testDetection(testBuffer, states, refMap, regionsMap);
     ok(res, { results });
   } catch (err) {
     res.status(500).json({ error: `detection test failed: ${(err as Error).message}` });
@@ -1042,6 +1107,12 @@ wss.on("connection", (socket) => {
 setInterval(() => {
   sendEvent("health", { timestamp: new Date().toISOString() });
 }, 15_000).unref();
+
+// Periodically push overlay state so cooldown expirations are reflected in the overlay agent
+// without requiring a separate user action to trigger a broadcast.
+setInterval(() => {
+  broadcastOverlayState();
+}, 5_000).unref();
 
 app.use(errorLogger);
 

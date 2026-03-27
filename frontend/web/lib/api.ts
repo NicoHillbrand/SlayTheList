@@ -6,6 +6,7 @@ import type {
   FriendSearchResult,
   FriendSummary,
   GameState,
+  GameStateDetectionRegion,
   GameStateReferenceImage,
   GoldState,
   Habit,
@@ -196,6 +197,8 @@ export async function createZone(input: {
   height?: number;
   enabled?: boolean;
   unlockMode?: LockZoneUnlockMode;
+  cooldownEnabled?: boolean;
+  cooldownSeconds?: number;
 }) {
   return request<LockZone>("/api/zones", {
     method: "POST",
@@ -203,7 +206,10 @@ export async function createZone(input: {
   });
 }
 
-export async function updateZone(id: string, patch: Partial<LockZone>) {
+export async function updateZone(
+  id: string,
+  patch: Partial<LockZone> & { cooldownEnabled?: boolean; cooldownSeconds?: number },
+) {
   return request<LockZone>(`/api/zones/${id}`, {
     method: "PATCH",
     body: JSON.stringify(patch),
@@ -263,6 +269,13 @@ export async function saveGoldState(state: GoldState) {
 
 export async function awardGold(amount: number) {
   return request<GoldState>("/api/gold/award", {
+    method: "POST",
+    body: JSON.stringify({ amount }),
+  });
+}
+
+export async function deductGold(amount: number) {
+  return request<GoldState>("/api/gold/deduct", {
     method: "POST",
     body: JSON.stringify({ amount }),
   });
@@ -387,7 +400,7 @@ export async function createGameState(input: { name: string; matchThreshold?: nu
 
 export async function updateGameState(
   id: string,
-  patch: Partial<{ name: string; enabled: boolean; matchThreshold: number }>,
+  patch: Partial<{ name: string; enabled: boolean; matchThreshold: number; alwaysDetect: boolean }>,
 ) {
   return request<GameState>(`/api/game-states/${id}`, {
     method: "PATCH",
@@ -454,5 +467,19 @@ export async function testDetection(imageData: string) {
   return request<{ results: DetectionTestResult[] }>("/api/game-states/test-detection", {
     method: "POST",
     body: JSON.stringify({ imageData }),
+  });
+}
+
+export async function listDetectionRegions(gameStateId: string) {
+  return request<{ items: GameStateDetectionRegion[] }>(`/api/game-states/${gameStateId}/detection-regions`);
+}
+
+export async function setDetectionRegions(
+  gameStateId: string,
+  regions: Array<{ x: number; y: number; width: number; height: number }>,
+) {
+  return request<{ items: GameStateDetectionRegion[] }>(`/api/game-states/${gameStateId}/detection-regions`, {
+    method: "PUT",
+    body: JSON.stringify({ regions }),
   });
 }

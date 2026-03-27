@@ -45,6 +45,12 @@ public sealed class ZoneState
 
     [JsonPropertyName("isLocked")]
     public bool IsLocked { get; set; }
+
+    [JsonPropertyName("goldUnlockActive")]
+    public bool GoldUnlockActive { get; set; }
+
+    [JsonPropertyName("cooldownExpiresAt")]
+    public string? CooldownExpiresAt { get; set; }
 }
 
 public sealed class Zone
@@ -102,6 +108,9 @@ public sealed class GameStateInfo
 
     [JsonPropertyName("matchThreshold")]
     public double MatchThreshold { get; set; } = 0.8;
+
+    [JsonPropertyName("alwaysDetect")]
+    public bool AlwaysDetect { get; set; }
 }
 
 public sealed class TestDetectionResponse

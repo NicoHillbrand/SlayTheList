@@ -6,6 +6,7 @@ import type {
   AccountabilityState,
   DetectedGameState,
   GameState,
+  GameStateDetectionRegion,
   GameStateReferenceImage,
   GoldState,
   Habit,
@@ -39,6 +40,8 @@ type ZoneRow = {
   height: number;
   enabled: 0 | 1;
   unlock_mode: "todos" | "gold";
+  cooldown_enabled: 0 | 1;
+  cooldown_seconds: number;
   created_at: string;
   updated_at: string;
 };
@@ -84,6 +87,8 @@ function toZone(row: ZoneRow): LockZone {
     height: row.height,
     enabled: !!row.enabled,
     unlockMode: row.unlock_mode ?? "todos",
+    cooldownEnabled: !!row.cooldown_enabled,
+    cooldownSeconds: row.cooldown_seconds ?? 3600,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -226,18 +231,19 @@ export function createZone(input: Omit<LockZone, "id" | "createdAt" | "updatedAt
     updatedAt: now,
   };
   db.prepare(
-    `INSERT INTO lock_zones (id, name, x, y, width, height, enabled, unlock_mode, created_at, updated_at)
-     VALUES (@id, @name, @x, @y, @width, @height, @enabled, @unlockMode, @createdAt, @updatedAt)`,
+    `INSERT INTO lock_zones (id, name, x, y, width, height, enabled, unlock_mode, cooldown_enabled, cooldown_seconds, created_at, updated_at)
+     VALUES (@id, @name, @x, @y, @width, @height, @enabled, @unlockMode, @cooldownEnabled, @cooldownSeconds, @createdAt, @updatedAt)`,
   ).run({
     ...zone,
     enabled: zone.enabled ? 1 : 0,
+    cooldownEnabled: zone.cooldownEnabled ? 1 : 0,
   });
   return zone;
 }
 
 export function updateZone(
   id: string,
-  patch: Partial<Pick<LockZone, "name" | "x" | "y" | "width" | "height" | "enabled" | "unlockMode">>,
+  patch: Partial<Pick<LockZone, "name" | "x" | "y" | "width" | "height" | "enabled" | "unlockMode" | "cooldownEnabled" | "cooldownSeconds">>,
 ): LockZone | undefined {
   const currentRow = db.prepare("SELECT * FROM lock_zones WHERE id = ?").get(id) as ZoneRow | undefined;
   if (!currentRow) {
@@ -251,9 +257,15 @@ export function updateZone(
   };
   db.prepare(
     `UPDATE lock_zones
-       SET name = ?, x = ?, y = ?, width = ?, height = ?, enabled = ?, unlock_mode = ?, updated_at = ?
+       SET name = ?, x = ?, y = ?, width = ?, height = ?, enabled = ?, unlock_mode = ?,
+           cooldown_enabled = ?, cooldown_seconds = ?, updated_at = ?
      WHERE id = ?`,
-  ).run(next.name, next.x, next.y, next.width, next.height, next.enabled ? 1 : 0, next.unlockMode, next.updatedAt, id);
+  ).run(
+    next.name, next.x, next.y, next.width, next.height,
+    next.enabled ? 1 : 0, next.unlockMode,
+    next.cooldownEnabled ? 1 : 0, next.cooldownSeconds,
+    next.updatedAt, id,
+  );
   if (patch.unlockMode !== undefined && patch.unlockMode !== current.unlockMode) {
     db.prepare("DELETE FROM lock_zone_gold_unlocks WHERE zone_id = ?").run(id);
   }
@@ -277,16 +289,35 @@ export function setZoneRequirements(zoneId: string, todoIds: string[]): void {
   tx(zoneId, [...new Set(todoIds)]);
 }
 
+export function spendGoldAndActivateUnlock(zoneId: string, amount: number, userId?: string): void {
+  db.transaction(() => {
+    spendGold(amount, userId);
+    activateZoneGoldUnlock(zoneId);
+  })();
+}
+
 export function activateZoneGoldUnlock(zoneId: string): void {
+  const zoneRow = db.prepare("SELECT * FROM lock_zones WHERE id = ?").get(zoneId) as ZoneRow | undefined;
+  const zone = zoneRow ? toZone(zoneRow) : null;
+  const expiresAt =
+    zone?.cooldownEnabled && zone.cooldownSeconds > 0
+      ? new Date(Date.now() + zone.cooldownSeconds * 1000).toISOString()
+      : null;
   db.prepare(
-    `INSERT INTO lock_zone_gold_unlocks (zone_id, created_at)
-     VALUES (?, ?)
-     ON CONFLICT(zone_id) DO UPDATE SET created_at = excluded.created_at`,
-  ).run(zoneId, new Date().toISOString());
+    `INSERT INTO lock_zone_gold_unlocks (zone_id, created_at, expires_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT(zone_id) DO UPDATE SET created_at = excluded.created_at, expires_at = excluded.expires_at`,
+  ).run(zoneId, new Date().toISOString(), expiresAt);
 }
 
 export function clearZoneGoldUnlock(zoneId: string): void {
   db.prepare("DELETE FROM lock_zone_gold_unlocks WHERE zone_id = ?").run(zoneId);
+}
+
+export function expireGoldUnlocks(): void {
+  db.prepare(
+    "DELETE FROM lock_zone_gold_unlocks WHERE expires_at IS NOT NULL AND expires_at <= ?",
+  ).run(new Date().toISOString());
 }
 
 function safeParseJsonArray<T>(raw: string): T[] {
@@ -427,6 +458,15 @@ export function awardTodoGold(todoId: string, amount: number, userId?: string): 
   return { state, awarded: true };
 }
 
+export function deductGold(amount: number, userId?: string): GoldState {
+  const normalizedAmount = Math.max(0, Math.floor(amount));
+  const current = getGoldState(userId);
+  return saveGoldState({
+    gold: Math.max(0, current.gold - normalizedAmount),
+    rewardedTodoIds: current.rewardedTodoIds,
+  }, userId);
+}
+
 export function spendGold(amount: number, userId?: string): GoldState {
   const normalizedAmount = Math.max(0, Math.floor(amount));
   const current = getGoldState(userId);
@@ -449,8 +489,18 @@ type GameStateRow = {
   enabled: 0 | 1;
   detection_method: string;
   match_threshold: number;
+  always_detect: 0 | 1;
   created_at: string;
   updated_at: string;
+};
+
+type DetectionRegionRow = {
+  id: string;
+  game_state_id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 };
 
 type GameStateRefImageRow = {
@@ -473,8 +523,20 @@ function toGameState(row: GameStateRow): GameState {
     enabled: !!row.enabled,
     detectionMethod: row.detection_method as GameState["detectionMethod"],
     matchThreshold: row.match_threshold,
+    alwaysDetect: !!row.always_detect,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+function toDetectionRegion(row: DetectionRegionRow): GameStateDetectionRegion {
+  return {
+    id: row.id,
+    gameStateId: row.game_state_id,
+    x: row.x,
+    y: row.y,
+    width: row.width,
+    height: row.height,
   };
 }
 
@@ -509,7 +571,7 @@ export function createGameState(input: { name: string; matchThreshold?: number }
 
 export function updateGameState(
   id: string,
-  patch: Partial<Pick<GameState, "name" | "enabled" | "matchThreshold">>,
+  patch: Partial<Pick<GameState, "name" | "enabled" | "matchThreshold" | "alwaysDetect">>,
 ): GameState | undefined {
   const existing = getGameState(id);
   if (!existing) return undefined;
@@ -517,12 +579,37 @@ export function updateGameState(
     name: patch.name ?? existing.name,
     enabled: patch.enabled ?? existing.enabled,
     matchThreshold: patch.matchThreshold ?? existing.matchThreshold,
+    alwaysDetect: patch.alwaysDetect ?? existing.alwaysDetect,
     updatedAt: new Date().toISOString(),
   };
   db.prepare(
-    `UPDATE game_states SET name = ?, enabled = ?, match_threshold = ?, updated_at = ? WHERE id = ?`,
-  ).run(next.name, next.enabled ? 1 : 0, next.matchThreshold, next.updatedAt, id);
+    `UPDATE game_states SET name = ?, enabled = ?, match_threshold = ?, always_detect = ?, updated_at = ? WHERE id = ?`,
+  ).run(next.name, next.enabled ? 1 : 0, next.matchThreshold, next.alwaysDetect ? 1 : 0, next.updatedAt, id);
   return getGameState(id);
+}
+
+export function listDetectionRegions(gameStateId: string): GameStateDetectionRegion[] {
+  const rows = db
+    .prepare("SELECT * FROM game_state_detection_regions WHERE game_state_id = ? ORDER BY rowid ASC")
+    .all(gameStateId) as DetectionRegionRow[];
+  return rows.map(toDetectionRegion);
+}
+
+export function setDetectionRegions(
+  gameStateId: string,
+  regions: Array<{ x: number; y: number; width: number; height: number }>,
+): GameStateDetectionRegion[] {
+  const tx = db.transaction(() => {
+    db.prepare("DELETE FROM game_state_detection_regions WHERE game_state_id = ?").run(gameStateId);
+    const stmt = db.prepare(
+      "INSERT INTO game_state_detection_regions (id, game_state_id, x, y, width, height) VALUES (?, ?, ?, ?, ?, ?)",
+    );
+    for (const r of regions) {
+      stmt.run(randomUUID(), gameStateId, r.x, r.y, r.width, r.height);
+    }
+  });
+  tx();
+  return listDetectionRegions(gameStateId);
 }
 
 export function deleteGameState(id: string): boolean {
@@ -598,13 +685,15 @@ export function setDetectedGameState(gameStateId: string | null, confidence: num
 }
 
 export function listOverlayState(): LockZoneState[] {
+  expireGoldUnlocks();
+
   const zones = listZones();
   const requiredRows = db
     .prepare("SELECT zone_id, todo_id FROM lock_zone_requirements")
     .all() as Array<{ zone_id: string; todo_id: string }>;
   const goldUnlockRows = db
-    .prepare("SELECT zone_id FROM lock_zone_gold_unlocks")
-    .all() as Array<{ zone_id: string }>;
+    .prepare("SELECT zone_id, expires_at FROM lock_zone_gold_unlocks")
+    .all() as Array<{ zone_id: string; expires_at: string | null }>;
   const todoRows = db.prepare("SELECT id, title, status, archived_at FROM todos").all() as Array<{
     id: string;
     title: string;
@@ -631,7 +720,7 @@ export function listOverlayState(): LockZoneState[] {
   const activeTodoIds = new Set(activeTodoRows.map((row) => row.id));
   const statusByTodo = new Map(activeTodoRows.map((t) => [t.id, t.status]));
   const titleByTodo = new Map(activeTodoRows.map((t) => [t.id, t.title]));
-  const goldUnlockedZoneIds = new Set(goldUnlockRows.map((row) => row.zone_id));
+  const goldUnlockByZone = new Map(goldUnlockRows.map((row) => [row.zone_id, row.expires_at ?? null]));
   const requiredByZone = new Map<string, string[]>();
   for (const row of requiredRows) {
     if (!activeTodoIds.has(row.todo_id)) continue;
@@ -645,7 +734,8 @@ export function listOverlayState(): LockZoneState[] {
     const requiredTodoTitles = requiredTodoIds
       .map((todoId) => titleByTodo.get(todoId))
       .filter((title): title is string => !!title);
-    const goldUnlockActive = goldUnlockedZoneIds.has(zone.id);
+    const goldUnlockActive = goldUnlockByZone.has(zone.id);
+    const cooldownExpiresAt = goldUnlockByZone.get(zone.id) ?? null;
     const activeForGameStateIds = gameStatesByZone.get(zone.id) ?? [];
     const activeForCurrentState =
       activeForGameStateIds.length === 0 ||
@@ -663,6 +753,7 @@ export function listOverlayState(): LockZoneState[] {
       requiredTodoIds,
       requiredTodoTitles,
       goldUnlockActive,
+      cooldownExpiresAt,
       isLocked,
       activeForGameStateIds,
       activeForCurrentState,
