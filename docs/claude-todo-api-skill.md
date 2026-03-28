@@ -8,7 +8,9 @@ There are two ways to interact with SlayTheList depending on your context:
 
 ### Option A — MCP tools (Claude Code, preferred)
 
-If you're running inside Claude Code, add this to the `.mcp.json` in your repo root (create it if it doesn't exist):
+If you're running inside Claude Code, add this to the `.mcp.json` in your repo root (create it if it doesn't exist).
+
+**From within the SlayTheList repo:**
 
 ```json
 {
@@ -17,7 +19,23 @@ If you're running inside Claude Code, add this to the `.mcp.json` in your repo r
       "type": "stdio",
       "command": "npx",
       "args": ["tsx", "src/mcp.ts"],
-      "cwd": "C:/Users/nicoh/Desktop/Programming Projects/SlayTheList/backend/api"
+      "cwd": "backend/api"
+    }
+  }
+}
+```
+
+**From another project:** Use absolute paths and **set `SLAYTHELIST_DATA_DIR`** so the MCP server finds the correct database. Without this env var, it defaults to `process.cwd()/data` — which will be the *calling* project's directory, not SlayTheList's, resulting in an empty database.
+
+```json
+{
+  "mcpServers": {
+    "slaythelist": {
+      "command": "/absolute/path/to/SlayTheList/node_modules/.bin/tsx",
+      "args": ["/absolute/path/to/SlayTheList/backend/api/src/mcp.ts"],
+      "env": {
+        "SLAYTHELIST_DATA_DIR": "/absolute/path/to/SlayTheList/backend/api/data"
+      }
     }
   }
 }
@@ -45,6 +63,56 @@ For habits/predictions/reflections the pattern is: call `list_*` → modify the 
 ### Option B — HTTP API (any context)
 
 Requires the SlayTheList API server to be running. See the rest of this doc.
+
+---
+
+## Morning predictions check (startup tip)
+
+Once you have SlayTheList connected via MCP from your regular working directory (using the absolute-path setup above), here's a small thing you can do: add a morning check to the CLAUDE.md in that directory so Claude nudges you about your predictions at the start of each day.
+
+Add this to the CLAUDE.md in your **default working directory** (not the SlayTheList folder — wherever you normally open Claude Code):
+
+```
+At the start of each conversation, check the current time. If it is before noon (12:00),
+pull my pending predictions via list_predictions and offer to briefly talk through them —
+either to add new ones or review existing ones. Also offer a quick Murphy-Jitsu check:
+ask what could go wrong today or what failure modes I'd predict for my key goals, and
+create those as predictions with murphy: true (and targetTitle set to the goal title if
+it's goal-specific). Keep it short — just ask if I want to run through predictions
+and/or Murphy-Jitsu.
+```
+
+Or just ask Claude to set it up:
+> "Can you add a morning predictions and Murphy-Jitsu check to my CLAUDE.md? Before noon, remind me to review predictions and think through what might go wrong."
+
+Claude will add the snippet for you.
+
+### Murphy-Jitsu prediction fields
+
+Murphy-Jitsu predictions use the same `Prediction` shape with two extra fields:
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `murphy` | `boolean` | `true` marks this as a failure-mode / Murphy-Jitsu prediction |
+| `targetTitle` | `string` (optional) | Links the prediction to a specific goal by title |
+
+To add a general Murphy-Jitsu prediction (read → modify → write):
+
+```powershell
+$preds = (Invoke-RestMethod "$API/api/predictions").items
+$preds += @{
+  id          = [guid]::NewGuid().ToString()
+  title       = "I'll get pulled into an unplanned meeting and lose focus"
+  confidence  = 40
+  outcome     = "pending"
+  createdAt   = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+  resolvedAt  = $null
+  murphy      = $true
+}
+Invoke-RestMethod "$API/api/predictions" -Method PUT -ContentType "application/json" -Body ($preds | ConvertTo-Json -Depth 5)
+```
+
+To link a Murphy prediction to a specific goal, add `targetTitle = "Goal title here"` to the object above.
 
 ---
 

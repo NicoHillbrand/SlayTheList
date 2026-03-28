@@ -33,6 +33,7 @@ export const habitSchema = z.object({
   checks: z.array(habitCheckSchema),
   createdAt: z.number(),
   status: habitStatusSchema.default("active"),
+  bonus: z.boolean().optional(),
 });
 export type Habit = z.infer<typeof habitSchema>;
 
@@ -46,6 +47,8 @@ export const predictionSchema = z.object({
   outcome: predictionOutcomeSchema,
   createdAt: z.number(),
   resolvedAt: z.number().nullable(),
+  murphy: z.boolean().optional(),
+  targetTitle: z.string().optional(),
 });
 export type Prediction = z.infer<typeof predictionSchema>;
 

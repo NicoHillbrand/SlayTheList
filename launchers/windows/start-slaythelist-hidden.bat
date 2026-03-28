@@ -73,5 +73,9 @@ start "" "http://localhost:%WEB_PORT%"
 echo.
 echo SlayTheList started in hidden browser mode.
 echo - Browser: http://localhost:%WEB_PORT%
+echo.
+echo Tip: You can control SlayTheList with Claude Code using MCP (todos, habits,
+echo predictions, reflections). See docs\claude-todo-api-skill.md for setup.
+echo.
 echo - To stop everything at once, run: launch-slaythelist-hidden.vbs and choose Stop
 exit /b 0

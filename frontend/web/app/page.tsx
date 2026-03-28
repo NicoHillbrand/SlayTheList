@@ -95,7 +95,7 @@ type MoveState = {
 };
 type ViewTab = "goals" | "habits" | "predictions" | "reflection" | "blocks" | "social";
 type TodoFilter = "active" | "completed" | "archived" | "all";
-type TodoRange = "daily" | "weekly" | "monthly" | "all" | "top";
+type TodoRange = "daily" | "daily_plus" | "weekly" | "monthly" | "all" | "top";
 type HabitsView = "week" | "month";
 type HabitsSubtab = "ideas" | "week" | "month";
 type ReflectionView = "today" | "history";
@@ -175,6 +175,10 @@ const AI_GEMINI_API_KEY_STORAGE_KEY = "slaythelist.ai.geminiApiKey";
 const AI_OPENAI_API_KEY_STORAGE_KEY = "slaythelist.ai.openAiApiKey";
 const AI_EXPAND_CONTEXT_STORAGE_KEY = "slaythelist.ai.expandContextByTodoId";
 const PREDICTION_CALIBRATION_RESET_AT_STORAGE_KEY = "slaythelist.predictions.calibrationResetAt";
+const SHOW_TODO_DURATION_STORAGE_KEY = "slaythelist.showTodoDuration";
+const TODO_DURATIONS_STORAGE_KEY = "slaythelist.todoDurations";
+const DAILY_PROGRESS_BASELINE_STORAGE_KEY = "slaythelist.dailyProgressBaseline";
+const DEFAULT_TODO_DURATION_MINUTES = 5;
 const DEFAULT_PREDICTION_CONFIDENCE = 95;
 const CALIBRATION_CHART_WIDTH = 320;
 const CALIBRATION_CHART_HEIGHT = 190;
@@ -284,23 +288,14 @@ function lockTextTopPadding(zoneWidth: number, zoneHeight: number): string {
 
 function getDefaultDeadline(range: TodoRange): string {
   const now = new Date();
-  if (range === "daily" || range === "top") {
+  if (range === "daily" || range === "daily_plus" || range === "top") {
     return new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59).toISOString();
   }
   if (range === "weekly") {
-    const dayOfWeek = now.getDay();
-    const daysUntilSunday = dayOfWeek === 0 ? 0 : 7 - dayOfWeek;
-    return new Date(
-      now.getFullYear(),
-      now.getMonth(),
-      now.getDate() + daysUntilSunday,
-      23,
-      59,
-      59,
-    ).toISOString();
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate() + 7, 23, 59, 59).toISOString();
   }
   if (range === "monthly") {
-    return new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59).toISOString();
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate() + 30, 23, 59, 59).toISOString();
   }
   return new Date(2100, 0, 1).toISOString();
 }
@@ -312,12 +307,10 @@ function getViewForDeadline(deadlineAt: string | null): TodoRange {
   if (!Number.isFinite(deadlineDate.getTime())) return "all";
   const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
   if (deadlineDate <= endOfToday) return "daily";
-  const dayOfWeek = now.getDay();
-  const daysUntilSunday = dayOfWeek === 0 ? 0 : 7 - dayOfWeek;
-  const endOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() + daysUntilSunday, 23, 59, 59);
-  if (deadlineDate <= endOfWeek) return "weekly";
-  const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
-  if (deadlineDate <= endOfMonth) return "monthly";
+  const in7Days = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 7, 23, 59, 59);
+  if (deadlineDate <= in7Days) return "weekly";
+  const in30Days = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 30, 23, 59, 59);
+  if (deadlineDate <= in30Days) return "monthly";
   return "all";
 }
 
@@ -530,6 +523,10 @@ function SortableGoalRow({
   removeTodo,
   pushToNextDay,
   setTodoDrafts,
+  showTodoDuration,
+  todoDuration,
+  setTodoDuration,
+  logTimeAndCopy,
 }: {
   todo: Todo;
   todoRange: TodoRange;
@@ -549,7 +546,12 @@ function SortableGoalRow({
   removeTodo: (id: string) => void;
   pushToNextDay: (todo: Todo) => void;
   setTodoDrafts: Dispatch<SetStateAction<Record<string, string>>>;
+  showTodoDuration: boolean;
+  todoDuration: number;
+  setTodoDuration: (todoId: string, minutes: number) => void;
+  logTimeAndCopy: (todo: Todo) => void;
 }) {
+  const [durationDraft, setDurationDraft] = useState<string | null>(null);
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: todo.id });
   const style: CSSProperties = {
     transform: DndCSS.Transform.toString(transform),
@@ -575,6 +577,25 @@ function SortableGoalRow({
           onChange={(event) => toggleTodo(todo, event.currentTarget)}
           aria-label={`Toggle ${todo.title}`}
         />
+        {showTodoDuration && !todo.archivedAt && todo.status !== "done" && (
+          <input
+            type="text"
+            className="todo-duration-input"
+            value={durationDraft !== null ? durationDraft : `${todoDuration}m`}
+            onFocus={() => setDurationDraft(String(todoDuration))}
+            onChange={(event) => setDurationDraft(event.target.value)}
+            onBlur={() => {
+              const val = parseInt(durationDraft ?? "", 10);
+              if (val > 0) setTodoDuration(todo.id, val);
+              setDurationDraft(null);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") event.currentTarget.blur();
+            }}
+            title={`${todoDuration} min`}
+            aria-label="Duration in minutes"
+          />
+        )}
         <textarea
           ref={(node) => {
             if (node) {
@@ -634,18 +655,28 @@ function SortableGoalRow({
               +1d
             </button>
           )}
+          {showTodoDuration && !todo.archivedAt && todo.status !== "done" && (
+            <button
+              type="button"
+              className="goal-log-copy-btn"
+              onClick={() => logTimeAndCopy(todo)}
+              title={`Log ${todoDuration}m block as done and keep a copy active`}
+            >
+              ✓↺
+            </button>
+          )}
           {!todo.archivedAt && (
-            <button type="button" onClick={() => openEditModal(todo)}>Edit</button>
+            <button type="button" className="goal-icon-btn" onClick={() => openEditModal(todo)} title="Edit" aria-label="Edit"><span>✏️</span></button>
           )}
           {todo.archivedAt ? (
             <>
-              <button type="button" onClick={() => setTodoArchived(todo, false)}>Restore</button>
-              <button type="button" onClick={() => removeTodo(todo.id)}>Delete</button>
+              <button type="button" onClick={() => setTodoArchived(todo, false)} title="Restore" aria-label="Restore">Restore</button>
+              <button type="button" className="goal-icon-btn" onClick={() => removeTodo(todo.id)} title="Delete" aria-label="Delete"><span>🗑️</span></button>
             </>
           ) : todo.status === "done" || todoFilter === "completed" ? (
-            <button type="button" onClick={() => setTodoArchived(todo, true)}>Archive</button>
+            <button type="button" onClick={() => setTodoArchived(todo, true)} title="Archive" aria-label="Archive">Archive</button>
           ) : (
-            <button type="button" onClick={() => removeTodo(todo.id)}>Delete</button>
+            <button type="button" className="goal-icon-btn" onClick={() => removeTodo(todo.id)} title="Delete" aria-label="Delete"><span>🗑️</span></button>
           )}
         </div>
       </div>
@@ -670,11 +701,15 @@ export default function Page() {
   const [habitsSubtab, setHabitsSubtab] = useState<HabitsSubtab>("week");
   const [habits, setHabits] = useState<Habit[]>([]);
   const [newHabitName, setNewHabitName] = useState("");
+  const [newBonusHabitName, setNewBonusHabitName] = useState("");
+  const [bonusHabitsOpen, setBonusHabitsOpen] = useState(false);
   const [editingHabitId, setEditingHabitId] = useState<string | null>(null);
   const [predictions, setPredictions] = useState<Prediction[]>([]);
   const [newPredictionTitle, setNewPredictionTitle] = useState("");
   const [newPredictionConfidence, setNewPredictionConfidence] = useState(DEFAULT_PREDICTION_CONFIDENCE);
   const [goalPredictionConfidences, setGoalPredictionConfidences] = useState<Record<string, number>>({});
+  const [murphyOpen, setMurphyOpen] = useState(false);
+  const [selectedMurphyTodoId, setSelectedMurphyTodoId] = useState<string | null>(null);
   const [predictionCalibrationResetAt, setPredictionCalibrationResetAt] = useState<number | null>(null);
   const [reflections, setReflections] = useState<ReflectionEntry[]>([]);
   const [selectedReflectionDate, setSelectedReflectionDate] = useState(getDateKey(new Date()));
@@ -696,10 +731,13 @@ export default function Page() {
   const [expansionContextTodoId, setExpansionContextTodoId] = useState<string | null>(null);
   const [expansionContextDraft, setExpansionContextDraft] = useState("");
   const [todoDrafts, setTodoDrafts] = useState<Record<string, string>>({});
+  const [showTodoDuration, setShowTodoDuration] = useState(true);
+  const [todoDurations, setTodoDurations] = useState<Record<string, number>>({});
   const [zoneImageOverrides, setZoneImageOverrides] = useState<Record<string, string>>({});
   const [blockedImages, setBlockedImages] = useState<string[]>([]);
   const [gold, setGold] = useState(0);
   const [rewardedTodoIds, setRewardedTodoIds] = useState<string[]>([]);
+  const [progressBaselines, setProgressBaselines] = useState<{ date: string; counts: Record<string, number> } | null>(null);
   const templateRef = useRef<HTMLDivElement | null>(null);
   const templateHostRef = useRef<HTMLDivElement | null>(null);
   const todoInputRefs = useRef<Map<string, HTMLTextAreaElement>>(new Map());
@@ -874,6 +912,26 @@ export default function Page() {
       setOverlayState(overlayData);
       setGameStates(overlayData.gameStates ?? []);
       setLoadState("idle");
+      // Compute or restore start-of-day progress baseline
+      const todayKey = getDateKey(new Date());
+      try {
+        const storedBaselineRaw = window.localStorage.getItem(DAILY_PROGRESS_BASELINE_STORAGE_KEY);
+        const storedBaseline = storedBaselineRaw ? JSON.parse(storedBaselineRaw) as { date: string; counts: Record<string, number> } : null;
+        if (storedBaseline && storedBaseline.date === todayKey) {
+          setProgressBaselines(storedBaseline);
+        } else {
+          const nonArch = todoData.items.filter((t) => !t.archivedAt);
+          const counts: Record<string, number> = {
+            daily: nonArch.filter((t) => getViewForDeadline(t.deadlineAt) === "daily").length,
+            weekly: nonArch.filter((t) => { const v = getViewForDeadline(t.deadlineAt); return v === "daily" || v === "weekly"; }).length,
+            monthly: nonArch.filter((t) => { const v = getViewForDeadline(t.deadlineAt); return v === "daily" || v === "weekly" || v === "monthly"; }).length,
+            all: nonArch.length,
+          };
+          const newBaseline = { date: todayKey, counts };
+          window.localStorage.setItem(DAILY_PROGRESS_BASELINE_STORAGE_KEY, JSON.stringify(newBaseline));
+          setProgressBaselines(newBaseline);
+        }
+      } catch { /* ignore */ }
     } catch (err) {
       setLoadState("error");
       setError(toErrorMessage(err));
@@ -1279,6 +1337,31 @@ export default function Page() {
     });
   }
 
+  function setTodoDuration(todoId: string, minutes: number) {
+    setTodoDurations((prev) => {
+      const next = { ...prev, [todoId]: minutes };
+      try {
+        window.localStorage.setItem(TODO_DURATIONS_STORAGE_KEY, JSON.stringify(next));
+      } catch { /* ignore */ }
+      return next;
+    });
+  }
+
+  function logTimeAndCopy(todo: Todo) {
+    void runAction(async () => {
+      const copy = await createTodo(todo.title, { deadlineAt: todo.deadlineAt });
+      if (todo.context) await updateTodo(copy.id, { context: todo.context });
+      if (todo.indent > 0) await updateTodo(copy.id, { indent: todo.indent });
+      await updateTodo(todo.id, { status: "done" });
+      const orderedIds = todos.map((t) => t.id).filter((id) => id !== copy.id);
+      const todoIndex = orderedIds.indexOf(todo.id);
+      const insertionIndex = todoIndex >= 0 ? todoIndex + 1 : orderedIds.length;
+      orderedIds.splice(insertionIndex, 0, copy.id);
+      await reorderTodos(orderedIds);
+      await refresh();
+    });
+  }
+
   function pushToNextDay(todo: Todo) {
     void runAction(async () => {
       const base = todo.deadlineAt ? new Date(todo.deadlineAt) : new Date();
@@ -1299,6 +1382,7 @@ export default function Page() {
       window.localStorage.setItem(AI_EXPAND_PROVIDER_STORAGE_KEY, expandProvider);
       window.localStorage.setItem(AI_GEMINI_API_KEY_STORAGE_KEY, geminiApiKey.trim());
       window.localStorage.setItem(AI_OPENAI_API_KEY_STORAGE_KEY, openAiApiKey.trim());
+      window.localStorage.setItem(SHOW_TODO_DURATION_STORAGE_KEY, String(showTodoDuration));
       setError(null);
       setShowSettingsModal(false);
     } catch {
@@ -1376,8 +1460,12 @@ export default function Page() {
       "",
       "Task design requirements:",
       "1) Think through end state, intermediate states, and real physical actions needed.",
-      "2) Generate 3 to 5 subtasks that can each be done in 2 or 5 minutes.",
-      "3) Start each subtask with either [2m] or [5m].",
+      showTodoDuration
+        ? "2) Generate 3 to 5 subtasks and estimate realistic time for each in minutes."
+        : "2) Generate 3 to 5 subtasks.",
+      showTodoDuration
+        ? "3) Start each subtask with [Xm] where X is the estimated minutes (e.g. [2m], [5m], [10m], [15m])."
+        : "",
       "4) Keep wording concrete and immediate (open, write, list, test, send, etc.).",
       "5) Avoid abstract planning language.",
       "",
@@ -1386,7 +1474,9 @@ export default function Page() {
       "- No markdown, no code fences, no commentary",
       "- If uncertain, still return exactly 3 strings in a JSON array",
       "Example:",
-      "[\"[2m] Open the project and list the exact deliverable\", \"[5m] Draft the first tiny action and run it\"]",
+      showTodoDuration
+        ? "[\"[2m] Open the project and list the exact deliverable\", \"[10m] Draft the first section and run it\"]"
+        : "[\"Open the project and list the exact deliverable\", \"Draft the first section and run it\"]",
     ]
       .filter((line) => line.length > 0)
       .join("\n");
@@ -1571,9 +1661,21 @@ export default function Page() {
     const parentDeadline = parentTodo.deadlineAt ?? getDefaultDeadline(todoRange);
     const createdIds: string[] = [];
     for (const title of subtasks) {
-      const created = await createTodo(title, { deadlineAt: parentDeadline });
+      let cleanTitle = title;
+      let parsedMinutes: number | null = null;
+      if (showTodoDuration) {
+        const match = /^\[(\d+)m\]\s*/i.exec(title);
+        if (match) {
+          parsedMinutes = parseInt(match[1], 10);
+          cleanTitle = title.slice(match[0].length);
+        }
+      }
+      const created = await createTodo(cleanTitle, { deadlineAt: parentDeadline });
       createdIds.push(created.id);
       await updateTodo(created.id, { indent: parentTodo.indent + 1 });
+      if (parsedMinutes !== null && parsedMinutes > 0) {
+        setTodoDuration(created.id, parsedMinutes);
+      }
     }
     const baseOrder = latestTodos.map((entry) => entry.id).filter((id) => !createdIds.includes(id));
     baseOrder.splice(insertAt, 0, ...createdIds);
@@ -2109,7 +2211,7 @@ export default function Page() {
   }, [zones, selectedZoneIds]);
   const progress = useMemo(() => {
     const nonArchived = todos.filter((todo) => !todo.archivedAt);
-    const rangeForProgress = todoRange === "top" ? "daily" : todoRange;
+    const rangeForProgress = (todoRange === "top" || todoRange === "daily_plus") ? "daily" : todoRange;
     const inView = rangeForProgress === "all"
       ? nonArchived
       : nonArchived.filter((todo) => {
@@ -2118,10 +2220,11 @@ export default function Page() {
           if (rangeForProgress === "weekly") return view === "daily" || view === "weekly";
           return view === "daily";
         });
-    if (inView.length === 0) return 0;
     const done = inView.filter((todo) => todo.status === "done").length;
-    return Math.round((done / inView.length) * 100);
-  }, [todos, todoRange]);
+    const baseline = progressBaselines?.counts[rangeForProgress] ?? inView.length;
+    const denominator = Math.max(baseline, inView.length, 1);
+    return Math.min(100, Math.round((done / denominator) * 100));
+  }, [todos, todoRange, progressBaselines]);
 
   const filteredTodos = useMemo(() => {
     const statusFiltered = todos.filter((todo) => {
@@ -2139,19 +2242,17 @@ export default function Page() {
         if (!Number.isFinite(completedDate.getTime())) return false;
         const now = new Date();
         const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        if (todoRange === "daily") return completedDate >= startOfToday;
-        const dayOfWeek = now.getDay();
-        const daysToMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
-        const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysToMonday);
-        if (todoRange === "weekly") return completedDate >= startOfWeek;
-        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-        if (todoRange === "monthly") return completedDate >= startOfMonth;
+        if (todoRange === "daily" || todoRange === "daily_plus") return completedDate >= startOfToday;
+        const ago7Days = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7);
+        if (todoRange === "weekly") return completedDate >= ago7Days;
+        const ago30Days = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 30);
+        if (todoRange === "monthly") return completedDate >= ago30Days;
         return true;
       }
       const view = getViewForDeadline(todo.deadlineAt);
       if (todoRange === "monthly") return view === "daily" || view === "weekly" || view === "monthly";
       if (todoRange === "weekly") return view === "daily" || view === "weekly";
-      if (todoRange === "daily") return view === "daily";
+      if (todoRange === "daily" || todoRange === "daily_plus") return view === "daily";
       return true;
     });
     if (todoRange === "top" && (todoFilter === "active" || todoFilter === "all") && rangeFiltered.length > 0) {
@@ -2166,6 +2267,21 @@ export default function Page() {
           topSlice.push(next);
         }
         return topSlice;
+      }
+    }
+    if (todoRange === "daily_plus" && (todoFilter === "active" || todoFilter === "all")) {
+      // Find the first top-level non-daily active item (+ its children) as a bonus item
+      const nonDailyActive = todos.filter(
+        (t) => !t.archivedAt && t.status === "active" && getViewForDeadline(t.deadlineAt) !== "daily",
+      );
+      const bonusIdx = nonDailyActive.findIndex((t) => t.indent === 0);
+      if (bonusIdx >= 0) {
+        const bonusSlice: Todo[] = [nonDailyActive[bonusIdx]];
+        for (let i = bonusIdx + 1; i < nonDailyActive.length; i += 1) {
+          if (nonDailyActive[i].indent === 0) break;
+          bonusSlice.push(nonDailyActive[i]);
+        }
+        return [...rangeFiltered, ...bonusSlice];
       }
     }
     return rangeFiltered;
@@ -2188,6 +2304,19 @@ export default function Page() {
       const storedOpenAi = window.localStorage.getItem(AI_OPENAI_API_KEY_STORAGE_KEY);
       const storedExpandContext = window.localStorage.getItem(AI_EXPAND_CONTEXT_STORAGE_KEY);
       const storedPredictionCalibrationResetAt = window.localStorage.getItem(PREDICTION_CALIBRATION_RESET_AT_STORAGE_KEY);
+      const storedShowTodoDuration = window.localStorage.getItem(SHOW_TODO_DURATION_STORAGE_KEY);
+      if (storedShowTodoDuration === "false") setShowTodoDuration(false);
+      const storedTodoDurations = window.localStorage.getItem(TODO_DURATIONS_STORAGE_KEY);
+      if (storedTodoDurations) {
+        try {
+          const parsed = JSON.parse(storedTodoDurations) as Record<string, unknown>;
+          const next: Record<string, number> = {};
+          for (const [id, val] of Object.entries(parsed)) {
+            if (typeof val === "number" && val > 0) next[id] = val;
+          }
+          setTodoDurations(next);
+        } catch { /* ignore */ }
+      }
       if (providerRaw === "gemini-flash" || providerRaw === "openai-gpt-4o-mini") {
         setExpandProvider(providerRaw);
       }
@@ -2347,6 +2476,23 @@ export default function Page() {
     setNewHabitName("");
   }
 
+  function addBonusHabit() {
+    const nextName = newBonusHabitName.trim();
+    if (!nextName) return;
+    setHabits((prev) => [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        name: nextName,
+        checks: [],
+        createdAt: Date.now(),
+        status: "active" as HabitStatus,
+        bonus: true,
+      },
+    ]);
+    setNewBonusHabitName("");
+  }
+
   function toggleHabitDay(habitId: string, dateKey: string, sourceElement: HTMLElement | null = null) {
     const habit = habits.find((h) => h.id === habitId);
     if (!habit) return;
@@ -2422,10 +2568,18 @@ export default function Page() {
     setEditingHabitId((prev) => (prev === habitId ? null : prev));
   }
 
+  function setHabitBonus(habitId: string, bonus: boolean) {
+    setHabits((prev) =>
+      prev.map((habit) => (habit.id === habitId ? { ...habit, bonus } : habit)),
+    );
+  }
+
   const activeHabits = useMemo(
     () => habits.filter((habit) => (habit.status ?? "active") === "active"),
     [habits],
   );
+  const coreHabits = useMemo(() => activeHabits.filter((h) => !h.bonus), [activeHabits]);
+  const bonusHabits = useMemo(() => activeHabits.filter((h) => h.bonus === true), [activeHabits]);
   const ideaHabits = useMemo(
     () => habits.filter((habit) => habit.status === "idea"),
     [habits],
@@ -2493,8 +2647,36 @@ export default function Page() {
     setGoalPredictionConfidences((prev) => ({ ...prev, [todo.id]: DEFAULT_PREDICTION_CONFIDENCE }));
   }
 
+  function addMurphyPrediction(targetTitle?: string) {
+    setPredictions((prev) => [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        title: "",
+        confidence: 50,
+        outcome: "pending",
+        createdAt: Date.now(),
+        resolvedAt: null,
+        murphy: true,
+        targetTitle: targetTitle ?? undefined,
+      },
+    ]);
+  }
+
+  function updatePredictionTitle(predictionId: string, title: string) {
+    setPredictions((prev) =>
+      prev.map((p) => (p.id === predictionId ? { ...p, title } : p)),
+    );
+  }
+
+  function updatePredictionConfidence(predictionId: string, confidence: number) {
+    setPredictions((prev) =>
+      prev.map((p) => (p.id === predictionId ? { ...p, confidence } : p)),
+    );
+  }
+
   const activePredictions = useMemo(
-    () => predictions.filter((prediction) => prediction.outcome === "pending"),
+    () => predictions.filter((prediction) => prediction.outcome === "pending" && !prediction.murphy),
     [predictions],
   );
   const resolvedPredictions = useMemo(
@@ -2582,6 +2764,19 @@ export default function Page() {
           todo.title.trim().length > 0,
       ),
     [todos],
+  );
+
+  const pendingMurphyPredictions = useMemo(
+    () => predictions.filter((p) => p.murphy && p.outcome === "pending"),
+    [predictions],
+  );
+  const generalMurphyPredictions = useMemo(
+    () => pendingMurphyPredictions.filter((p) => !p.targetTitle),
+    [pendingMurphyPredictions],
+  );
+  const goalMurphyPredictions = useMemo(
+    () => pendingMurphyPredictions.filter((p) => !!p.targetTitle),
+    [pendingMurphyPredictions],
   );
 
   const coreReflectionQuestions = DEFAULT_CORE_REFLECTION_QUESTIONS;
@@ -2849,6 +3044,7 @@ export default function Page() {
                 <select value={todoRange} onChange={(event) => setTodoRange(event.target.value as TodoRange)}>
                   <option value="top">Top</option>
                   <option value="daily">Day</option>
+                  <option value="daily_plus">Day+</option>
                   <option value="weekly">Week</option>
                   <option value="monthly">Month</option>
                   <option value="all">All time</option>
@@ -2891,6 +3087,10 @@ export default function Page() {
                         removeTodo={removeTodo}
                         pushToNextDay={pushToNextDay}
                         setTodoDrafts={setTodoDrafts}
+                        showTodoDuration={showTodoDuration}
+                        todoDuration={todoDurations[todo.id] ?? DEFAULT_TODO_DURATION_MINUTES}
+                        setTodoDuration={setTodoDuration}
+                        logTimeAndCopy={logTimeAndCopy}
                       />
                     ))}
                   </ul>
@@ -2998,20 +3198,24 @@ export default function Page() {
                             >
                               <td>
                                 <div className="habit-name-cell">
-                                  <input
+                                  <textarea
                                     id={`habit-name-${habit.id}`}
                                     className="habit-name-input"
                                     value={habit.name}
+                                    rows={1}
                                     onFocus={() => setEditingHabitId(habit.id)}
-                                    onChange={(event) =>
+                                    onChange={(event) => {
                                       setHabits((prev) =>
                                         prev.map((h) =>
                                           h.id === habit.id ? { ...h, name: event.target.value } : h,
                                         ),
-                                      )
-                                    }
+                                      );
+                                      const el = event.target;
+                                      el.style.height = "auto";
+                                      el.style.height = `${el.scrollHeight}px`;
+                                    }}
                                     onKeyDown={(event) => {
-                                      if (event.key === "Enter") event.currentTarget.blur();
+                                      if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); }
                                     }}
                                   />
                                   <button
@@ -3094,20 +3298,24 @@ export default function Page() {
                             }}
                           >
                             <div className="habit-name-cell">
-                              <input
+                              <textarea
                                 id={`habit-name-${habit.id}`}
                                 className="habit-name-input"
                                 value={habit.name}
+                                rows={1}
                                 onFocus={() => setEditingHabitId(habit.id)}
-                                onChange={(event) =>
+                                onChange={(event) => {
                                   setHabits((prev) =>
                                     prev.map((h) =>
                                       h.id === habit.id ? { ...h, name: event.target.value } : h,
                                     ),
-                                  )
-                                }
+                                  );
+                                  const el = event.target;
+                                  el.style.height = "auto";
+                                  el.style.height = `${el.scrollHeight}px`;
+                                }}
                                 onKeyDown={(event) => {
-                                  if (event.key === "Enter") event.currentTarget.blur();
+                                  if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); }
                                 }}
                               />
                               <button
@@ -3227,7 +3435,7 @@ export default function Page() {
                     </tr>
                   </thead>
                   <tbody>
-                    {activeHabits.map((habit) => (
+                    {coreHabits.map((habit) => (
                       <tr
                         key={habit.id}
                         className={`habit-row ${editingHabitId === habit.id ? "editing" : ""}`}
@@ -3240,18 +3448,22 @@ export default function Page() {
                       >
                         <td>
                           <div className="habit-name-cell">
-                            <input
+                            <textarea
                               id={`habit-name-${habit.id}`}
                               className="habit-name-input"
                               value={habit.name}
+                              rows={1}
                               onFocus={() => setEditingHabitId(habit.id)}
-                              onChange={(event) =>
+                              onChange={(event) => {
                                 setHabits((prev) =>
                                   prev.map((h) => (h.id === habit.id ? { ...h, name: event.target.value } : h)),
-                                )
-                              }
+                                );
+                                const el = event.target;
+                                el.style.height = "auto";
+                                el.style.height = `${el.scrollHeight}px`;
+                              }}
                               onKeyDown={(event) => {
-                                if (event.key === "Enter") event.currentTarget.blur();
+                                if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); }
                               }}
                             />
                             <button
@@ -3268,6 +3480,9 @@ export default function Page() {
                               ✎
                             </button>
                             <div className="habit-row-actions">
+                              <button type="button" onClick={() => setHabitBonus(habit.id, true)}>
+                                Bonus
+                              </button>
                               <button type="button" onClick={() => setHabitStatus(habit.id, "idea")}>
                                 Idea
                               </button>
@@ -3346,6 +3561,163 @@ export default function Page() {
                     </tr>
                   </tbody>
                     </table>
+                  </div>
+                  <div className="bonus-habits-section">
+                    <button
+                      type="button"
+                      className="bonus-habits-toggle"
+                      onClick={() => setBonusHabitsOpen((v) => !v)}
+                    >
+                      <span className="bonus-toggle-arrow">{bonusHabitsOpen ? "▾" : "▸"}</span>
+                      Bonus
+                      {bonusHabits.length > 0 && <span className="bonus-habits-count">{bonusHabits.length}</span>}
+                    </button>
+                    {bonusHabitsOpen && (
+                      <div className="habits-table-wrap">
+                        <table className="habits-table">
+                          <thead>
+                            <tr>
+                              <th>Habit</th>
+                              {habitsView === "week"
+                                ? habitDays.map((day) => (
+                                    <th key={day.key} className={day.key === todayKey ? "is-today" : ""}>
+                                      <div>{day.label}</div>
+                                      <small>{day.subLabel}</small>
+                                    </th>
+                                  ))
+                                : habitWeeks.map((week) => (
+                                    <th
+                                      key={week.start.toISOString()}
+                                      className={getDateKey(week.end) >= todayKey && getDateKey(week.start) <= todayKey ? "is-today" : ""}
+                                    >
+                                      {week.label}
+                                    </th>
+                                  ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {bonusHabits.map((habit) => (
+                              <tr
+                                key={habit.id}
+                                className={`habit-row ${editingHabitId === habit.id ? "editing" : ""}`}
+                                onBlur={(event) => {
+                                  const nextTarget = event.relatedTarget as Node | null;
+                                  if (!event.currentTarget.contains(nextTarget)) {
+                                    setEditingHabitId((current) => (current === habit.id ? null : current));
+                                  }
+                                }}
+                              >
+                                <td>
+                                  <div className="habit-name-cell">
+                                    <textarea
+                                      id={`habit-name-${habit.id}`}
+                                      className="habit-name-input"
+                                      value={habit.name}
+                                      rows={1}
+                                      onFocus={() => setEditingHabitId(habit.id)}
+                                      onChange={(event) => {
+                                        setHabits((prev) =>
+                                          prev.map((h) => (h.id === habit.id ? { ...h, name: event.target.value } : h)),
+                                        );
+                                        const el = event.target;
+                                        el.style.height = "auto";
+                                        el.style.height = `${el.scrollHeight}px`;
+                                      }}
+                                      onKeyDown={(event) => {
+                                        if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); }
+                                      }}
+                                    />
+                                    <button
+                                      type="button"
+                                      className="habit-edit-trigger"
+                                      onClick={() => {
+                                        setEditingHabitId(habit.id);
+                                        requestAnimationFrame(() => {
+                                          document.getElementById(`habit-name-${habit.id}`)?.focus();
+                                        });
+                                      }}
+                                      aria-label={`Edit ${habit.name}`}
+                                    >
+                                      ✎
+                                    </button>
+                                    <div className="habit-row-actions">
+                                      <button type="button" onClick={() => setHabitBonus(habit.id, false)}>
+                                        Core
+                                      </button>
+                                      <button type="button" onClick={() => setHabitStatus(habit.id, "idea")}>
+                                        Idea
+                                      </button>
+                                      <button type="button" onClick={() => setHabitStatus(habit.id, "archived")}>
+                                        Archive
+                                      </button>
+                                      <button type="button" onClick={() => deleteHabit(habit.id)}>Delete</button>
+                                    </div>
+                                  </div>
+                                </td>
+                                {habitsView === "week"
+                                  ? habitDays.map((day) => {
+                                      const done = habit.checks.some((check) => check.date === day.key && check.done);
+                                      return (
+                                        <td key={`${habit.id}:${day.key}`} className={day.key === todayKey ? "is-today" : ""}>
+                                          <button
+                                            type="button"
+                                            className={`habit-check ${done ? "done" : ""}`}
+                                            onClick={(event) => toggleHabitDay(habit.id, day.key, event.currentTarget)}
+                                            aria-label={`Mark ${habit.name} for ${day.label}`}
+                                          >
+                                            {done ? "✓" : ""}
+                                          </button>
+                                        </td>
+                                      );
+                                    })
+                                  : habitWeeks.map((week) => {
+                                      const done = habit.checks.some((check) => {
+                                        if (!check.done) return false;
+                                        const checkDate = new Date(`${check.date}T00:00:00`);
+                                        return checkDate >= week.start && checkDate <= week.end;
+                                      });
+                                      return (
+                                        <td
+                                          key={`${habit.id}:${week.start.toISOString()}`}
+                                          className={getDateKey(week.end) >= todayKey && getDateKey(week.start) <= todayKey ? "is-today" : ""}
+                                        >
+                                          <button
+                                            type="button"
+                                            className={`habit-check ${done ? "done" : ""}`}
+                                            onClick={(event) => toggleHabitWeek(habit.id, week.start, week.end, event.currentTarget)}
+                                          >
+                                            {done ? "✓" : ""}
+                                          </button>
+                                        </td>
+                                      );
+                                    })}
+                              </tr>
+                            ))}
+                            <tr className="habits-add-row">
+                              <td colSpan={habitsTableColSpan}>
+                                <div className="habits-add-inline">
+                                  <span className="habit-add-prefix">+</span>
+                                  <input
+                                    value={newBonusHabitName}
+                                    onChange={(event) => setNewBonusHabitName(event.target.value)}
+                                    onKeyDown={(event) => {
+                                      if (event.key === "Enter") {
+                                        event.preventDefault();
+                                        addBonusHabit();
+                                      }
+                                    }}
+                                    placeholder="+ Add a bonus habit..."
+                                  />
+                                  {newBonusHabitName.trim() ? (
+                                    <button type="button" onClick={addBonusHabit}>Add</button>
+                                  ) : null}
+                                </div>
+                              </td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -3451,6 +3823,99 @@ export default function Page() {
                       </li>
                     ))}
                   </ul>
+                )}
+              </div>
+            </details>
+            <details className="prediction-goals-panel murphy-panel" open={murphyOpen} onToggle={(e) => setMurphyOpen((e.target as HTMLDetailsElement).open)}>
+              <summary>Murphy-Jitsu</summary>
+              <div className="prediction-goals-content murphy-content">
+                <div className="murphy-subsection">
+                  <p className="murphy-prompt">
+                    If you look back this evening, what would you predict you'd be dissatisfied with or wish you'd done better?
+                  </p>
+                  <div className="murphy-predictions-list">
+                    {generalMurphyPredictions.map((p) => (
+                      <div key={p.id} className="murphy-prediction-item">
+                        <input
+                          className="murphy-prediction-text"
+                          value={p.title}
+                          onChange={(e) => updatePredictionTitle(p.id, e.target.value)}
+                          placeholder="What might go wrong or be left undone..."
+                        />
+                        <input
+                          type="number"
+                          className="murphy-prediction-confidence"
+                          min={1}
+                          max={99}
+                          value={p.confidence}
+                          onChange={(e) => updatePredictionConfidence(p.id, Math.max(1, Math.min(99, Number(e.target.value))))}
+                          title="Probability %"
+                        />
+                        <span className="murphy-confidence-label">%</span>
+                        <button type="button" className="murphy-resolve-btn murphy-hit" onClick={() => setPredictionOutcome(p.id, "hit")} title="This happened">✓</button>
+                        <button type="button" className="murphy-resolve-btn murphy-miss" onClick={() => setPredictionOutcome(p.id, "miss")} title="Didn't happen">✕</button>
+                        <button type="button" className="murphy-delete-btn" onClick={() => deletePrediction(p.id)} title="Delete">🗑️</button>
+                      </div>
+                    ))}
+                  </div>
+                  <button type="button" className="murphy-add-btn" onClick={() => addMurphyPrediction()}>+ Add prediction</button>
+                </div>
+                {todaysPredictionGoals.length > 0 && (
+                  <div className="murphy-subsection">
+                    <p className="murphy-prompt">
+                      If you don't complete one of your goals today, what would cause that?
+                    </p>
+                    <div className="murphy-goal-chips">
+                      {todaysPredictionGoals.map((todo) => (
+                        <button
+                          key={todo.id}
+                          type="button"
+                          className={`murphy-goal-chip ${selectedMurphyTodoId === todo.id ? "selected" : ""}`}
+                          onClick={() => setSelectedMurphyTodoId(selectedMurphyTodoId === todo.id ? null : todo.id)}
+                        >
+                          {todo.title.length > 35 ? `${todo.title.slice(0, 35)}…` : todo.title}
+                        </button>
+                      ))}
+                    </div>
+                    {selectedMurphyTodoId && (() => {
+                      const selectedTodo = todaysPredictionGoals.find((t) => t.id === selectedMurphyTodoId);
+                      if (!selectedTodo) return null;
+                      const forGoal = goalMurphyPredictions.filter((p) => p.targetTitle === selectedTodo.title);
+                      return (
+                        <div className="murphy-goal-detail">
+                          <p className="murphy-prompt murphy-prompt-goal">
+                            "If I don't achieve <strong>{selectedTodo.title}</strong>, it will probably be because…"
+                          </p>
+                          <div className="murphy-predictions-list">
+                            {forGoal.map((p) => (
+                              <div key={p.id} className="murphy-prediction-item">
+                                <input
+                                  className="murphy-prediction-text"
+                                  value={p.title}
+                                  onChange={(e) => updatePredictionTitle(p.id, e.target.value)}
+                                  placeholder="Failure mode..."
+                                />
+                                <input
+                                  type="number"
+                                  className="murphy-prediction-confidence"
+                                  min={1}
+                                  max={99}
+                                  value={p.confidence}
+                                  onChange={(e) => updatePredictionConfidence(p.id, Math.max(1, Math.min(99, Number(e.target.value))))}
+                                  title="Probability %"
+                                />
+                                <span className="murphy-confidence-label">%</span>
+                                <button type="button" className="murphy-resolve-btn murphy-hit" onClick={() => setPredictionOutcome(p.id, "hit")} title="This happened">✓</button>
+                                <button type="button" className="murphy-resolve-btn murphy-miss" onClick={() => setPredictionOutcome(p.id, "miss")} title="Didn't happen">✕</button>
+                                <button type="button" className="murphy-delete-btn" onClick={() => deletePrediction(p.id)} title="Delete">🗑️</button>
+                              </div>
+                            ))}
+                          </div>
+                          <button type="button" className="murphy-add-btn" onClick={() => addMurphyPrediction(selectedTodo.title)}>+ Add failure mode</button>
+                        </div>
+                      );
+                    })()}
+                  </div>
                 )}
               </div>
             </details>
@@ -4815,6 +5280,20 @@ export default function Page() {
             onClick={(event) => event.stopPropagation()}
           >
             <h3>Settings</h3>
+            <section className="settings-section">
+              <p className="settings-section-title">Time blocks</p>
+              <label className="settings-checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={showTodoDuration}
+                  onChange={(event) => setShowTodoDuration(event.target.checked)}
+                />
+                Show duration input and log button on todos
+              </label>
+              <p className="settings-hint">
+                Adds a minute estimate to each todo and a button (✓↺) to mark a time block done while keeping the todo active for more work.
+              </p>
+            </section>
             <section className="settings-section">
               <p className="settings-section-title">AI expansion</p>
               <p className="settings-section-copy">

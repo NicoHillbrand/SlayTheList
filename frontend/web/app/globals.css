@@ -368,6 +368,48 @@ body.desktop-app main {
   font-size: 0.74rem;
 }
 
+.goal-icon-btn span {
+  filter: grayscale(1);
+  opacity: 0.9;
+  display: inline-block;
+}
+.goal-icon-btn:hover span {
+  opacity: 1;
+}
+
+.todo-duration-input {
+  width: 40px;
+  background: rgba(6, 12, 22, 0.92);
+  border: 1px solid rgba(173, 142, 84, 0.2);
+  border-radius: 6px;
+  color: #8a8070;
+  font-size: 0.72rem;
+  text-align: center;
+  padding: 0.12rem 0.15rem;
+  margin-top: 0.42rem;
+  flex-shrink: 0;
+  -moz-appearance: textfield;
+}
+.todo-duration-input::-webkit-inner-spin-button,
+.todo-duration-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.todo-duration-input:focus {
+  outline: none;
+  border-color: rgba(173, 142, 84, 0.5);
+  color: #c4b896;
+}
+
+.settings-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: #cec6b5;
+}
+
 @media (max-width: 700px) {
   .app-header {
     flex-direction: column;
@@ -500,6 +542,11 @@ body.desktop-app main {
   color: #f3ede0;
   padding: 0.28rem 0.2rem;
   min-width: 0;
+  resize: none;
+  overflow: hidden;
+  line-height: 1.4;
+  font-family: inherit;
+  font-size: inherit;
 }
 
 .habit-name-input:focus {
@@ -613,6 +660,39 @@ body.desktop-app main {
   border: 1px solid rgba(173, 142, 84, 0.42);
   background: rgba(99, 77, 39, 0.36);
   color: #f8f3e5;
+}
+
+.bonus-habits-section {
+  margin-top: 0.75rem;
+}
+
+.bonus-habits-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  background: none;
+  border: none;
+  color: #8a8070;
+  font-size: 0.82rem;
+  padding: 0.3rem 0.2rem;
+  cursor: pointer;
+  letter-spacing: 0.03em;
+}
+
+.bonus-habits-toggle:hover {
+  color: #c4b896;
+}
+
+.bonus-toggle-arrow {
+  font-size: 0.7rem;
+}
+
+.bonus-habits-count {
+  background: rgba(173, 142, 84, 0.18);
+  color: #a09070;
+  border-radius: 10px;
+  padding: 0.05rem 0.45rem;
+  font-size: 0.75rem;
 }
 
 .habits-panel-header {
@@ -800,6 +880,142 @@ body.desktop-app main {
 
 .prediction-goals-content {
   padding: 0.55rem 0 0.15rem 1rem;
+}
+
+.murphy-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.murphy-subsection {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.murphy-prompt {
+  font-size: 0.875rem;
+  color: #b8b5aa;
+  font-style: italic;
+  border-left: 3px solid rgba(180, 120, 40, 0.5);
+  padding: 0.5rem 0.75rem;
+  background: rgba(180, 120, 40, 0.07);
+  border-radius: 0 6px 6px 0;
+  margin: 0;
+}
+
+.murphy-prompt-goal {
+  margin-top: 0.5rem;
+}
+
+.murphy-predictions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.murphy-prediction-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.55rem;
+  background: rgba(10, 16, 27, 0.6);
+  border: 1px solid rgba(173, 142, 84, 0.15);
+  border-left: 3px solid rgba(180, 120, 40, 0.45);
+  border-radius: 0 7px 7px 0;
+}
+
+.murphy-prediction-text {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: #e8e2d4;
+  font-size: 0.85rem;
+  padding: 0.1rem 0.2rem;
+  min-width: 0;
+}
+.murphy-prediction-text:focus { outline: none; }
+
+.murphy-prediction-confidence {
+  width: 38px;
+  background: rgba(6, 12, 22, 0.8);
+  border: 1px solid rgba(173, 142, 84, 0.2);
+  border-radius: 5px;
+  color: #a09070;
+  font-size: 0.78rem;
+  text-align: center;
+  padding: 0.1rem 0.15rem;
+  -moz-appearance: textfield;
+}
+.murphy-prediction-confidence::-webkit-inner-spin-button,
+.murphy-prediction-confidence::-webkit-outer-spin-button { -webkit-appearance: none; }
+
+.murphy-confidence-label {
+  color: #6a6458;
+  font-size: 0.78rem;
+}
+
+.murphy-resolve-btn {
+  background: transparent;
+  border: 1px solid rgba(173, 142, 84, 0.2);
+  border-radius: 5px;
+  color: #8a8070;
+  font-size: 0.78rem;
+  padding: 0.15rem 0.35rem;
+  cursor: pointer;
+}
+.murphy-hit:hover { border-color: #6a9a6a; color: #6a9a6a; }
+.murphy-miss:hover { border-color: #9a6a6a; color: #9a6a6a; }
+
+.murphy-delete-btn {
+  background: transparent;
+  border: none;
+  color: #6a6458;
+  font-size: 0.78rem;
+  cursor: pointer;
+  filter: grayscale(1);
+  opacity: 0.6;
+  padding: 0.1rem;
+}
+.murphy-delete-btn:hover { opacity: 1; }
+
+.murphy-add-btn {
+  align-self: flex-start;
+  background: transparent;
+  border: 1px solid rgba(180, 120, 40, 0.35);
+  border-radius: 7px;
+  color: #a07840;
+  font-size: 0.8rem;
+  padding: 0.25rem 0.65rem;
+  cursor: pointer;
+}
+.murphy-add-btn:hover { border-color: rgba(180, 120, 40, 0.65); color: #c49a58; }
+
+.murphy-goal-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.murphy-goal-chip {
+  background: rgba(10, 16, 27, 0.6);
+  border: 1px solid rgba(173, 142, 84, 0.2);
+  border-radius: 14px;
+  color: #b8b5aa;
+  font-size: 0.8rem;
+  padding: 0.25rem 0.7rem;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+.murphy-goal-chip:hover { border-color: rgba(180, 120, 40, 0.5); color: #c4b896; }
+.murphy-goal-chip.selected { border-color: rgba(180, 120, 40, 0.7); color: #c49a58; background: rgba(180, 120, 40, 0.1); }
+
+.murphy-goal-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-top: 0.25rem;
 }
 
 .prediction-calibration {
