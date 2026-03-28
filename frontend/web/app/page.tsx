@@ -94,7 +94,7 @@ type MoveState = {
   startZoneY: number;
 };
 type ViewTab = "goals" | "habits" | "predictions" | "reflection" | "blocks" | "social";
-type TodoFilter = "active" | "completed" | "archived" | "all";
+type TodoFilter = "active" | "completed" | "all" | "unrefined";
 type TodoRange = "daily" | "daily_plus" | "weekly" | "monthly" | "all" | "top";
 type HabitsView = "week" | "month";
 type HabitsSubtab = "ideas" | "week" | "month";
@@ -519,7 +519,6 @@ function SortableGoalRow({
   handleExpandTodo,
   openExpansionContextModal,
   openEditModal,
-  setTodoArchived,
   removeTodo,
   pushToNextDay,
   setTodoDrafts,
@@ -542,7 +541,6 @@ function SortableGoalRow({
   handleExpandTodo: (todo: Todo) => void;
   openExpansionContextModal: (todo: Todo) => void;
   openEditModal: (todo: Todo) => void;
-  setTodoArchived: (todo: Todo, archived: boolean) => void;
   removeTodo: (id: string) => void;
   pushToNextDay: (todo: Todo) => void;
   setTodoDrafts: Dispatch<SetStateAction<Record<string, string>>>;
@@ -577,7 +575,7 @@ function SortableGoalRow({
           onChange={(event) => toggleTodo(todo, event.currentTarget)}
           aria-label={`Toggle ${todo.title}`}
         />
-        {showTodoDuration && !todo.archivedAt && todo.status !== "done" && (
+        {showTodoDuration && todo.status !== "done" && (
           <input
             type="text"
             className="todo-duration-input"
@@ -620,33 +618,30 @@ function SortableGoalRow({
               : undefined
           }
           className="goal-title-input"
+          spellCheck={false}
           rows={1}
         />
         <div className="goal-actions">
-          {!todo.archivedAt && (
-            <button
-              type="button"
-              className="goal-expand-btn"
-              onClick={() => handleExpandTodo(todo)}
-              disabled={expandingTodoId === todo.id}
-              title="AI expand into 3-5 subtasks"
-              aria-label="AI expand into 3-5 subtasks"
-            >
-              {expandingTodoId === todo.id ? "…" : "+"}
-            </button>
-          )}
-          {!todo.archivedAt && (
-            <button
-              type="button"
-              className={`goal-context-btn ${expandContextByTodoId[todo.id] ? "has-context" : ""}`}
-              onClick={() => openExpansionContextModal(todo)}
-              title="Add expansion context"
-              aria-label="Add expansion context"
-            >
-              <span className="goal-context-icon" aria-hidden="true">🎤</span>
-            </button>
-          )}
-          {!todo.archivedAt && todo.status !== "done" && !!todo.deadlineAt && (
+          <button
+            type="button"
+            className="goal-expand-btn"
+            onClick={() => handleExpandTodo(todo)}
+            disabled={expandingTodoId === todo.id}
+            title="AI expand into 3-5 subtasks"
+            aria-label="AI expand into 3-5 subtasks"
+          >
+            {expandingTodoId === todo.id ? "…" : "+"}
+          </button>
+          <button
+            type="button"
+            className={`goal-context-btn ${expandContextByTodoId[todo.id] ? "has-context" : ""}`}
+            onClick={() => openExpansionContextModal(todo)}
+            title="Add expansion context"
+            aria-label="Add expansion context"
+          >
+            <span className="goal-context-icon" aria-hidden="true">🎤</span>
+          </button>
+          {todo.status !== "done" && !!todo.deadlineAt && (
             <button
               type="button"
               onClick={() => pushToNextDay(todo)}
@@ -655,7 +650,7 @@ function SortableGoalRow({
               +1d
             </button>
           )}
-          {showTodoDuration && !todo.archivedAt && todo.status !== "done" && (
+          {showTodoDuration && todo.status !== "done" && (
             <button
               type="button"
               className="goal-log-copy-btn"
@@ -665,19 +660,8 @@ function SortableGoalRow({
               ✓↺
             </button>
           )}
-          {!todo.archivedAt && (
-            <button type="button" className="goal-icon-btn" onClick={() => openEditModal(todo)} title="Edit" aria-label="Edit"><span>✏️</span></button>
-          )}
-          {todo.archivedAt ? (
-            <>
-              <button type="button" onClick={() => setTodoArchived(todo, false)} title="Restore" aria-label="Restore">Restore</button>
-              <button type="button" className="goal-icon-btn" onClick={() => removeTodo(todo.id)} title="Delete" aria-label="Delete"><span>🗑️</span></button>
-            </>
-          ) : todo.status === "done" || todoFilter === "completed" ? (
-            <button type="button" onClick={() => setTodoArchived(todo, true)} title="Archive" aria-label="Archive">Archive</button>
-          ) : (
-            <button type="button" className="goal-icon-btn" onClick={() => removeTodo(todo.id)} title="Delete" aria-label="Delete"><span>🗑️</span></button>
-          )}
+          <button type="button" className="goal-icon-btn" onClick={() => openEditModal(todo)} title="Edit" aria-label="Edit"><span>✏️</span></button>
+          <button type="button" className="goal-icon-btn" onClick={() => removeTodo(todo.id)} title="Delete" aria-label="Delete"><span>🗑️</span></button>
         </div>
       </div>
     </li>
@@ -1231,21 +1215,6 @@ export default function Page() {
     })();
   }
 
-  function setTodoArchived(todo: Todo, archived: boolean) {
-    const nowIso = new Date().toISOString();
-    setTodos((previous) =>
-      previous.map((item) =>
-        item.id === todo.id
-          ? { ...item, archivedAt: archived ? nowIso : null, updatedAt: nowIso }
-          : item,
-      ),
-    );
-    void runAction(async () => {
-      const updated = await updateTodo(todo.id, { archived });
-      setTodos((previous) => previous.map((item) => (item.id === updated.id ? updated : item)));
-    });
-  }
-
   function applyVisibleReorder(newVisibleIds: string[]) {
     const visibleSet = new Set(filteredTodos.map((todo) => todo.id));
     const fullOrder = todos.map((todo) => todo.id);
@@ -1709,7 +1678,7 @@ export default function Page() {
 
   function addItemBelowList() {
     void runAction(async () => {
-      const created = await createTodo("", { deadlineAt: getDefaultDeadline(todoRange) });
+      const created = await createTodo("", { deadlineAt: todoFilter === "unrefined" ? null : getDefaultDeadline(todoRange) });
       const orderedIds = todos.map((item) => item.id).filter((id) => id !== created.id);
       const lastVisibleId = filteredTodos[filteredTodos.length - 1]?.id;
       const insertAfterIndex = lastVisibleId ? orderedIds.indexOf(lastVisibleId) : orderedIds.length - 1;
@@ -1754,10 +1723,11 @@ export default function Page() {
           await updateTodo(todo.id, { title: prefix });
         }
         const created = await createTodo(suffix, {
-          deadlineAt: todo.deadlineAt ?? getDefaultDeadline(todoRange),
+          deadlineAt: todoFilter === "unrefined" ? null : (todo.deadlineAt ?? getDefaultDeadline(todoRange)),
         });
-        if (todo.indent > 0) {
-          await updateTodo(created.id, { indent: todo.indent });
+        const newIndent = todoRange === "top" ? todo.indent + 1 : todo.indent;
+        if (newIndent > 0) {
+          await updateTodo(created.id, { indent: newIndent });
         }
         const orderedIds = todos.map((item) => item.id).filter((id) => id !== created.id);
         const todoIndex = orderedIds.indexOf(todo.id);
@@ -1841,6 +1811,10 @@ export default function Page() {
     const zoneState = overlayState?.zones.find((entry) => entry.zone.id === zoneId);
     if (!zoneState) return;
     if (!zoneState.isLocked) return;
+    if (!goldReservesUnlocked) {
+      setError("Complete at least one todo today to unlock your gold reserves.");
+      return;
+    }
     if (gold < ZONE_GOLD_UNLOCK_COST) {
       setError(`You need ${ZONE_GOLD_UNLOCK_COST} gold to unlock this block.`);
       return;
@@ -2226,15 +2200,25 @@ export default function Page() {
     return Math.min(100, Math.round((done / denominator) * 100));
   }, [todos, todoRange, progressBaselines]);
 
+  const goldReservesUnlocked = useMemo(() => {
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    return todos.some((todo) => {
+      if (!todo.completedAt) return false;
+      const d = new Date(todo.completedAt);
+      return Number.isFinite(d.getTime()) && d >= startOfToday;
+    });
+  }, [todos]);
+
   const filteredTodos = useMemo(() => {
     const statusFiltered = todos.filter((todo) => {
-      if (todoFilter === "archived") return !!todo.archivedAt;
       if (todoFilter === "active") return !todo.archivedAt && todo.status === "active";
       if (todoFilter === "completed") return !todo.archivedAt && todo.status === "done";
+      if (todoFilter === "unrefined") return !todo.archivedAt && todo.status === "active" && !todo.deadlineAt;
       return true;
     });
     const rangeFiltered = statusFiltered.filter((todo) => {
-      if (todoFilter === "archived" || todoRange === "all") return true;
+      if (todoFilter === "unrefined" || todoRange === "all") return true;
       if (todoRange === "top") return true;
       if (todoFilter === "completed") {
         if (!todo.completedAt) return false;
@@ -2591,7 +2575,7 @@ export default function Page() {
   const habitsTableColSpan = habitsView === "week" ? habitDays.length + 1 : habitWeeks.length + 1;
   const newHabitStatus: HabitStatus = habitsSubtab === "ideas" ? "idea" : "active";
   const newHabitPlaceholder =
-    habitsSubtab === "ideas" ? "+ Add a new habit idea..." : "+ Add a new habit...";
+    habitsSubtab === "ideas" ? "Add a new habit idea..." : "Add a new habit...";
 
   function addPrediction() {
     const title = newPredictionTitle.trim();
@@ -3038,8 +3022,8 @@ export default function Page() {
                 <select value={todoFilter} onChange={(event) => setTodoFilter(event.target.value as TodoFilter)}>
                   <option value="active">Active</option>
                   <option value="completed">Completed</option>
+                  <option value="unrefined">Unrefined</option>
                   <option value="all">All</option>
-                  <option value="archived">Archived</option>
                 </select>
                 <select value={todoRange} onChange={(event) => setTodoRange(event.target.value as TodoRange)}>
                   <option value="top">Top</option>
@@ -3083,7 +3067,6 @@ export default function Page() {
                         handleExpandTodo={handleExpandTodo}
                         openExpansionContextModal={openExpansionContextModal}
                         openEditModal={openEditModal}
-                        setTodoArchived={setTodoArchived}
                         removeTodo={removeTodo}
                         pushToNextDay={pushToNextDay}
                         setTodoDrafts={setTodoDrafts}
@@ -3111,7 +3094,6 @@ export default function Page() {
               </DndContext>
             )}
             {todoFilter !== "completed" &&
-              todoFilter !== "archived" &&
               todoRange !== "top" && (
               <button type="button" className="goals-add-item-btn" onClick={addItemBelowList}>
                 <span>+</span> New item
@@ -3706,7 +3688,7 @@ export default function Page() {
                                         addBonusHabit();
                                       }
                                     }}
-                                    placeholder="+ Add a bonus habit..."
+                                    placeholder="Add a bonus habit..."
                                   />
                                   {newBonusHabitName.trim() ? (
                                     <button type="button" onClick={addBonusHabit}>Add</button>
