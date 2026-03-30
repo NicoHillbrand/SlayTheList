@@ -4477,7 +4477,7 @@ export default function Page() {
             style={{
               width: "100%",
               background: isCanvasFullscreen ? "#0b1220" : "transparent",
-              padding: isCanvasFullscreen ? "1rem" : 0,
+              padding: 0,
               ...(isCanvasFullscreen ? { height: "100%", display: "flex", alignItems: "center", justifyContent: "center" } : {}),
             }}
           >
@@ -4492,8 +4492,8 @@ export default function Page() {
               maxWidth: isCanvasFullscreen ? "100%" : CANVAS_MAX_WIDTH,
               maxHeight: isCanvasFullscreen ? "100%" : undefined,
               aspectRatio: `${TEMPLATE_WIDTH} / ${TEMPLATE_HEIGHT}`,
-              borderRadius: "8px",
-              border: "1px dashed #4b5563",
+              borderRadius: isCanvasFullscreen ? 0 : "8px",
+              border: isCanvasFullscreen ? "none" : "1px dashed #4b5563",
               background:
                 "linear-gradient(180deg, rgba(17,24,39,0.7) 0%, rgba(11,18,32,0.9) 100%)",
               overflow: "hidden",
