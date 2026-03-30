@@ -25,6 +25,8 @@ import {
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS as DndCSS } from "@dnd-kit/utilities";
 import type {
+  Block,
+  BlockUnlockMode,
   GameState,
   GameStateDetectionRegion,
   GameStateReferenceImage,
@@ -60,10 +62,7 @@ import {
   reorderTodos,
   saveGoldState,
   saveAccountabilityState,
-  setDetectedGameState as setDetectedGameStateApi,
   setDetectionRegions as setDetectionRegionsApi,
-  testDetection as testDetectionApi,
-  type DetectionTestResult,
   setZoneGameStates as setZoneGameStatesApi,
   awardGold as awardGoldApi,
   awardTodoGold as awardTodoGoldApi,
@@ -74,6 +73,12 @@ import {
   updateTodo,
   updateZone,
   uploadReferenceImage,
+  listBlocks,
+  createBlock,
+  updateBlock,
+  deleteBlock,
+  getAppSetting,
+  setAppSetting,
 } from "../lib/api";
 import SocialModal from "./social-modal";
 
@@ -177,13 +182,12 @@ const AI_EXPAND_CONTEXT_STORAGE_KEY = "slaythelist.ai.expandContextByTodoId";
 const PREDICTION_CALIBRATION_RESET_AT_STORAGE_KEY = "slaythelist.predictions.calibrationResetAt";
 const SHOW_TODO_DURATION_STORAGE_KEY = "slaythelist.showTodoDuration";
 const TODO_DURATIONS_STORAGE_KEY = "slaythelist.todoDurations";
-const DAILY_PROGRESS_BASELINE_STORAGE_KEY = "slaythelist.dailyProgressBaseline";
+const DAILY_PROGRESS_BASELINE_STORAGE_KEY = "slaythelist.dailyProgressBaseline.v2";
 const DEFAULT_TODO_DURATION_MINUTES = 5;
 const DEFAULT_PREDICTION_CONFIDENCE = 95;
 const CALIBRATION_CHART_WIDTH = 320;
 const CALIBRATION_CHART_HEIGHT = 190;
 const CALIBRATION_CHART_PADDING = { top: 16, right: 18, bottom: 28, left: 34 };
-const ZONE_GOLD_UNLOCK_COST = 10;
 const DEFAULT_GOLD_SOUND_ID = "sack-shift";
 const GOLD_SOUND_OPTIONS: GoldSoundOption[] = [
   {
@@ -245,9 +249,9 @@ function truncateText(input: string, max = 40) {
   return `${input.slice(0, max - 1)}…`;
 }
 
-function lockMessage(requiredTodoTitles: string[], unlockMode: LockZoneUnlockMode) {
+function lockMessage(requiredTodoTitles: string[], unlockMode: LockZoneUnlockMode, goldCost = 10) {
   if (unlockMode === "gold") {
-    return `Unlock for\n\n${ZONE_GOLD_UNLOCK_COST} gold`;
+    return `Unlock for\n\n${goldCost} gold`;
   }
   if (requiredTodoTitles.length === 0) {
     return "Unlock via\n\nto-do";
@@ -715,6 +719,7 @@ export default function Page() {
   const [expansionContextTodoId, setExpansionContextTodoId] = useState<string | null>(null);
   const [expansionContextDraft, setExpansionContextDraft] = useState("");
   const [todoDrafts, setTodoDrafts] = useState<Record<string, string>>({});
+  const [showDetectionIndicator, setShowDetectionIndicatorState] = useState(true);
   const [showTodoDuration, setShowTodoDuration] = useState(true);
   const [todoDurations, setTodoDurations] = useState<Record<string, number>>({});
   const [zoneImageOverrides, setZoneImageOverrides] = useState<Record<string, string>>({});
@@ -740,10 +745,13 @@ export default function Page() {
   const [gameStateDetectionRegions, setGameStateDetectionRegions] = useState<Map<string, GameStateDetectionRegion[]>>(new Map());
   const [regionDrag, setRegionDrag] = useState<{ gsId: string; startX: number; startY: number; currentX: number; currentY: number; active: boolean } | null>(null);
   const [, setCooldownTick] = useState(0);
-  const [blockSubtab, setBlockSubtab] = useState<"zones" | "game-states">("zones");
-  const [detectionTestResults, setDetectionTestResults] = useState<DetectionTestResult[] | null>(null);
-  const [detectionTestImage, setDetectionTestImage] = useState<string | null>(null);
-  const [isTestingDetection, setIsTestingDetection] = useState(false);
+  const [blockSubtab, setBlockSubtab] = useState<"blocks" | "screen-states">("blocks");
+  const [blocks, setBlocks] = useState<Block[]>([]);
+  const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
+  const [newBlockName, setNewBlockName] = useState("");
+  const [newBlockGameStateId, setNewBlockGameStateId] = useState("");
+  const [newBlockUnlockMode, setNewBlockUnlockMode] = useState<BlockUnlockMode>("independent");
+  const [showNewBlockForm, setShowNewBlockForm] = useState(false);
 
   function stopGoldSoundPlayback() {
     goldSoundTimeoutsRef.current.forEach((timeoutId) => window.clearTimeout(timeoutId));
@@ -883,13 +891,15 @@ export default function Page() {
       setLoadState("loading");
     }
     try {
-      const [todoData, zoneData, overlayData, fetchedGoldState] = await Promise.all([
+      const [todoData, zoneData, overlayData, fetchedGoldState, blockData] = await Promise.all([
         listTodos(),
         listZones(),
         getOverlayState(),
         getGoldState(),
+        listBlocks(),
       ]);
       setTodos(todoData.items);
+      setBlocks(blockData.items);
       setGold(fetchedGoldState.gold);
       setRewardedTodoIds(fetchedGoldState.rewardedTodoIds);
       setZones(zoneData.items);
@@ -905,16 +915,22 @@ export default function Page() {
           setProgressBaselines(storedBaseline);
         } else {
           const nonArch = todoData.items.filter((t) => !t.archivedAt);
+          const active = nonArch.filter((t) => t.status !== "done");
           const counts: Record<string, number> = {
-            daily: nonArch.filter((t) => getViewForDeadline(t.deadlineAt) === "daily").length,
-            weekly: nonArch.filter((t) => { const v = getViewForDeadline(t.deadlineAt); return v === "daily" || v === "weekly"; }).length,
-            monthly: nonArch.filter((t) => { const v = getViewForDeadline(t.deadlineAt); return v === "daily" || v === "weekly" || v === "monthly"; }).length,
-            all: nonArch.length,
+            daily: active.filter((t) => getViewForDeadline(t.deadlineAt) === "daily").length,
+            weekly: active.filter((t) => { const v = getViewForDeadline(t.deadlineAt); return v === "daily" || v === "weekly"; }).length,
+            monthly: active.filter((t) => { const v = getViewForDeadline(t.deadlineAt); return v === "daily" || v === "weekly" || v === "monthly"; }).length,
+            all: active.length,
           };
           const newBaseline = { date: todayKey, counts };
           window.localStorage.setItem(DAILY_PROGRESS_BASELINE_STORAGE_KEY, JSON.stringify(newBaseline));
           setProgressBaselines(newBaseline);
         }
+      } catch { /* ignore */ }
+      // Load app settings
+      try {
+        const indicatorSetting = await getAppSetting("showDetectionIndicator");
+        setShowDetectionIndicatorState(indicatorSetting.value !== "false");
       } catch { /* ignore */ }
     } catch (err) {
       setLoadState("error");
@@ -1146,7 +1162,7 @@ export default function Page() {
     const nextName = zoneName.trim();
     if (!nextName) return;
     void runAction(async () => {
-      await createZone({ name: nextName });
+      await createZone({ name: nextName, blockId: selectedBlockId ?? undefined });
       setZoneName("");
       await refresh();
     });
@@ -1765,9 +1781,9 @@ export default function Page() {
   }
 
   function patchZone(zoneId: string, patch: Partial<LockZone>) {
+    setZones((prev) => prev.map((z) => z.id === zoneId ? { ...z, ...patch } : z));
     void runAction(async () => {
       await updateZone(zoneId, patch);
-      await refresh();
     });
   }
 
@@ -1793,7 +1809,6 @@ export default function Page() {
     );
     void runAction(async () => {
       await updateZone(zoneId, { unlockMode });
-      await refresh();
     });
   }
 
@@ -1803,7 +1818,6 @@ export default function Page() {
     );
     void runAction(async () => {
       await updateZone(zoneId, { cooldownEnabled, cooldownSeconds });
-      await refresh();
     });
   }
 
@@ -1815,13 +1829,14 @@ export default function Page() {
       setError("Complete at least one todo today to unlock your gold reserves.");
       return;
     }
-    if (gold < ZONE_GOLD_UNLOCK_COST) {
-      setError(`You need ${ZONE_GOLD_UNLOCK_COST} gold to unlock this block.`);
+    const cost = zoneState.zone.goldCost;
+    if (gold < cost) {
+      setError(`You need ${cost} gold to unlock this block.`);
       return;
     }
 
     const confirmed = window.confirm(
-      `Spend ${ZONE_GOLD_UNLOCK_COST} gold to unlock this block?`,
+      `Spend ${cost} gold to unlock this block?`,
     );
     if (!confirmed) return;
 
@@ -1949,54 +1964,6 @@ export default function Page() {
     });
   }
 
-  function runDetectionTest(files: FileList | null) {
-    if (!files || files.length === 0) return;
-    const file = files[0];
-    setIsTestingDetection(true);
-    setDetectionTestResults(null);
-
-    const previewReader = new FileReader();
-    previewReader.onload = () => setDetectionTestImage(previewReader.result as string);
-    previewReader.readAsDataURL(file);
-
-    void (async () => {
-      try {
-        const buffer = await file.arrayBuffer();
-        const base64 = btoa(
-          new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), ""),
-        );
-        const result = await testDetectionApi(base64);
-        setDetectionTestResults(result.results);
-      } catch (err) {
-        setError(toErrorMessage(err));
-      } finally {
-        setIsTestingDetection(false);
-      }
-    })();
-  }
-
-  function runDetectionTestFromUrl(imageUrl: string) {
-    setIsTestingDetection(true);
-    setDetectionTestResults(null);
-    setDetectionTestImage(imageUrl);
-
-    void (async () => {
-      try {
-        const response = await fetch(imageUrl);
-        const blob = await response.blob();
-        const buffer = await blob.arrayBuffer();
-        const base64 = btoa(
-          new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), ""),
-        );
-        const result = await testDetectionApi(base64);
-        setDetectionTestResults(result.results);
-      } catch (err) {
-        setError(toErrorMessage(err));
-      } finally {
-        setIsTestingDetection(false);
-      }
-    })();
-  }
 
   function toggleZoneGameState(zoneId: string, gameStateId: string) {
     if (!overlayState) return;
@@ -2114,9 +2081,9 @@ export default function Page() {
     setDrag(null);
     if (width < 12 || height < 12) return;
 
-    const name = zoneName.trim() || `Zone ${zones.length + 1}`;
+    const name = `Zone ${zones.length + 1}`;
     void runAction(async () => {
-      await createZone({ name, x, y, width, height, enabled: true });
+      await createZone({ name, x, y, width, height, enabled: true, blockId: selectedBlockId ?? undefined });
       await refresh();
     });
   }
@@ -2176,13 +2143,20 @@ export default function Page() {
   }
 
   const dragRect = computedDragRect();
+  const blockZones = useMemo(() => {
+    if (!selectedBlockId) return [];
+    return zones.filter((zone) => {
+      const zoneState = overlayState?.zones.find((zs) => zs.zone.id === zone.id);
+      return zoneState?.blockId === selectedBlockId;
+    });
+  }, [zones, selectedBlockId, overlayState]);
   const canvasZones = useMemo(() => {
-    if (selectedZoneIds.length === 0) return zones;
+    if (selectedZoneIds.length === 0) return blockZones;
     const selectedSet = new Set(selectedZoneIds);
-    const selected = zones.filter((zone) => selectedSet.has(zone.id));
-    const others = zones.filter((zone) => !selectedSet.has(zone.id));
+    const selected = blockZones.filter((zone) => selectedSet.has(zone.id));
+    const others = blockZones.filter((zone) => !selectedSet.has(zone.id));
     return [...others, ...selected];
-  }, [zones, selectedZoneIds]);
+  }, [blockZones, selectedZoneIds]);
   const progress = useMemo(() => {
     const nonArchived = todos.filter((todo) => !todo.archivedAt);
     const rangeForProgress = (todoRange === "top" || todoRange === "daily_plus") ? "daily" : todoRange;
@@ -2194,9 +2168,19 @@ export default function Page() {
           if (rangeForProgress === "weekly") return view === "daily" || view === "weekly";
           return view === "daily";
         });
-    const done = inView.filter((todo) => todo.status === "done").length;
-    const baseline = progressBaselines?.counts[rangeForProgress] ?? inView.length;
-    const denominator = Math.max(baseline, inView.length, 1);
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const done = inView.filter((todo) => {
+      if (todo.status !== "done") return false;
+      if (!todo.completedAt) return true;
+      const completedDate = new Date(todo.completedAt);
+      if (!Number.isFinite(completedDate.getTime())) return true;
+      if (rangeForProgress === "daily") return completedDate >= startOfToday;
+      return true;
+    }).length;
+    const activeNow = inView.filter((todo) => todo.status !== "done").length;
+    const baseline = progressBaselines?.counts[rangeForProgress] ?? activeNow;
+    const denominator = Math.max(baseline, activeNow + done, 1);
     return Math.min(100, Math.round((done / denominator) * 100));
   }, [todos, todoRange, progressBaselines]);
 
@@ -2373,8 +2357,16 @@ export default function Page() {
     return map;
   }, [overlayState]);
   const lockableTodos = useMemo(
-    () => todos.filter((todo) => !todo.archivedAt && todo.title.trim().length > 0),
+    () => todos.filter((todo) => !todo.archivedAt && todo.status === "active" && todo.title.trim().length > 0),
     [todos],
+  );
+  const lockableTodosToday = useMemo(
+    () => lockableTodos.filter((todo) => getViewForDeadline(todo.deadlineAt) === "daily"),
+    [lockableTodos],
+  );
+  const lockableTodosFuture = useMemo(
+    () => lockableTodos.filter((todo) => getViewForDeadline(todo.deadlineAt) !== "daily"),
+    [lockableTodos],
   );
   const titleByTodoId = useMemo(
     () => new Map(lockableTodos.map((todo) => [todo.id, todo.title] as const)),
@@ -2546,16 +2538,20 @@ export default function Page() {
   }
 
   function setHabitStatus(habitId: string, status: HabitStatus) {
-    setHabits((prev) =>
-      prev.map((habit) => (habit.id === habitId ? { ...habit, status } : habit)),
-    );
+    const nextHabits = habits.map((habit) => (habit.id === habitId ? { ...habit, status } : habit));
+    setHabits(nextHabits);
     setEditingHabitId((prev) => (prev === habitId ? null : prev));
+    void runAction(async () => {
+      await saveAccountabilityState({ habits: nextHabits, predictions, reflections });
+    });
   }
 
   function setHabitBonus(habitId: string, bonus: boolean) {
-    setHabits((prev) =>
-      prev.map((habit) => (habit.id === habitId ? { ...habit, bonus } : habit)),
-    );
+    const nextHabits = habits.map((habit) => (habit.id === habitId ? { ...habit, bonus } : habit));
+    setHabits(nextHabits);
+    void runAction(async () => {
+      await saveAccountabilityState({ habits: nextHabits, predictions, reflections });
+    });
   }
 
   const activeHabits = useMemo(
@@ -4192,7 +4188,7 @@ export default function Page() {
           )}
 
           {activeTab === "blocks" && (
-          <section className="tab-pane goals-board">
+          <section className="tab-pane goals-board" onClick={() => { if (blockSubtab === "screen-states") setSelectedGameStateId(null); }}>
           <div className="goals-topbar">
             <nav className="goals-subtabs" aria-label="Accountability sections">
               <button
@@ -4243,41 +4239,41 @@ export default function Page() {
           <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
             <button
               type="button"
-              onClick={() => setBlockSubtab("zones")}
+              onClick={() => setBlockSubtab("blocks")}
               style={{
-                fontWeight: blockSubtab === "zones" ? 700 : 400,
+                fontWeight: blockSubtab === "blocks" ? 700 : 400,
                 background: "transparent",
                 borderTop: "none",
                 borderLeft: "none",
                 borderRight: "none",
                 borderBottomWidth: 2,
                 borderBottomStyle: "solid",
-                borderBottomColor: blockSubtab === "zones" ? "#60a5fa" : "transparent",
+                borderBottomColor: blockSubtab === "blocks" ? "#60a5fa" : "transparent",
                 padding: "0.4rem 0.75rem",
                 cursor: "pointer",
-                color: blockSubtab === "zones" ? "#e2e8f0" : "#94a3b8",
+                color: blockSubtab === "blocks" ? "#e2e8f0" : "#94a3b8",
               }}
             >
-              Lock Zones
+              Blocks
             </button>
             <button
               type="button"
-              onClick={() => setBlockSubtab("game-states")}
+              onClick={() => setBlockSubtab("screen-states")}
               style={{
-                fontWeight: blockSubtab === "game-states" ? 700 : 400,
+                fontWeight: blockSubtab === "screen-states" ? 700 : 400,
                 background: "transparent",
                 borderTop: "none",
                 borderLeft: "none",
                 borderRight: "none",
                 borderBottomWidth: 2,
                 borderBottomStyle: "solid",
-                borderBottomColor: blockSubtab === "game-states" ? "#60a5fa" : "transparent",
+                borderBottomColor: blockSubtab === "screen-states" ? "#60a5fa" : "transparent",
                 padding: "0.4rem 0.75rem",
                 cursor: "pointer",
-                color: blockSubtab === "game-states" ? "#e2e8f0" : "#94a3b8",
+                color: blockSubtab === "screen-states" ? "#e2e8f0" : "#94a3b8",
               }}
             >
-              Game States
+              Screen States
               {detectedGameState?.gameStateName && (
                 <span style={{ marginLeft: "0.4rem", fontSize: "0.75rem", color: "#86efac" }}>
                   ({detectedGameState.gameStateName})
@@ -4286,108 +4282,194 @@ export default function Page() {
             </button>
           </div>
 
-          {blockSubtab === "zones" && (
+          {blockSubtab === "blocks" && (
           <>
-          <h2>Create Lock Zone</h2>
-          <form onSubmit={onCreateZone} style={{ display: "flex", gap: "0.5rem" }}>
-            <input
-              value={zoneName}
-              onChange={(event) => setZoneName(event.target.value)}
-              placeholder="e.g. Top center card zone"
-              style={{ flex: 1 }}
-            />
-            <button type="submit">Add Zone</button>
-          </form>
-          <p style={{ marginTop: "0.75rem", marginBottom: "0.5rem", opacity: 0.85 }}>
-            Drag empty space to create. Click a block to select and drag it to rearrange.
-          </p>
-          <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.5rem" }}>
-            <button type="button" onClick={() => void toggleCanvasFullscreen()}>
-              {isCanvasFullscreen ? "Exit fullscreen" : "Fullscreen canvas"}
-            </button>
-            <button type="button" onClick={onDeleteSelectedZone} disabled={selectedZoneIds.length === 0}>
-              Delete selected area(s)
-            </button>
-            <small style={{ alignSelf: "center", opacity: 0.75 }}>
-              {selectedZoneIds.length > 0
-                ? `${selectedZoneIds.length} selected`
-                : "No area selected"}
-            </small>
-          </div>
-          <label style={{ display: "grid", gap: "0.3rem", marginBottom: "0.5rem" }}>
-            <span>Locked area image</span>
-            <select
-              value={selectedImageValue}
-              disabled={blockedImages.length === 0 || selectedZoneIds.length === 0}
-              onChange={(event) =>
-                applyImageToSelectedZones(
-                  event.target.value === "__auto__" || event.target.value === "__mixed__"
-                    ? null
-                    : event.target.value,
-                )
-              }
-            >
-              <option value="__auto__">Auto by zone</option>
-              {selectedImageValue === "__mixed__" && <option value="__mixed__">Mixed selection</option>}
-              {blockedImages.map((src) => (
-                <option key={`blocked-image:${src}`} value={src}>
-                  {imageLabel(src)}
-                </option>
-              ))}
-            </select>
-            {blockedImages.length === 0 && (
-              <small style={{ opacity: 0.8 }}>
-                No images found in `frontend/web/public/blocked-overlays`.
-              </small>
-            )}
-            {blockedImages.length > 0 && selectedZoneIds.length === 0 && (
-              <small style={{ opacity: 0.8 }}>
-                Select one or more lock zones, then choose an image.
-              </small>
-            )}
-          </label>
-          <div
-            style={{
-              display: "flex",
-              gap: "0.4rem",
-              marginBottom: "0.6rem",
-              overflowX: "auto",
-              paddingBottom: "0.25rem",
-            }}
-          >
-            {blockedImages.map((src) => {
-              const active = selectedImageValue === src;
+          {/* Block Selector */}
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem", alignItems: "center" }}>
+            {blocks.map((block) => {
+              const gsName = gameStateNameById.get(block.gameStateId) ?? "Unknown";
+              const isActive = selectedBlockId === block.id;
               return (
                 <button
-                  key={`image-chip:${src}`}
+                  key={block.id}
                   type="button"
-                  onClick={() => applyImageToSelectedZones(src)}
-                  disabled={selectedZoneIds.length === 0}
+                  onClick={() => setSelectedBlockId(isActive ? null : block.id)}
                   style={{
-                    width: 70,
-                    height: 44,
-                    border: active ? "2px solid #60a5fa" : "1px solid #4b5563",
-                    padding: 0,
-                    backgroundImage: `url("${src}")`,
-                    backgroundSize: "cover",
-                    backgroundPosition: "center",
+                    padding: "0.5rem 0.75rem",
+                    borderRadius: "8px",
+                    border: isActive ? "2px solid #60a5fa" : "1px solid #374151",
+                    background: isActive ? "rgba(96,165,250,0.15)" : "rgba(30,41,59,0.5)",
+                    cursor: "pointer",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "0.2rem",
+                    minWidth: 120,
                   }}
-                  title={imageLabel(src)}
-                />
+                >
+                  <span style={{ fontWeight: 600, color: "#e2e8f0" }}>{block.name}</span>
+                  <span style={{ fontSize: "0.75rem", color: "#94a3b8" }}>{gsName}</span>
+                  <span style={{
+                    fontSize: "0.65rem",
+                    color: block.enabled ? "#86efac" : "#fca5a5",
+                    fontWeight: 600,
+                  }}>
+                    {block.enabled ? "Enabled" : "Disabled"}
+                  </span>
+                </button>
               );
             })}
             <button
               type="button"
-              onClick={() => applyImageToSelectedZones(null)}
-              disabled={selectedZoneIds.length === 0}
+              onClick={() => { setShowNewBlockForm(true); setNewBlockName(""); setNewBlockGameStateId(gameStates[0]?.id ?? ""); setNewBlockUnlockMode("independent"); }}
               style={{
-                minWidth: 78,
-                height: 44,
-                border: selectedImageValue === "__auto__" ? "2px solid #60a5fa" : "1px solid #4b5563",
-                fontSize: 12,
+                padding: "0.5rem 0.75rem",
+                borderRadius: "8px",
+                border: "1px dashed #4b5563",
+                background: "transparent",
+                cursor: "pointer",
+                color: "#94a3b8",
+                fontSize: "1.2rem",
+                minWidth: 48,
               }}
+              title="Create a new block"
             >
-              Auto
+              +
+            </button>
+          </div>
+
+          {showNewBlockForm && (
+            <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem", flexWrap: "wrap", alignItems: "flex-end" }}>
+              <label style={{ display: "grid", gap: "0.2rem" }}>
+                <small>Name</small>
+                <input
+                  value={newBlockName}
+                  onChange={(e) => setNewBlockName(e.target.value)}
+                  placeholder="Block name"
+                  style={{ width: 160 }}
+                />
+              </label>
+              <label style={{ display: "grid", gap: "0.2rem" }}>
+                <small>Screen State</small>
+                <select value={newBlockGameStateId} onChange={(e) => setNewBlockGameStateId(e.target.value)} style={{ width: 160 }}>
+                  {gameStates.length === 0 && <option value="">No screen states</option>}
+                  {gameStates.map((gs) => (
+                    <option key={gs.id} value={gs.id}>{gs.name}</option>
+                  ))}
+                </select>
+              </label>
+              <label style={{ display: "grid", gap: "0.2rem" }}>
+                <small>Zone Locks</small>
+                <select value={newBlockUnlockMode} onChange={(e) => setNewBlockUnlockMode(e.target.value as BlockUnlockMode)} style={{ width: 140 }}>
+                  <option value="independent">Independent</option>
+                  <option value="shared">Shared</option>
+                </select>
+              </label>
+              <button
+                type="button"
+                disabled={!newBlockName.trim() || !newBlockGameStateId}
+                onClick={async () => {
+                  const created = await createBlock(newBlockName.trim(), newBlockGameStateId, newBlockUnlockMode);
+                  await refresh();
+                  setSelectedBlockId(created.id);
+                  setShowNewBlockForm(false);
+                }}
+              >
+                Create
+              </button>
+              <button type="button" onClick={() => setShowNewBlockForm(false)}>Cancel</button>
+            </div>
+          )}
+
+          {blocks.length === 0 && !showNewBlockForm && (
+            <p style={{ opacity: 0.7 }}>Create a block to get started. Each block groups lock zones together and is tied to a screen state.</p>
+          )}
+
+          {/* Selected Block Config */}
+          {selectedBlockId && (() => {
+            const selectedBlock = blocks.find((b) => b.id === selectedBlockId);
+            if (!selectedBlock) return <p style={{ opacity: 0.7 }}>Select a block above to edit its zones</p>;
+            return (
+              <div style={{ border: "1px solid #374151", borderRadius: "10px", padding: "0.75rem", marginBottom: "1rem", display: "grid", gap: "0.5rem" }}>
+                <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+                  <label style={{ display: "grid", gap: "0.2rem", flex: 1 }}>
+                    <small>Block name</small>
+                    <input
+                      value={selectedBlock.name}
+                      onChange={(e) => {
+                        const nextName = e.target.value;
+                        setBlocks((prev) => prev.map((b) => b.id === selectedBlock.id ? { ...b, name: nextName } : b));
+                      }}
+                      onBlur={() => void updateBlock(selectedBlock.id, { name: selectedBlock.name.trim() })}
+                    />
+                  </label>
+                  <label style={{ display: "grid", gap: "0.2rem" }}>
+                    <small>Screen State</small>
+                    <select
+                      value={selectedBlock.gameStateId}
+                      onChange={(e) => {
+                        const nextGsId = e.target.value;
+                        setBlocks((prev) => prev.map((b) => b.id === selectedBlock.id ? { ...b, gameStateId: nextGsId } : b));
+                        void updateBlock(selectedBlock.id, { gameStateId: nextGsId });
+                      }}
+                    >
+                      {gameStates.map((gs) => (
+                        <option key={gs.id} value={gs.id}>{gs.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label style={{ display: "grid", gap: "0.2rem" }}>
+                    <small>Zone Locks</small>
+                    <select
+                      value={selectedBlock.unlockMode}
+                      onChange={(e) => {
+                        const nextMode = e.target.value as BlockUnlockMode;
+                        setBlocks((prev) => prev.map((b) => b.id === selectedBlock.id ? { ...b, unlockMode: nextMode } : b));
+                        void updateBlock(selectedBlock.id, { unlockMode: nextMode });
+                      }}
+                    >
+                      <option value="independent">Independent</option>
+                      <option value="shared">Shared</option>
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBlocks((prev) => prev.map((b) => b.id === selectedBlock.id ? { ...b, enabled: !b.enabled } : b));
+                      void updateBlock(selectedBlock.id, { enabled: !selectedBlock.enabled });
+                    }}
+                    style={{ alignSelf: "flex-end" }}
+                  >
+                    {selectedBlock.enabled ? "Disable" : "Enable"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!window.confirm(`Delete block "${selectedBlock.name}"? Its zones will be unassigned.`)) return;
+                      await deleteBlock(selectedBlock.id);
+                      setSelectedBlockId(null);
+                      await refresh();
+                    }}
+                    style={{ alignSelf: "flex-end", color: "#fca5a5" }}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
+
+          {!selectedBlockId && blocks.length > 0 && (
+            <p style={{ opacity: 0.7 }}>Select a block above to edit its zones</p>
+          )}
+
+          {selectedBlockId && (
+          <>
+          <p style={{ marginTop: "0.5rem", marginBottom: "0.5rem", opacity: 0.85 }}>
+            Drag empty space to create a zone. Click a zone to select and drag it to rearrange.
+          </p>
+          <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.5rem" }}>
+            <button type="button" onClick={() => void toggleCanvasFullscreen()}>
+              {isCanvasFullscreen ? "Exit fullscreen" : "Fullscreen canvas"}
             </button>
           </div>
           <div
@@ -4396,6 +4478,7 @@ export default function Page() {
               width: "100%",
               background: isCanvasFullscreen ? "#0b1220" : "transparent",
               padding: isCanvasFullscreen ? "1rem" : 0,
+              ...(isCanvasFullscreen ? { height: "100%", display: "flex", alignItems: "center", justifyContent: "center" } : {}),
             }}
           >
           <div
@@ -4407,13 +4490,14 @@ export default function Page() {
               position: "relative",
               width: "100%",
               maxWidth: isCanvasFullscreen ? "100%" : CANVAS_MAX_WIDTH,
+              maxHeight: isCanvasFullscreen ? "100%" : undefined,
               aspectRatio: `${TEMPLATE_WIDTH} / ${TEMPLATE_HEIGHT}`,
               borderRadius: "8px",
               border: "1px dashed #4b5563",
               background:
                 "linear-gradient(180deg, rgba(17,24,39,0.7) 0%, rgba(11,18,32,0.9) 100%)",
               overflow: "hidden",
-              marginBottom: "1rem",
+              marginBottom: isCanvasFullscreen ? 0 : "1rem",
             }}
           >
             {canvasZones.map((zone) => {
@@ -4425,7 +4509,7 @@ export default function Page() {
                 .filter((title): title is string => !!title);
               const isLocked = zoneState?.isLocked ?? false;
               const goldUnlockActive = zoneState?.goldUnlockActive ?? false;
-              const lockText = lockMessage(requiredTitles, zone.unlockMode);
+              const lockText = lockMessage(requiredTitles, zone.unlockMode, zone.goldCost);
               const lockTextStyle = lockTextStyleForZone(zone.width, zone.height);
               const zoneImage = imageForZone(zone.id);
               return (
@@ -4441,7 +4525,7 @@ export default function Page() {
                     width: `${(zone.width / TEMPLATE_WIDTH) * 100}%`,
                     height: `${(zone.height / TEMPLATE_HEIGHT) * 100}%`,
                     border: `2px solid ${
-                      isSelected ? "#60a5fa" : isLocked ? "#166534" : "#86efac"
+                      isSelected ? "#60a5fa" : "#4b5563"
                     }`,
                     backgroundColor: zoneImage
                       ? isLocked
@@ -4490,15 +4574,15 @@ export default function Page() {
                         style={{
                           borderRadius: 999,
                           border: "1px solid rgba(212, 170, 71, 0.56)",
-                          background: gold >= ZONE_GOLD_UNLOCK_COST ? "rgba(73, 53, 18, 0.92)" : "rgba(55, 65, 81, 0.92)",
-                          color: gold >= ZONE_GOLD_UNLOCK_COST ? "#f8df8b" : "#d1d5db",
+                          background: gold >= zone.goldCost ? "rgba(73, 53, 18, 0.92)" : "rgba(55, 65, 81, 0.92)",
+                          color: gold >= zone.goldCost ? "#f8df8b" : "#d1d5db",
                           padding: "0.32rem 0.7rem",
                           fontSize: Math.max(10, Math.min(13, Math.min(zone.width, zone.height) * 0.05)),
                           fontWeight: 700,
                         }}
-                        title={`Spend ${ZONE_GOLD_UNLOCK_COST} gold to unlock`}
+                        title={`Spend ${zone.goldCost} gold to unlock`}
                       >
-                        Unlock for {ZONE_GOLD_UNLOCK_COST} gold
+                        Unlock for {zone.goldCost} gold
                       </button>
                     </div>
                   )}
@@ -4541,11 +4625,11 @@ export default function Page() {
           </div>
 
           <h2 style={{ marginTop: "1rem" }}>Lock Zones</h2>
-          {zones.length === 0 ? (
-            <p>No lock zones yet.</p>
+          {blockZones.length === 0 ? (
+            <p>No lock zones in this block yet. Drag on the canvas above or use the form to create one.</p>
           ) : (
             <div style={{ display: "grid", gap: "0.75rem" }}>
-              {zones.map((zone) => {
+              {blockZones.map((zone) => {
                 const required = requiredByZone.get(zone.id) ?? new Set<string>();
                 const zoneState = overlayState?.zones.find((entry) => entry.zone.id === zone.id);
                 const isLocked = zoneState?.isLocked ?? false;
@@ -4566,57 +4650,55 @@ export default function Page() {
                       gap: "0.5rem",
                     }}
                   >
-                    <div style={{ display: "flex", gap: "0.5rem" }}>
+                    <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
                       <input
                         value={zone.name}
                         onChange={(event) => updateDraftZone(zone.id, "name", event.target.value)}
                         onBlur={() => commitZoneField(zone.id, "name")}
-                        style={{ flex: 1 }}
+                        style={{ flex: 1, minWidth: 120 }}
                       />
+                      <select
+                        value={zoneImageOverrides[zone.id] ?? "__auto__"}
+                        onChange={(event) => {
+                          const val = event.target.value;
+                          setZoneImageOverrides((prev) => {
+                            const next = { ...prev };
+                            if (val === "__auto__") { delete next[zone.id]; } else { next[zone.id] = val; }
+                            return next;
+                          });
+                        }}
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <option value="__auto__">Auto image</option>
+                        {blockedImages.map((src) => (
+                          <option key={src} value={src}>{src.split("/").pop()?.replace(/\.[^.]+$/, "") ?? src}</option>
+                        ))}
+                      </select>
                       <select
                         value={zone.unlockMode}
                         onChange={(event) => setZoneUnlockMode(zone.id, event.target.value as LockZoneUnlockMode)}
                         onClick={(event) => event.stopPropagation()}
                       >
                         <option value="todos">Todo unlock</option>
-                        <option value="gold">10 gold unlock</option>
+                        <option value="gold">Gold unlock</option>
                       </select>
                       <button type="button" onClick={() => patchZone(zone.id, { enabled: !zone.enabled })}>
                         {zone.enabled ? "Disable" : "Enable"}
                       </button>
                     </div>
 
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "0.35rem" }}>
-                      {(["x", "y", "width", "height"] as const).map((key) => (
-                        <label key={key} style={{ display: "grid", gap: "0.2rem" }}>
-                          <small>{key}</small>
-                          <input
-                            type="number"
-                            value={zone[key]}
-                            onChange={(event) => {
-                              const numeric = Number(event.target.value);
-                              updateDraftZone(zone.id, key, Number.isFinite(numeric) ? numeric : 0);
-                            }}
-                            onBlur={() => commitZoneField(zone.id, key)}
-                          />
-                        </label>
-                      ))}
-                    </div>
-
-                    <p style={{ margin: 0, color: isLocked ? "#fca5a5" : "#86efac" }}>
+<p style={{ margin: 0, color: isLocked ? "#fca5a5" : "#86efac" }}>
                       {isLocked ? "Locked in game" : goldUnlockActive
                         ? cooldownRemainingSec !== null
-                          ? `Unlocked with gold — re-locks in ${cooldownRemainingSec}s`
+                          ? `Unlocked with gold — re-locks in ${Math.ceil(cooldownRemainingSec / 60)}m`
                           : "Unlocked with gold"
                         : "Unlocked in game"}
                     </p>
 
                     <div style={{ display: "grid", gap: "0.25rem" }}>
-                      <strong>{zone.unlockMode === "gold" ? "Unlock rule" : "Required todos"}</strong>
                       {zone.unlockMode === "gold" ? (
                         <>
-                          <small>Click the locked block and pay {ZONE_GOLD_UNLOCK_COST} gold to unlock it.</small>
-                          <label style={{ display: "flex", gap: "0.4rem", alignItems: "center", marginTop: "0.25rem" }} onClick={(e) => e.stopPropagation()}>
+                          <label style={{ display: "flex", gap: "0.4rem", alignItems: "center", width: "fit-content" }} onClick={(e) => e.stopPropagation()}>
                             <input
                               type="checkbox"
                               checked={zone.cooldownEnabled}
@@ -4626,21 +4708,36 @@ export default function Page() {
                           </label>
                           {zone.cooldownEnabled && (
                             <label style={{ display: "flex", gap: "0.4rem", alignItems: "center" }} onClick={(e) => e.stopPropagation()}>
-                              <small>Cooldown (seconds):</small>
+                              <small>Cooldown (minutes):</small>
                               <input
-                                type="number"
-                                min={60}
-                                step={60}
-                                value={zone.cooldownSeconds}
+                                type="text"
+                                inputMode="numeric"
+                                pattern="[0-9]*"
+                                value={zone.cooldownSeconds / 60}
                                 onChange={(e) => {
                                   const v = Number(e.target.value);
-                                  setZones((prev) => prev.map((z) => z.id === zone.id ? { ...z, cooldownSeconds: v } : z));
+                                  if (Number.isFinite(v) && v >= 0) setZones((prev) => prev.map((z) => z.id === zone.id ? { ...z, cooldownSeconds: v * 60 } : z));
                                 }}
-                                onBlur={() => setZoneCooldown(zone.id, zone.cooldownEnabled, zone.cooldownSeconds)}
-                                style={{ width: 80 }}
+                                onBlur={() => setZoneCooldown(zone.id, zone.cooldownEnabled, Math.max(60, zone.cooldownSeconds))}
+                                style={{ width: 50 }}
                               />
                             </label>
                           )}
+                          <label style={{ display: "flex", gap: "0.4rem", alignItems: "center" }} onClick={(e) => e.stopPropagation()}>
+                            <small>Gold cost:</small>
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              pattern="[0-9]*"
+                              value={zone.goldCost}
+                              onChange={(e) => {
+                                const v = Number(e.target.value);
+                                if (Number.isFinite(v) && v >= 0) setZones((prev) => prev.map((z) => z.id === zone.id ? { ...z, goldCost: v } : z));
+                              }}
+                              onBlur={() => patchZone(zone.id, { goldCost: Math.max(1, zone.goldCost) })}
+                              style={{ width: 50 }}
+                            />
+                          </label>
                           {goldUnlockActive && (
                             <button
                               type="button"
@@ -4654,46 +4751,57 @@ export default function Page() {
                             </button>
                           )}
                         </>
-                      ) : lockableTodos.length === 0 ? (
-                        <small>Create todos first.</small>
-                      ) : (
-                        lockableTodos.map((todo) => (
-                          <label key={`${zone.id}:${todo.id}`} style={{ display: "flex", gap: "0.4rem" }}>
-                            <input
-                              type="checkbox"
-                              checked={required.has(todo.id)}
-                              onChange={() => void toggleZoneRequirement(zone.id, todo.id)}
-                            />
-                            <span>{todo.title}</span>
-                          </label>
-                        ))
-                      )}
-                    </div>
-
-                    <div style={{ display: "grid", gap: "0.25rem" }}>
-                      <strong>Active in game states</strong>
-                      {gameStates.length === 0 ? (
-                        <small style={{ opacity: 0.7 }}>No game states defined yet. Create them in the Game States tab.</small>
                       ) : (
                         <>
-                          <small style={{ opacity: 0.7 }}>
-                            {(gameStatesByZone.get(zone.id)?.size ?? 0) === 0
-                              ? "Always active (no game state filter)"
-                              : `Active in: ${[...(gameStatesByZone.get(zone.id) ?? [])].map((id) => gameStateNameById.get(id) ?? id).join(", ")}`}
-                          </small>
-                          {gameStates.map((gs) => (
-                            <label key={`${zone.id}:gs:${gs.id}`} style={{ display: "flex", gap: "0.4rem" }}>
-                              <input
-                                type="checkbox"
-                                checked={gameStatesByZone.get(zone.id)?.has(gs.id) ?? false}
-                                onChange={() => toggleZoneGameState(zone.id, gs.id)}
-                              />
-                              <span>{gs.name}</span>
-                            </label>
-                          ))}
+                      <strong>Required todos</strong>
+                      {lockableTodosToday.length === 0 && lockableTodosFuture.length === 0 ? (
+                        <small>Create todos first.</small>
+                      ) : (
+                        <>
+                          {lockableTodosToday.length > 0 && (
+                            <details open style={{ marginTop: "0.25rem" }}>
+                              <summary style={{ cursor: "pointer", fontSize: "0.85rem", opacity: 0.7 }}>
+                                Today ({lockableTodosToday.length})
+                              </summary>
+                              <div style={{ display: "grid", gap: "0.25rem", marginTop: "0.25rem" }}>
+                                {lockableTodosToday.map((todo) => (
+                                  <label key={`${zone.id}:${todo.id}`} style={{ display: "flex", gap: "0.4rem" }}>
+                                    <input
+                                      type="checkbox"
+                                      checked={required.has(todo.id)}
+                                      onChange={() => void toggleZoneRequirement(zone.id, todo.id)}
+                                    />
+                                    <span>{todo.title}</span>
+                                  </label>
+                                ))}
+                              </div>
+                            </details>
+                          )}
+                          {lockableTodosFuture.length > 0 && (
+                            <details style={{ marginTop: "0.25rem" }}>
+                              <summary style={{ cursor: "pointer", fontSize: "0.85rem", opacity: 0.7 }}>
+                                Future ({lockableTodosFuture.length})
+                              </summary>
+                              <div style={{ display: "grid", gap: "0.25rem", marginTop: "0.25rem" }}>
+                                {lockableTodosFuture.map((todo) => (
+                                  <label key={`${zone.id}:${todo.id}`} style={{ display: "flex", gap: "0.4rem" }}>
+                                    <input
+                                      type="checkbox"
+                                      checked={required.has(todo.id)}
+                                      onChange={() => void toggleZoneRequirement(zone.id, todo.id)}
+                                    />
+                                    <span>{todo.title}</span>
+                                  </label>
+                                ))}
+                              </div>
+                            </details>
+                          )}
+                        </>
+                      )}
                         </>
                       )}
                     </div>
+
                   </article>
                 );
               })}
@@ -4701,182 +4809,16 @@ export default function Page() {
           )}
           </>
           )}
-
-          {blockSubtab === "game-states" && (
-          <>
-          <h2>Game States</h2>
-          <p style={{ marginBottom: "0.75rem", opacity: 0.85 }}>
-            Define game states (shop, campfire, combat, etc.) to conditionally activate lock zones.
-            The detection agent will match screenshots against reference images to determine the current state.
-          </p>
-
-          {detectedGameState && (
-            <div style={{
-              padding: "0.6rem 0.75rem",
-              borderRadius: "8px",
-              border: "1px solid #374151",
-              marginBottom: "1rem",
-              background: detectedGameState.gameStateId ? "rgba(34,197,94,0.08)" : "rgba(55,65,81,0.3)",
-            }}>
-              <strong>Currently detected: </strong>
-              {detectedGameState.gameStateName ? (
-                <span style={{ color: "#86efac" }}>
-                  {detectedGameState.gameStateName}
-                  <small style={{ marginLeft: "0.5rem", opacity: 0.7 }}>
-                    ({(detectedGameState.confidence * 100).toFixed(0)}% confidence)
-                  </small>
-                </span>
-              ) : (
-                <span style={{ opacity: 0.6 }}>None (no state detected)</span>
-              )}
-              {detectedGameState.gameStateId && (
-                <button
-                  type="button"
-                  onClick={() => void runAction(async () => { await setDetectedGameStateApi(null, 0); await refresh(); })}
-                  style={{ marginLeft: "0.75rem", fontSize: "0.8rem" }}
-                >
-                  Clear
-                </button>
-              )}
-            </div>
+          </>
           )}
 
-          <div style={{
-            padding: "0.75rem",
-            borderRadius: "8px",
-            border: "1px solid #374151",
-            marginBottom: "1rem",
-            background: "rgba(30,41,59,0.5)",
-          }}>
-            <strong>Test Detection</strong>
-            <p style={{ opacity: 0.7, fontSize: "0.85rem", margin: "0.25rem 0 0.5rem" }}>
-              Upload any screenshot or click &quot;Test this&quot; on a reference image below.
-              This runs the image comparison algorithm and shows match scores against all references.
-              It does <strong>not</strong> change the active detected state — use &quot;Apply best match&quot; for that.
-            </p>
-            <div style={{ display: "flex", gap: "0.75rem", alignItems: "flex-start", flexWrap: "wrap" }}>
-              <label style={{
-                display: "inline-block",
-                padding: "0.35rem 0.75rem",
-                border: "1px dashed #4b5563",
-                borderRadius: "6px",
-                cursor: "pointer",
-                fontSize: "0.85rem",
-              }}>
-                {isTestingDetection ? "Analyzing..." : "Upload test screenshot"}
-                <input
-                  type="file"
-                  accept="image/*"
-                  style={{ display: "none" }}
-                  onChange={(event) => runDetectionTest(event.target.files)}
-                  disabled={isTestingDetection}
-                />
-              </label>
-              {detectionTestImage && (
-                <img
-                  src={detectionTestImage}
-                  alt="Test screenshot"
-                  style={{ width: 160, height: 90, objectFit: "cover", borderRadius: "4px", border: "1px solid #4b5563" }}
-                />
-              )}
-            </div>
-            {detectionTestResults && (
-              <div style={{ marginTop: "0.75rem" }}>
-                {detectionTestResults.length === 0 ? (
-                  <p style={{ opacity: 0.6 }}>No reference images to compare against. Upload some first.</p>
-                ) : (
-                  <div style={{ display: "grid", gap: "0.35rem" }}>
-                    <div style={{
-                      display: "grid",
-                      gridTemplateColumns: "1fr 80px 80px 80px",
-                      gap: "0.5rem",
-                      fontSize: "0.75rem",
-                      fontWeight: 700,
-                      opacity: 0.6,
-                      paddingBottom: "0.25rem",
-                      borderBottom: "1px solid #374151",
-                    }}>
-                      <span>Game State (ref image)</span>
-                      <span>Structural</span>
-                      <span>Histogram</span>
-                      <span>Combined</span>
-                    </div>
-                    {detectionTestResults.map((r, i) => {
-                      const isTop = i === 0;
-                      const passesThreshold = (() => {
-                        const gs = gameStates.find((s) => s.id === r.gameStateId);
-                        return gs ? r.combined >= gs.matchThreshold : false;
-                      })();
-                      return (
-                        <div
-                          key={`${r.imageId}-${i}`}
-                          style={{
-                            display: "grid",
-                            gridTemplateColumns: "1fr 80px 80px 80px",
-                            gap: "0.5rem",
-                            fontSize: "0.85rem",
-                            padding: "0.3rem 0",
-                            background: isTop ? "rgba(34,197,94,0.08)" : "transparent",
-                            borderRadius: isTop ? "4px" : 0,
-                            color: passesThreshold ? "#86efac" : isTop ? "#fde68a" : "#94a3b8",
-                          }}
-                        >
-                          <span>
-                            {isTop && (passesThreshold ? "  " : "  ")}
-                            {r.gameStateName}
-                            <small style={{ opacity: 0.5, marginLeft: "0.3rem" }}>({r.filename.slice(0, 12)}...)</small>
-                          </span>
-                          <span>{(r.ncc * 100).toFixed(1)}%</span>
-                          <span>{(r.histogram * 100).toFixed(1)}%</span>
-                          <span style={{ fontWeight: isTop ? 700 : 400 }}>{(r.combined * 100).toFixed(1)}%</span>
-                        </div>
-                      );
-                    })}
-                    {detectionTestResults.length > 0 && (() => {
-                      const best = detectionTestResults[0];
-                      const gs = gameStates.find((s) => s.id === best.gameStateId);
-                      const threshold = gs?.matchThreshold ?? 0.8;
-                      const passes = best.combined >= threshold;
-                      return (
-                        <div style={{ marginTop: "0.5rem", display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
-                          <p style={{
-                            margin: 0,
-                            fontSize: "0.85rem",
-                            color: passes ? "#86efac" : "#fca5a5",
-                          }}>
-                            Best match: <strong>{best.gameStateName}</strong> at {(best.combined * 100).toFixed(1)}%
-                            {passes
-                              ? ` — passes threshold (${(threshold * 100).toFixed(0)}%)`
-                              : ` — below threshold (${(threshold * 100).toFixed(0)}%)`}
-                          </p>
-                          <button
-                            type="button"
-                            onClick={() => void runAction(async () => {
-                              await setDetectedGameStateApi(passes ? best.gameStateId : null, passes ? best.combined : 0);
-                              await refresh();
-                            })}
-                            style={{
-                              fontSize: "0.8rem",
-                              padding: "0.25rem 0.6rem",
-                              background: passes ? "rgba(34,197,94,0.15)" : "rgba(239,68,68,0.15)",
-                              border: passes ? "1px solid #166534" : "1px solid #7f1d1d",
-                              borderRadius: "4px",
-                              color: passes ? "#86efac" : "#fca5a5",
-                              cursor: "pointer",
-                            }}
-                          >
-                            {passes
-                              ? `Apply: set state to "${best.gameStateName}"`
-                              : "Apply: clear state (below threshold)"}
-                          </button>
-                        </div>
-                      );
-                    })()}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+          {blockSubtab === "screen-states" && (
+          <>
+          <h2>Screen States</h2>
+          <p style={{ marginBottom: "0.75rem", opacity: 0.85 }}>
+            Define screen states (e.g. YouTube, Twitch, a game) to conditionally activate lock zones.
+            The detection agent will match screenshots against reference images to determine the current state.
+          </p>
 
           <form
             onSubmit={(event) => { event.preventDefault(); addGameState(); }}
@@ -4885,14 +4827,14 @@ export default function Page() {
             <input
               value={newGameStateName}
               onChange={(event) => setNewGameStateName(event.target.value)}
-              placeholder="e.g. Shop, Campfire, Combat"
+              placeholder="e.g. YouTube, Twitch, Slay the Spire"
               style={{ flex: 1 }}
             />
-            <button type="submit" disabled={!newGameStateName.trim()}>Add Game State</button>
+            <button type="submit" disabled={!newGameStateName.trim()}>Add Screen State</button>
           </form>
 
           {gameStates.length === 0 ? (
-            <p style={{ opacity: 0.6 }}>No game states defined yet.</p>
+            <p style={{ opacity: 0.6 }}>No screen states defined yet.</p>
           ) : (
             <div style={{ display: "grid", gap: "0.75rem" }}>
               {gameStates.map((gs) => {
@@ -4901,7 +4843,7 @@ export default function Page() {
                 return (
                   <article
                     key={gs.id}
-                    onClick={() => setSelectedGameStateId(gs.id)}
+                    onClick={(event) => { event.stopPropagation(); setSelectedGameStateId(isSelected ? null : gs.id); }}
                     style={{
                       border: isSelected ? "1px solid #60a5fa" : "1px solid #374151",
                       borderRadius: "10px",
@@ -4937,77 +4879,50 @@ export default function Page() {
                       </button>
                     </div>
 
-                    <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-                      <label onClick={(event) => event.stopPropagation()} style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
-                        <small>Match threshold:</small>
-                        <input
-                          type="range"
-                          min={0}
-                          max={1}
-                          step={0.05}
-                          value={gs.matchThreshold}
-                          onChange={(event) => {
-                            const val = Number(event.target.value);
-                            setGameStates((prev) => prev.map((item) => (item.id === gs.id ? { ...item, matchThreshold: val } : item)));
-                          }}
-                          onMouseUp={() => patchGameState(gs.id, { matchThreshold: gs.matchThreshold })}
-                          onTouchEnd={() => patchGameState(gs.id, { matchThreshold: gs.matchThreshold })}
-                          style={{ width: 100 }}
-                        />
-                        <small>{(gs.matchThreshold * 100).toFixed(0)}%</small>
+                    <div style={{ display: "flex", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
+                      <label onClick={(event) => event.stopPropagation()} style={{ display: "flex", gap: "0.3rem", alignItems: "center", fontSize: "0.85rem" }}>
+                        <small>Detect when:</small>
+                        <select
+                          value={gs.alwaysDetect ? "always" : "focused"}
+                          onChange={(event) => patchGameState(gs.id, { alwaysDetect: event.target.value === "always" })}
+                          style={{ fontSize: "0.85rem", padding: "0.15rem 0.3rem" }}
+                        >
+                          <option value="always">Always (any screen)</option>
+                          <option value="focused">Target window is focused</option>
+                        </select>
                       </label>
-                      <small style={{ opacity: 0.5 }}>Method: {gs.detectionMethod.replace(/_/g, " ")}</small>
-                      <label
-                        onClick={(event) => event.stopPropagation()}
-                        style={{ display: "flex", gap: "0.3rem", alignItems: "center", cursor: "pointer" }}
-                        title="When enabled, this state is detected continuously even when the game window is not in focus (captures full primary screen instead of just the game window)"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={gs.alwaysDetect}
-                          onChange={() => patchGameState(gs.id, { alwaysDetect: !gs.alwaysDetect })}
-                        />
-                        <small>Always detect</small>
-                      </label>
-                    </div>
-
-                    <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          void runAction(async () => { await setDetectedGameStateApi(gs.id, 1.0); await refresh(); });
-                        }}
-                        style={{ fontSize: "0.8rem" }}
-                        title="Force-set the detected state to this game state (no image comparison, just directly activates it)"
-                      >
-                        Force activate this state
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          void runAction(async () => { await setDetectedGameStateApi(null, 0); await refresh(); });
-                        }}
-                        style={{ fontSize: "0.8rem" }}
-                        title="Clear the detected state back to Default"
-                      >
-                        Clear to Default
-                      </button>
                       <small style={{ opacity: 0.5 }}>
                         {gs.enabled ? "Enabled" : "Disabled"}
-                        {detectedGameState?.gameStateId === gs.id && (
-                          <span style={{ color: "#86efac", marginLeft: "0.4rem" }}>(currently active)</span>
-                        )}
                       </small>
                     </div>
 
                     {isSelected && (
                       <>
-                      <div style={{ borderTop: "1px solid #374151", paddingTop: "0.5rem" }}>
+                      <div style={{ borderTop: "1px solid #374151", paddingTop: "0.5rem", display: "flex", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
+                        <label onClick={(event) => event.stopPropagation()} style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
+                          <small>Match threshold:</small>
+                          <input
+                            type="range"
+                            min={0}
+                            max={1}
+                            step={0.05}
+                            value={gs.matchThreshold}
+                            onChange={(event) => {
+                              const val = Number(event.target.value);
+                              setGameStates((prev) => prev.map((item) => (item.id === gs.id ? { ...item, matchThreshold: val } : item)));
+                            }}
+                            onMouseUp={() => patchGameState(gs.id, { matchThreshold: gs.matchThreshold })}
+                            onTouchEnd={() => patchGameState(gs.id, { matchThreshold: gs.matchThreshold })}
+                            style={{ width: 100 }}
+                          />
+                          <small>{(gs.matchThreshold * 100).toFixed(0)}%</small>
+                        </label>
+                        <small style={{ opacity: 0.5 }}>Method: {gs.detectionMethod.replace(/_/g, " ")}</small>
+                      </div>
+                      <div>
                         <strong>Reference Screenshots</strong>
                         <p style={{ opacity: 0.7, fontSize: "0.85rem", margin: "0.25rem 0 0.5rem" }}>
-                          Upload screenshots that represent this game state. The agent will compare against these.
+                          Upload screenshots that represent this screen state. The agent will compare against these.
                         </p>
 
                         <label
@@ -5052,26 +4967,6 @@ export default function Page() {
                                   alt={img.filename}
                                   style={{ width: 140, height: 80, objectFit: "cover", display: "block" }}
                                 />
-                                <button
-                                  type="button"
-                                  onClick={() => runDetectionTestFromUrl(referenceImageUrl(gs.id, img.filename))}
-                                  disabled={isTestingDetection}
-                                  style={{
-                                    position: "absolute",
-                                    bottom: 2,
-                                    left: 2,
-                                    background: "rgba(0,0,0,0.75)",
-                                    color: "#93c5fd",
-                                    border: "none",
-                                    borderRadius: "4px",
-                                    fontSize: 10,
-                                    cursor: "pointer",
-                                    padding: "2px 6px",
-                                  }}
-                                  title="Test: compare this image against all references (should match itself at ~100%)"
-                                >
-                                  Test this
-                                </button>
                                 <button
                                   type="button"
                                   onClick={() => removeRefImage(img.id, gs.id)}
@@ -5263,32 +5158,39 @@ export default function Page() {
           >
             <h3>Settings</h3>
             <section className="settings-section">
-              <p className="settings-section-title">Time blocks</p>
+              <label className="settings-checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={showDetectionIndicator}
+                  onChange={async (event) => {
+                    const val = event.target.checked;
+                    setShowDetectionIndicatorState(val);
+                    await setAppSetting("showDetectionIndicator", String(val));
+                  }}
+                />
+                Show detection status overlay
+              </label>
+            </section>
+            <section className="settings-section">
               <label className="settings-checkbox-label">
                 <input
                   type="checkbox"
                   checked={showTodoDuration}
                   onChange={(event) => setShowTodoDuration(event.target.checked)}
                 />
-                Show duration input and log button on todos
+                Show time block controls on todos
               </label>
-              <p className="settings-hint">
-                Adds a minute estimate to each todo and a button (✓↺) to mark a time block done while keeping the todo active for more work.
-              </p>
             </section>
             <section className="settings-section">
               <p className="settings-section-title">AI expansion</p>
-              <p className="settings-section-copy">
-                Choose the provider used for goal expansion and store your API keys locally in this browser.
-              </p>
               <label>
-                Expand provider
+                Provider
                 <select
                   value={expandProvider}
                   onChange={(event) => setExpandProvider(event.target.value as ExpandProvider)}
                 >
-                  <option value="gemini-flash">Gemini Flash (expand)</option>
-                  <option value="openai-gpt-4o-mini">OpenAI GPT-4o mini (expand)</option>
+                  <option value="gemini-flash">Gemini Flash</option>
+                  <option value="openai-gpt-4o-mini">GPT-4o mini</option>
                 </select>
               </label>
               <label>
@@ -5301,7 +5203,7 @@ export default function Page() {
                 />
               </label>
               <label>
-                OpenAI API key (optional)
+                OpenAI API key
                 <input
                   type="password"
                   value={openAiApiKey}
@@ -5309,17 +5211,8 @@ export default function Page() {
                   placeholder="sk-..."
                 />
               </label>
-              <p className="settings-hint">
-                Expansion asks for end state, intermediate states, and concrete physical actions, then creates 3-5
-                subtasks prefixed with [2m] or [5m].
-              </p>
             </section>
-            <section className="settings-section settings-reset-card">
-              <p className="settings-section-title">Gold reset</p>
-              <p className="settings-section-copy">
-                Reset your gold count for testing without clearing goals, zones, habits, predictions, reflections, or
-                saved AI settings.
-              </p>
+            <section className="settings-section" style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
               <button
                 type="button"
                 className="settings-reset-button"
@@ -5328,6 +5221,7 @@ export default function Page() {
               >
                 {isResettingGold ? "Resetting..." : "Reset gold"}
               </button>
+              <small style={{ opacity: 0.6 }}>Resets gold count only</small>
             </section>
             <div className="todo-edit-modal-actions">
               <button type="button" onClick={() => setShowSettingsModal(false)} disabled={isResettingGold}>Cancel</button>

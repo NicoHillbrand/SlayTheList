@@ -4,6 +4,8 @@ import path from "node:path";
 import { db, referenceImagesDir } from "./db.js";
 import type {
   AccountabilityState,
+  Block,
+  BlockUnlockMode,
   DetectedGameState,
   GameState,
   GameStateDetectionRegion,
@@ -42,6 +44,19 @@ type ZoneRow = {
   unlock_mode: "todos" | "gold";
   cooldown_enabled: 0 | 1;
   cooldown_seconds: number;
+  gold_cost: number;
+  block_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type BlockRow = {
+  id: string;
+  name: string;
+  game_state_id: string;
+  unlock_mode: "independent" | "shared";
+  enabled: 0 | 1;
+  sort_order: number;
   created_at: string;
   updated_at: string;
 };
@@ -89,6 +104,20 @@ function toZone(row: ZoneRow): LockZone {
     unlockMode: row.unlock_mode ?? "todos",
     cooldownEnabled: !!row.cooldown_enabled,
     cooldownSeconds: row.cooldown_seconds ?? 3600,
+    goldCost: row.gold_cost ?? 10,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function toBlock(row: BlockRow): Block {
+  return {
+    id: row.id,
+    name: row.name,
+    gameStateId: row.game_state_id,
+    unlockMode: row.unlock_mode,
+    enabled: !!row.enabled,
+    sortOrder: row.sort_order,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -222,7 +251,7 @@ export function listZones(): LockZone[] {
   return rows.map(toZone);
 }
 
-export function createZone(input: Omit<LockZone, "id" | "createdAt" | "updatedAt">): LockZone {
+export function createZone(input: Omit<LockZone, "id" | "createdAt" | "updatedAt">, blockId?: string): LockZone {
   const now = new Date().toISOString();
   const zone: LockZone = {
     ...input,
@@ -231,19 +260,20 @@ export function createZone(input: Omit<LockZone, "id" | "createdAt" | "updatedAt
     updatedAt: now,
   };
   db.prepare(
-    `INSERT INTO lock_zones (id, name, x, y, width, height, enabled, unlock_mode, cooldown_enabled, cooldown_seconds, created_at, updated_at)
-     VALUES (@id, @name, @x, @y, @width, @height, @enabled, @unlockMode, @cooldownEnabled, @cooldownSeconds, @createdAt, @updatedAt)`,
+    `INSERT INTO lock_zones (id, name, x, y, width, height, enabled, unlock_mode, cooldown_enabled, cooldown_seconds, gold_cost, block_id, created_at, updated_at)
+     VALUES (@id, @name, @x, @y, @width, @height, @enabled, @unlockMode, @cooldownEnabled, @cooldownSeconds, @goldCost, @blockId, @createdAt, @updatedAt)`,
   ).run({
     ...zone,
     enabled: zone.enabled ? 1 : 0,
     cooldownEnabled: zone.cooldownEnabled ? 1 : 0,
+    blockId: blockId ?? null,
   });
   return zone;
 }
 
 export function updateZone(
   id: string,
-  patch: Partial<Pick<LockZone, "name" | "x" | "y" | "width" | "height" | "enabled" | "unlockMode" | "cooldownEnabled" | "cooldownSeconds">>,
+  patch: Partial<Pick<LockZone, "name" | "x" | "y" | "width" | "height" | "enabled" | "unlockMode" | "cooldownEnabled" | "cooldownSeconds" | "goldCost">>,
 ): LockZone | undefined {
   const currentRow = db.prepare("SELECT * FROM lock_zones WHERE id = ?").get(id) as ZoneRow | undefined;
   if (!currentRow) {
@@ -258,12 +288,12 @@ export function updateZone(
   db.prepare(
     `UPDATE lock_zones
        SET name = ?, x = ?, y = ?, width = ?, height = ?, enabled = ?, unlock_mode = ?,
-           cooldown_enabled = ?, cooldown_seconds = ?, updated_at = ?
+           cooldown_enabled = ?, cooldown_seconds = ?, gold_cost = ?, updated_at = ?
      WHERE id = ?`,
   ).run(
     next.name, next.x, next.y, next.width, next.height,
     next.enabled ? 1 : 0, next.unlockMode,
-    next.cooldownEnabled ? 1 : 0, next.cooldownSeconds,
+    next.cooldownEnabled ? 1 : 0, next.cooldownSeconds, next.goldCost,
     next.updatedAt, id,
   );
   if (patch.unlockMode !== undefined && patch.unlockMode !== current.unlockMode) {
@@ -293,6 +323,30 @@ export function spendGoldAndActivateUnlock(zoneId: string, amount: number, userI
   db.transaction(() => {
     spendGold(amount, userId);
     activateZoneGoldUnlock(zoneId);
+
+    // Shared block: unlock all sibling zones using the clicked zone's cooldown
+    const zoneRow = db.prepare("SELECT * FROM lock_zones WHERE id = ?").get(zoneId) as ZoneRow | undefined;
+    if (zoneRow?.block_id) {
+      const blockRow = db.prepare("SELECT unlock_mode FROM blocks WHERE id = ?").get(zoneRow.block_id) as { unlock_mode: string } | undefined;
+      if (blockRow?.unlock_mode === "shared") {
+        const clickedZone = toZone(zoneRow);
+        const expiresAt =
+          clickedZone.cooldownEnabled && clickedZone.cooldownSeconds > 0
+            ? new Date(Date.now() + clickedZone.cooldownSeconds * 1000).toISOString()
+            : null;
+        const now = new Date().toISOString();
+        const siblingRows = db
+          .prepare("SELECT id FROM lock_zones WHERE block_id = ? AND id != ?")
+          .all(zoneRow.block_id, zoneId) as Array<{ id: string }>;
+        for (const sibling of siblingRows) {
+          db.prepare(
+            `INSERT INTO lock_zone_gold_unlocks (zone_id, created_at, expires_at)
+             VALUES (?, ?, ?)
+             ON CONFLICT(zone_id) DO UPDATE SET created_at = excluded.created_at, expires_at = excluded.expires_at`,
+          ).run(sibling.id, now, expiresAt);
+        }
+      }
+    }
   })();
 }
 
@@ -684,6 +738,67 @@ export function setDetectedGameState(gameStateId: string | null, confidence: num
   return getDetectedGameState();
 }
 
+// ---------------------------------------------------------------------------
+// Blocks
+// ---------------------------------------------------------------------------
+
+export function listBlocks(): Block[] {
+  const rows = db.prepare("SELECT * FROM blocks ORDER BY sort_order ASC, created_at ASC").all() as BlockRow[];
+  return rows.map(toBlock);
+}
+
+export function getBlock(id: string): Block | undefined {
+  const row = db.prepare("SELECT * FROM blocks WHERE id = ?").get(id) as BlockRow | undefined;
+  return row ? toBlock(row) : undefined;
+}
+
+export function createBlock(
+  name: string,
+  gameStateId: string,
+  unlockMode?: BlockUnlockMode,
+): Block {
+  const now = new Date().toISOString();
+  const nextSortOrder = db.prepare("SELECT COALESCE(MAX(sort_order), -1) + 1 AS next FROM blocks").get() as {
+    next: number;
+  };
+  const id = randomUUID();
+  db.prepare(
+    `INSERT INTO blocks (id, name, game_state_id, unlock_mode, enabled, sort_order, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 1, ?, ?, ?)`,
+  ).run(id, name.trim(), gameStateId, unlockMode ?? "independent", nextSortOrder.next, now, now);
+  return getBlock(id)!;
+}
+
+export function updateBlock(
+  id: string,
+  patch: Partial<Pick<Block, "name" | "gameStateId" | "unlockMode" | "enabled" | "sortOrder">>,
+): Block | undefined {
+  const existing = getBlock(id);
+  if (!existing) return undefined;
+  const next = {
+    name: patch.name ?? existing.name,
+    gameStateId: patch.gameStateId ?? existing.gameStateId,
+    unlockMode: patch.unlockMode ?? existing.unlockMode,
+    enabled: patch.enabled ?? existing.enabled,
+    sortOrder: patch.sortOrder ?? existing.sortOrder,
+    updatedAt: new Date().toISOString(),
+  };
+  db.prepare(
+    `UPDATE blocks SET name = ?, game_state_id = ?, unlock_mode = ?, enabled = ?, sort_order = ?, updated_at = ? WHERE id = ?`,
+  ).run(next.name, next.gameStateId, next.unlockMode, next.enabled ? 1 : 0, next.sortOrder, next.updatedAt, id);
+  return getBlock(id);
+}
+
+export function deleteBlock(id: string): boolean {
+  const result = db.prepare("DELETE FROM blocks WHERE id = ?").run(id);
+  return result.changes > 0;
+}
+
+export function listZonesForBlock(blockId: string): LockZone[] {
+  const rows = db.prepare("SELECT * FROM lock_zones WHERE block_id = ? ORDER BY created_at DESC").all(blockId) as ZoneRow[];
+  return rows.map(toZone);
+}
+
 export function listOverlayState(): LockZoneState[] {
   expireGoldUnlocks();
 
@@ -709,6 +824,28 @@ export function listOverlayState(): LockZoneState[] {
     const existing = gameStatesByZone.get(row.zone_id) ?? [];
     existing.push(row.game_state_id);
     gameStatesByZone.set(row.zone_id, existing);
+  }
+
+  // Build block lookup: zone block_id -> block unlock_mode
+  const zoneBlockRows = db
+    .prepare("SELECT id, block_id FROM lock_zones WHERE block_id IS NOT NULL")
+    .all() as Array<{ id: string; block_id: string }>;
+  const blockIdByZone = new Map<string, string>();
+  const blockIdsNeeded = new Set<string>();
+  for (const row of zoneBlockRows) {
+    blockIdByZone.set(row.id, row.block_id);
+    blockIdsNeeded.add(row.block_id);
+  }
+  const blockUnlockModeById = new Map<string, "independent" | "shared">();
+  const blockGameStateById = new Map<string, string>();
+  const blockEnabledById = new Map<string, boolean>();
+  for (const bId of blockIdsNeeded) {
+    const blockRow = db.prepare("SELECT unlock_mode, game_state_id, enabled FROM blocks WHERE id = ?").get(bId) as { unlock_mode: "independent" | "shared"; game_state_id: string; enabled: number } | undefined;
+    if (blockRow) {
+      blockUnlockModeById.set(bId, blockRow.unlock_mode);
+      blockGameStateById.set(bId, blockRow.game_state_id);
+      blockEnabledById.set(bId, !!blockRow.enabled);
+    }
   }
 
   const detected = getDetectedGameState();
@@ -737,9 +874,21 @@ export function listOverlayState(): LockZoneState[] {
     const goldUnlockActive = goldUnlockByZone.has(zone.id);
     const cooldownExpiresAt = goldUnlockByZone.get(zone.id) ?? null;
     const activeForGameStateIds = gameStatesByZone.get(zone.id) ?? [];
-    const activeForCurrentState =
+    const zoneBlockId = blockIdByZone.get(zone.id) ?? null;
+
+    // Check block-level game state: if the zone belongs to a block with a specific
+    // game state, the block's state must match the current detected state.
+    const blockGameStateId = zoneBlockId ? (blockGameStateById.get(zoneBlockId) ?? null) : null;
+    const blockActiveForCurrentState =
+      blockGameStateId === null ||
+      (currentGameStateId !== null && blockGameStateId === currentGameStateId);
+
+    // Check zone-level game state restrictions (if any).
+    const zoneActiveForCurrentState =
       activeForGameStateIds.length === 0 ||
       (currentGameStateId !== null && activeForGameStateIds.includes(currentGameStateId));
+
+    const activeForCurrentState = blockActiveForCurrentState && zoneActiveForCurrentState;
     const isLocked =
       activeForCurrentState &&
       (zone.unlockMode === "gold"
@@ -748,6 +897,7 @@ export function listOverlayState(): LockZoneState[] {
           requiredTodoIds.length > 0 &&
           requiredTodoIds.some((todoId) => statusByTodo.get(todoId) !== "done") &&
           !goldUnlockActive);
+    const zoneBlockUnlockMode = zoneBlockId ? (blockUnlockModeById.get(zoneBlockId) ?? null) : null;
     return {
       zone,
       requiredTodoIds,
@@ -757,6 +907,21 @@ export function listOverlayState(): LockZoneState[] {
       isLocked,
       activeForGameStateIds,
       activeForCurrentState,
+      blockId: zoneBlockId,
+      blockUnlockMode: zoneBlockUnlockMode,
     };
   });
+}
+
+// ---------------------------------------------------------------------------
+// App Settings
+// ---------------------------------------------------------------------------
+
+export function getSetting(key: string): string | null {
+  const row = db.prepare("SELECT value FROM app_settings WHERE key = ?").get(key) as { value: string } | undefined;
+  return row?.value ?? null;
+}
+
+export function setSetting(key: string, value: string): void {
+  db.prepare("INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, value);
 }

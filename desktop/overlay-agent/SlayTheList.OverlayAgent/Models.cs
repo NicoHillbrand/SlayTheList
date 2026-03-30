@@ -27,6 +27,9 @@ public sealed class OverlayPayload
 
     [JsonPropertyName("lastUpdatedAt")]
     public string LastUpdatedAt { get; set; } = string.Empty;
+
+    [JsonPropertyName("showDetectionIndicator")]
+    public bool ShowDetectionIndicator { get; set; } = true;
 }
 
 public sealed class GameWindowHint
@@ -51,6 +54,12 @@ public sealed class ZoneState
 
     [JsonPropertyName("cooldownExpiresAt")]
     public string? CooldownExpiresAt { get; set; }
+
+    [JsonPropertyName("blockId")]
+    public string? BlockId { get; set; }
+
+    [JsonPropertyName("blockUnlockMode")]
+    public string? BlockUnlockMode { get; set; }
 }
 
 public sealed class Zone
@@ -78,6 +87,9 @@ public sealed class Zone
 
     [JsonPropertyName("unlockMode")]
     public string UnlockMode { get; set; } = "todos";
+
+    [JsonPropertyName("goldCost")]
+    public int GoldCost { get; set; } = 10;
 }
 
 public sealed class DetectedGameStateInfo

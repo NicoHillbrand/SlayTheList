@@ -22,22 +22,27 @@ import {
   spendGoldAndActivateUnlock,
   addReferenceImage,
   clearZoneGoldUnlock,
+  createBlock,
   createGameState,
   createTodo,
   createZone,
+  deleteBlock,
   deleteGameState,
   deleteReferenceImage,
   deleteTodo,
   deleteZone,
   getAccountabilityState,
+  getBlock,
   getDetectedGameState,
   getGoldState,
+  listBlocks,
   listDetectionRegions,
   listGameStates,
   listOverlayState,
   listReferenceImages,
   listTodos,
   listZones,
+  listZonesForBlock,
   reorderTodos,
   saveGoldState,
   setDetectedGameState,
@@ -48,9 +53,12 @@ import {
   deductGold,
   saveAccountabilityState,
   setZoneRequirements,
+  updateBlock,
   updateGameState,
   updateTodo,
   updateZone,
+  getSetting,
+  setSetting,
 } from "./store.js";
 import { referenceImagesDir } from "./db.js";
 import { testDetection } from "./image-match.js";
@@ -87,13 +95,14 @@ app.use(
 app.use(express.json({ limit: "50mb" }));
 app.use(requestLogger);
 
-function buildOverlayState(): OverlayState {
+function buildOverlayState(): OverlayState & { showDetectionIndicator: boolean } {
   return {
     gameWindow: { titleHint: "Slay the Spire 2" },
     zones: listOverlayState(),
     detectedGameState: getDetectedGameState(),
     gameStates: listGameStates(),
     lastUpdatedAt: new Date().toISOString(),
+    showDetectionIndicator: getSetting("showDetectionIndicator") !== "false",
   };
 }
 
@@ -761,6 +770,7 @@ app.post("/api/zones", (req, res) => {
   if (width <= 0 || height <= 0) {
     return badRequest(res, "width and height must be positive numbers");
   }
+  const blockId = typeof body.blockId === "string" ? body.blockId : undefined;
   const zone = createZone({
     name: body.name.trim(),
     x: asFiniteNumber(body.x, 100),
@@ -773,7 +783,10 @@ app.post("/api/zones", (req, res) => {
     cooldownSeconds: typeof body.cooldownSeconds === "number" && body.cooldownSeconds > 0
       ? Math.floor(body.cooldownSeconds)
       : 3600,
-  });
+    goldCost: typeof body.goldCost === "number" && Number.isInteger(body.goldCost) && body.goldCost > 0
+      ? body.goldCost
+      : 10,
+  }, blockId);
   ok(res, zone);
   broadcastOverlayState();
 });
@@ -792,6 +805,9 @@ app.patch("/api/zones/:id", (req, res) => {
     cooldownSeconds: typeof patch.cooldownSeconds === "number" && patch.cooldownSeconds > 0
       ? Math.floor(patch.cooldownSeconds)
       : undefined,
+    goldCost: typeof patch.goldCost === "number" && Number.isInteger(patch.goldCost) && patch.goldCost > 0
+      ? patch.goldCost
+      : undefined,
   };
   if (parsedPatch.width !== undefined && parsedPatch.width <= 0) {
     return badRequest(res, "width must be positive");
@@ -808,7 +824,8 @@ app.patch("/api/zones/:id", (req, res) => {
     parsedPatch.enabled === undefined &&
     parsedPatch.unlockMode === undefined &&
     parsedPatch.cooldownEnabled === undefined &&
-    parsedPatch.cooldownSeconds === undefined
+    parsedPatch.cooldownSeconds === undefined &&
+    parsedPatch.goldCost === undefined
   ) {
     return badRequest(res, "no valid zone fields provided");
   }
@@ -863,7 +880,7 @@ app.post("/api/zones/:id/gold-unlock", (req, res) => {
   }
 
   try {
-    spendGoldAndActivateUnlock(req.params.id, 10);
+    spendGoldAndActivateUnlock(req.params.id, zoneState.zone.goldCost);
   } catch (error) {
     return badRequest(res, (error as Error).message);
   }
@@ -1058,6 +1075,92 @@ app.post("/api/game-states/test-detection", async (req, res) => {
 });
 
 app.use("/api/reference-images", express.static(referenceImagesDir));
+
+// ---------------------------------------------------------------------------
+// Blocks
+// ---------------------------------------------------------------------------
+
+app.get("/api/blocks", (_req, res) => {
+  ok(res, { items: listBlocks() });
+});
+
+app.post("/api/blocks", (req, res) => {
+  const name = req.body?.name;
+  if (typeof name !== "string" || !name.trim()) {
+    return badRequest(res, "name is required");
+  }
+  const gameStateId = req.body?.gameStateId;
+  if (typeof gameStateId !== "string" || !gameStateId) {
+    return badRequest(res, "gameStateId is required");
+  }
+  const unlockMode = req.body?.unlockMode;
+  const parsedUnlockMode =
+    unlockMode === "independent" || unlockMode === "shared" ? unlockMode : undefined;
+  const created = createBlock(name.trim(), gameStateId, parsedUnlockMode);
+  ok(res, created);
+  broadcastOverlayState();
+});
+
+app.put("/api/blocks/:id", (req, res) => {
+  const patch = req.body ?? {};
+  const parsedPatch: Record<string, unknown> = {};
+  if (typeof patch.name === "string") parsedPatch.name = patch.name.trim();
+  if (typeof patch.gameStateId === "string") parsedPatch.gameStateId = patch.gameStateId;
+  if (patch.unlockMode === "independent" || patch.unlockMode === "shared") {
+    parsedPatch.unlockMode = patch.unlockMode;
+  }
+  if (typeof patch.enabled === "boolean") parsedPatch.enabled = patch.enabled;
+  if (typeof patch.sortOrder === "number" && Number.isFinite(patch.sortOrder)) {
+    parsedPatch.sortOrder = Math.floor(patch.sortOrder);
+  }
+  if (Object.keys(parsedPatch).length === 0) {
+    return badRequest(res, "no valid fields provided");
+  }
+  const updated = updateBlock(
+    req.params.id,
+    parsedPatch as Partial<{ name: string; gameStateId: string; unlockMode: "independent" | "shared"; enabled: boolean; sortOrder: number }>,
+  );
+  if (!updated) {
+    return res.status(404).json({ error: "block not found" });
+  }
+  ok(res, updated);
+  broadcastOverlayState();
+});
+
+app.delete("/api/blocks/:id", (req, res) => {
+  if (!deleteBlock(req.params.id)) {
+    return res.status(404).json({ error: "block not found" });
+  }
+  ok(res, { deleted: true });
+  broadcastOverlayState();
+});
+
+app.get("/api/blocks/:id/zones", (req, res) => {
+  const block = getBlock(req.params.id);
+  if (!block) {
+    return res.status(404).json({ error: "block not found" });
+  }
+  ok(res, { items: listZonesForBlock(req.params.id) });
+});
+
+// ---------------------------------------------------------------------------
+// App Settings
+// ---------------------------------------------------------------------------
+
+app.get("/api/settings/:key", (req, res) => {
+  const value = getSetting(req.params.key);
+  ok(res, { value });
+});
+
+app.put("/api/settings/:key", (req, res) => {
+  const { value } = req.body;
+  if (typeof value !== "string") {
+    return badRequest(res, "value must be a string");
+  }
+  setSetting(req.params.key, value);
+  broadcastOverlayState();
+  ok(res, { updated: true });
+});
 
 app.get("/api/overlay-state", (_req, res) => {
   ok(res, buildOverlayState());

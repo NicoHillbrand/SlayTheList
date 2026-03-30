@@ -332,10 +332,26 @@ export const lockZoneSchema = z.object({
   unlockMode: lockZoneUnlockModeSchema,
   cooldownEnabled: z.boolean(),
   cooldownSeconds: z.number().int().positive(),
+  goldCost: z.number().int().positive(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
 export type LockZone = z.infer<typeof lockZoneSchema>;
+
+export const blockUnlockModeSchema = z.enum(["independent", "shared"]);
+export type BlockUnlockMode = z.infer<typeof blockUnlockModeSchema>;
+
+export const blockSchema = z.object({
+  id: z.string(),
+  name: z.string().min(1),
+  gameStateId: z.string(),
+  unlockMode: blockUnlockModeSchema,
+  enabled: z.boolean(),
+  sortOrder: z.number(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type Block = z.infer<typeof blockSchema>;
 
 export const lockZoneRequirementSchema = z.object({
   zoneId: z.string(),
@@ -352,6 +368,8 @@ export const lockZoneStateSchema = z.object({
   isLocked: z.boolean(),
   activeForGameStateIds: z.array(z.string()),
   activeForCurrentState: z.boolean(),
+  blockId: z.string().nullable(),
+  blockUnlockMode: blockUnlockModeSchema.nullable(),
 });
 export type LockZoneState = z.infer<typeof lockZoneStateSchema>;
 

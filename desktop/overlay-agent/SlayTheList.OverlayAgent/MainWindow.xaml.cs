@@ -17,7 +17,6 @@ namespace SlayTheList.OverlayAgent;
 
 public partial class MainWindow : Window
 {
-    private const int ZoneGoldUnlockCost = 10;
     private readonly DispatcherTimer _windowSyncTimer;
     private readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web);
     private readonly bool _visualOnlyOverlay = ReadVisualOnlySetting();
@@ -48,6 +47,8 @@ public partial class MainWindow : Window
     private double _lastDetectionScore;
     private bool _detectionRunning;
     private bool _taskManagerClearedState;
+    private Window? _detectionIndicatorWindow;
+    private TextBlock? _detectionIndicatorText;
 
     [DllImport("winmm.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool PlaySound(string? soundName, IntPtr moduleHandle, uint soundFlags);
@@ -64,6 +65,7 @@ public partial class MainWindow : Window
         _windowSyncTimer.Start();
 
         LoadOverlayImagePaths();
+        CreateDetectionIndicatorWindow();
         SourceInitialized += (_, _) => AttachNoActivateWindowHook();
         Loaded += (_, _) =>
         {
@@ -74,6 +76,7 @@ public partial class MainWindow : Window
         {
             _windowSyncTimer.Stop();
             _httpClient.Dispose();
+            _detectionIndicatorWindow?.Close();
         };
     }
 
@@ -374,7 +377,7 @@ public partial class MainWindow : Window
         {
             var scaledWidth = zoneState.Zone.Width * scaleX;
             var scaledHeight = zoneState.Zone.Height * scaleY;
-            var lockText = BuildLockText(zoneState.Zone.UnlockMode, zoneState.RequiredTodoTitles);
+            var lockText = BuildLockText(zoneState.Zone.UnlockMode, zoneState.RequiredTodoTitles, zoneState.BlockUnlockMode, zoneState.Zone.GoldCost);
             var lockFontSize = CalculateLockFontSize(scaledWidth, scaledHeight);
             var isGoldUnlock = string.Equals(zoneState.Zone.UnlockMode, "gold", StringComparison.OrdinalIgnoreCase);
             var contentStack = new StackPanel
@@ -396,6 +399,10 @@ public partial class MainWindow : Window
             });
             if (isGoldUnlock)
             {
+                var isSharedBlock = string.Equals(zoneState.BlockUnlockMode, "shared", StringComparison.OrdinalIgnoreCase);
+                var goldButtonText = isSharedBlock
+                    ? $"Unlock all for {zoneState.Zone.GoldCost} gold"
+                    : $"Unlock for {zoneState.Zone.GoldCost} gold";
                 contentStack.Children.Add(new Border
                 {
                     Margin = new Thickness(0, 10, 0, 0),
@@ -407,7 +414,7 @@ public partial class MainWindow : Window
                     IsHitTestVisible = false,
                     Child = new TextBlock
                     {
-                        Text = $"Unlock for {ZoneGoldUnlockCost} gold",
+                        Text = goldButtonText,
                         Foreground = new SolidColorBrush(Color.FromArgb(255, 248, 223, 139)),
                         FontSize = Math.Max(11, lockFontSize * 0.82),
                         FontWeight = FontWeights.SemiBold,
@@ -424,7 +431,9 @@ public partial class MainWindow : Window
                 BorderBrush = new SolidColorBrush(Color.FromArgb(220, 22, 101, 52)),
                 BorderThickness = new Thickness(2),
                 ToolTip = isGoldUnlock
-                    ? $"Click to unlock {zoneState.Zone.Name} for {ZoneGoldUnlockCost} gold"
+                    ? (string.Equals(zoneState.BlockUnlockMode, "shared", StringComparison.OrdinalIgnoreCase)
+                        ? $"Click to unlock all zones in block for {zoneState.Zone.GoldCost} gold"
+                        : $"Click to unlock {zoneState.Zone.Name} for {zoneState.Zone.GoldCost} gold")
                     : $"Locked: {zoneState.Zone.Name}",
                 IsHitTestVisible = !_visualOnlyOverlay,
                 Cursor = isGoldUnlock
@@ -445,7 +454,7 @@ public partial class MainWindow : Window
                 border.MouseLeftButtonUp += async (_, args) =>
                 {
                     args.Handled = true;
-                    await TryUnlockZoneWithGold(zoneState.Zone.Id, zoneState.Zone.Name);
+                    await TryUnlockZoneWithGold(zoneState.Zone.Id, zoneState.Zone.Name, zoneState.Zone.GoldCost);
                 };
             }
             Canvas.SetLeft(border, zoneState.Zone.X * scaleX);
@@ -486,7 +495,7 @@ public partial class MainWindow : Window
         UpdateStatusText();
     }
 
-    private async Task TryUnlockZoneWithGold(string zoneId, string zoneName)
+    private async Task TryUnlockZoneWithGold(string zoneId, string zoneName, int goldCost)
     {
         try
         {
@@ -503,8 +512,8 @@ public partial class MainWindow : Window
             var soundPlayed = PlayGoldUnlockSound();
             Dispatcher.Invoke(() => ShowTransientStatus(
                 soundPlayed
-                    ? $"Unlocked {zoneName} for {ZoneGoldUnlockCost} gold"
-                    : $"Unlocked {zoneName} for {ZoneGoldUnlockCost} gold | sound failed",
+                    ? $"Unlocked {zoneName} for {goldCost} gold"
+                    : $"Unlocked {zoneName} for {goldCost} gold | sound failed",
                 3500));
         }
         catch
@@ -617,6 +626,8 @@ public partial class MainWindow : Window
 
     private void UpdateStatusText()
     {
+        UpdateDetectionIndicator();
+
         if (!string.IsNullOrWhiteSpace(_statusOverrideText) && DateTime.UtcNow < _statusOverrideUntilUtc)
         {
             StatusText.Text = _statusOverrideText;
@@ -656,11 +667,14 @@ public partial class MainWindow : Window
         StatusText.Text = text;
     }
 
-    private static string BuildLockText(string unlockMode, IReadOnlyList<string> requiredTodoTitles)
+    private static string BuildLockText(string unlockMode, IReadOnlyList<string> requiredTodoTitles, string? blockUnlockMode = null, int goldCost = 10)
     {
         if (string.Equals(unlockMode, "gold", StringComparison.OrdinalIgnoreCase))
         {
-            return $"Unlock for\n\n{ZoneGoldUnlockCost} gold";
+            var isShared = string.Equals(blockUnlockMode, "shared", StringComparison.OrdinalIgnoreCase);
+            return isShared
+                ? $"Unlock all for\n\n{goldCost} gold"
+                : $"Unlock for\n\n{goldCost} gold";
         }
 
         if (requiredTodoTitles.Count == 0)
@@ -820,6 +834,99 @@ public partial class MainWindow : Window
         return setting.Equals("1", StringComparison.OrdinalIgnoreCase) ||
                setting.Equals("true", StringComparison.OrdinalIgnoreCase) ||
                setting.Equals("yes", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void CreateDetectionIndicatorWindow()
+    {
+        _detectionIndicatorText = new TextBlock
+        {
+            Foreground = new SolidColorBrush(Color.FromArgb(230, 229, 231, 235)),
+            FontSize = 12,
+            Text = "\u23f8 Detection idle",
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        var border = new Border
+        {
+            Padding = new Thickness(10, 6, 10, 6),
+            CornerRadius = new CornerRadius(6),
+            Background = new SolidColorBrush(Color.FromArgb(180, 17, 24, 38)),
+            Child = _detectionIndicatorText,
+            IsHitTestVisible = false,
+        };
+
+        _detectionIndicatorWindow = new Window
+        {
+            WindowStyle = WindowStyle.None,
+            ResizeMode = ResizeMode.NoResize,
+            Topmost = true,
+            ShowActivated = false,
+            Focusable = false,
+            ShowInTaskbar = false,
+            AllowsTransparency = true,
+            Background = Brushes.Transparent,
+            SizeToContent = SizeToContent.WidthAndHeight,
+            Content = border,
+        };
+
+        // Position at top-right of primary screen
+        var screenWidth = SystemParameters.PrimaryScreenWidth;
+        _detectionIndicatorWindow.Left = screenWidth - 220;
+        _detectionIndicatorWindow.Top = 8;
+
+        // Apply no-activate style once the window handle is created
+        _detectionIndicatorWindow.SourceInitialized += (_, _) =>
+        {
+            var handle = new WindowInteropHelper(_detectionIndicatorWindow).Handle;
+            NativeMethods.EnableNoActivate(handle);
+        };
+
+        _detectionIndicatorWindow.Show();
+    }
+
+    private void UpdateDetectionIndicator()
+    {
+        if (_detectionIndicatorText is null || _detectionIndicatorWindow is null)
+            return;
+
+        if (_lastOverlayState?.ShowDetectionIndicator == false)
+        {
+            _detectionIndicatorWindow?.Hide();
+            return;
+        }
+        else
+        {
+            if (_detectionIndicatorWindow?.IsVisible == false)
+                _detectionIndicatorWindow?.Show();
+        }
+
+        var hasAlwaysDetect = HasAlwaysDetectState();
+        var detected = _lastOverlayState?.DetectedGameState;
+
+        string text;
+        if (!hasAlwaysDetect && !_isGameInForeground)
+        {
+            text = "\u23f8 Detection paused";
+        }
+        else if (detected is not null && !string.IsNullOrWhiteSpace(detected.GameStateId))
+        {
+            var confidence = (int)Math.Round(detected.Confidence * 100);
+            text = $"\U0001f50d {detected.GameStateName ?? "Unknown"} ({confidence}%)";
+        }
+        else
+        {
+            text = "\U0001f50d None";
+        }
+
+        _detectionIndicatorText.Text = text;
+
+        // Re-position in case resolution changed
+        var screenWidth = SystemParameters.PrimaryScreenWidth;
+        _detectionIndicatorWindow.Left = screenWidth - 220;
+        _detectionIndicatorWindow.Top = 8;
+
+        if (!_detectionIndicatorWindow.IsVisible)
+            _detectionIndicatorWindow.Show();
     }
 
     private void AttachNoActivateWindowHook()

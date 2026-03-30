@@ -218,12 +218,28 @@ CREATE TABLE IF NOT EXISTS detected_game_state (
   FOREIGN KEY(game_state_id) REFERENCES game_states(id) ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS blocks (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  game_state_id TEXT NOT NULL REFERENCES game_states(id) ON DELETE CASCADE,
+  unlock_mode TEXT NOT NULL DEFAULT 'independent' CHECK(unlock_mode IN ('independent', 'shared')),
+  enabled INTEGER NOT NULL DEFAULT 1,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS local_social_settings (
   id INTEGER PRIMARY KEY CHECK(id = 1),
   habits_visibility TEXT NOT NULL DEFAULT 'friends' CHECK(habits_visibility IN ('private', 'friends', 'public')),
   predictions_visibility TEXT NOT NULL DEFAULT 'friends' CHECK(predictions_visibility IN ('private', 'friends', 'public')),
   gold_visibility TEXT NOT NULL DEFAULT 'friends' CHECK(gold_visibility IN ('private', 'friends', 'public')),
   updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS cloud_connection_state (
@@ -339,6 +355,8 @@ ensureTodoColumn("completed_at", "TEXT");
 ensureLockZoneColumn("unlock_mode", "TEXT NOT NULL DEFAULT 'todos' CHECK(unlock_mode IN ('todos', 'gold'))");
 ensureLockZoneColumn("cooldown_enabled", "INTEGER NOT NULL DEFAULT 0");
 ensureLockZoneColumn("cooldown_seconds", "INTEGER NOT NULL DEFAULT 3600");
+ensureLockZoneColumn("block_id", "TEXT REFERENCES blocks(id) ON DELETE CASCADE");
+ensureLockZoneColumn("gold_cost", "INTEGER NOT NULL DEFAULT 10");
 ensureLockZoneGoldUnlockColumn("expires_at", "TEXT");
 ensureGameStateColumn("always_detect", "INTEGER NOT NULL DEFAULT 0");
 

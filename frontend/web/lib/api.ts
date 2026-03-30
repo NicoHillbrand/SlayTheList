@@ -1,5 +1,7 @@
 import type {
   AccountabilityState,
+  Block,
+  BlockUnlockMode,
   CloudConnectionStatus,
   DetectedGameState,
   FriendRequest,
@@ -199,6 +201,8 @@ export async function createZone(input: {
   unlockMode?: LockZoneUnlockMode;
   cooldownEnabled?: boolean;
   cooldownSeconds?: number;
+  goldCost?: number;
+  blockId?: string;
 }) {
   return request<LockZone>("/api/zones", {
     method: "POST",
@@ -376,6 +380,18 @@ export async function deleteReflection(id: string) {
   });
 }
 
+export async function getAppSetting(key: string) {
+  return request<{ value: string | null }>(`/api/settings/${encodeURIComponent(key)}`);
+}
+
+export async function setAppSetting(key: string, value: string) {
+  return request<{ updated: true }>(`/api/settings/${encodeURIComponent(key)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ value }),
+  });
+}
+
 export function overlayWebSocketUrl() {
   const url = new URL(API_BASE);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
@@ -481,5 +497,40 @@ export async function setDetectionRegions(
   return request<{ items: GameStateDetectionRegion[] }>(`/api/game-states/${gameStateId}/detection-regions`, {
     method: "PUT",
     body: JSON.stringify({ regions }),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Blocks
+// ---------------------------------------------------------------------------
+
+export async function listBlocks() {
+  return request<{ items: Block[] }>("/api/blocks");
+}
+
+export async function createBlock(
+  name: string,
+  gameStateId: string,
+  unlockMode?: BlockUnlockMode,
+) {
+  return request<Block>("/api/blocks", {
+    method: "POST",
+    body: JSON.stringify({ name, gameStateId, unlockMode }),
+  });
+}
+
+export async function updateBlock(
+  id: string,
+  patch: Partial<{ name: string; gameStateId: string; unlockMode: BlockUnlockMode; enabled: boolean; sortOrder: number }>,
+) {
+  return request<Block>(`/api/blocks/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteBlock(id: string) {
+  return request<{ deleted: true }>(`/api/blocks/${id}`, {
+    method: "DELETE",
   });
 }
