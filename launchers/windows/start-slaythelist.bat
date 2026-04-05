@@ -51,7 +51,9 @@ start "SlayTheList API" cmd /c "cd /d ""%ROOT%"" && npm run dev:api"
 start "SlayTheList Web" cmd /c "cd /d ""%ROOT%"" && set ""PORT=%WEB_PORT%"" && npm run dev:web"
 
 set "OVERLAY_EXE="
-if exist "%ROOT%desktop\overlay-agent\SlayTheList.OverlayAgent\bin\Release\net8.0-windows\SlayTheList.OverlayAgent.exe" (
+if exist "%ROOT%desktop\overlay-agent\SlayTheList.OverlayAgent\bin\Release\net8.0-windows\win-x64\publish\SlayTheList.OverlayAgent.exe" (
+  set "OVERLAY_EXE=%ROOT%desktop\overlay-agent\SlayTheList.OverlayAgent\bin\Release\net8.0-windows\win-x64\publish\SlayTheList.OverlayAgent.exe"
+) else if exist "%ROOT%desktop\overlay-agent\SlayTheList.OverlayAgent\bin\Release\net8.0-windows\SlayTheList.OverlayAgent.exe" (
   set "OVERLAY_EXE=%ROOT%desktop\overlay-agent\SlayTheList.OverlayAgent\bin\Release\net8.0-windows\SlayTheList.OverlayAgent.exe"
 ) else if exist "%ROOT%desktop\overlay-agent\SlayTheList.OverlayAgent\bin\Debug\net8.0-windows\SlayTheList.OverlayAgent.exe" (
   set "OVERLAY_EXE=%ROOT%desktop\overlay-agent\SlayTheList.OverlayAgent\bin\Debug\net8.0-windows\SlayTheList.OverlayAgent.exe"
@@ -61,7 +63,7 @@ if defined OVERLAY_EXE (
   start "SlayTheList Overlay" "%OVERLAY_EXE%"
 ) else (
   echo Overlay executable not found. Build it once with:
-  echo dotnet build "desktop/overlay-agent/SlayTheList.OverlayAgent.sln" -c Release
+  echo dotnet publish "desktop/overlay-agent/SlayTheList.OverlayAgent" -c Release
 )
 
 timeout /t 2 >nul
