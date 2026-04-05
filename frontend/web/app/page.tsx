@@ -904,7 +904,7 @@ export default function Page() {
       setRewardedTodoIds(fetchedGoldState.rewardedTodoIds);
       setZones(zoneData.items);
       setOverlayState(overlayData);
-      setGameStates(overlayData.gameStates ?? []);
+      if (showLoader) setGameStates(overlayData.gameStates ?? []);
       setLoadState("idle");
       // Compute or restore start-of-day progress baseline
       const todayKey = getDateKey(new Date());
@@ -1348,11 +1348,18 @@ export default function Page() {
   }
 
   function pushToNextDay(todo: Todo) {
+    const newPushCount = (todo.pushCount ?? 0) + 1;
+    if (newPushCount >= 3) {
+      const proceed = window.confirm(
+        `You've pushed "${todo.title}" ${newPushCount} times now. Do you still want to push it?`,
+      );
+      if (!proceed) return;
+    }
     void runAction(async () => {
       const base = todo.deadlineAt ? new Date(todo.deadlineAt) : new Date();
       const next = new Date(base.getFullYear(), base.getMonth(), base.getDate() + 1, 23, 59, 59);
       const newDeadline = next.toISOString();
-      await updateTodo(todo.id, { deadlineAt: newDeadline });
+      await updateTodo(todo.id, { deadlineAt: newDeadline, pushCount: newPushCount });
       for (const sub of getSubTodos(todo, todos)) {
         if (!sub.deadlineAt || new Date(sub.deadlineAt) < next) {
           await updateTodo(sub.id, { deadlineAt: newDeadline });
@@ -1840,6 +1847,9 @@ export default function Page() {
     );
     if (!confirmed) return;
 
+    // Optimistically update local state
+    setZones((prev) => prev.map((z) => z.id === zoneId ? { ...z, locked: false } : z));
+    setGold((prev) => prev - cost);
     void runAction(async () => {
       await purchaseZoneGoldUnlock(zoneId);
       await refresh();
@@ -2083,7 +2093,7 @@ export default function Page() {
 
     const name = `Zone ${zones.length + 1}`;
     void runAction(async () => {
-      await createZone({ name, x, y, width, height, enabled: true, blockId: selectedBlockId ?? undefined });
+      await createZone({ name, x, y, width, height, locked: true, blockId: selectedBlockId ?? undefined });
       await refresh();
     });
   }
@@ -2991,10 +3001,13 @@ export default function Page() {
                   className="goals-subtab"
                   onClick={() => setActiveTab("blocks")}
                 >
-                  Block Setup
+                  Blocks
                 </button>
                 <button type="button" className="goals-subtab" onClick={() => setActiveTab("social")}>
                   Social
+                </button>
+                <button type="button" className="goals-subtab" onClick={() => window.location.href = "/base"}>
+                  Base
                 </button>
               </nav>
               <div className="goals-filters">
@@ -3115,10 +3128,13 @@ export default function Page() {
                   Reflection
                 </button>
                 <button type="button" className="goals-subtab" onClick={() => setActiveTab("blocks")}>
-                  Block Setup
+                  Blocks
                 </button>
                 <button type="button" className="goals-subtab" onClick={() => setActiveTab("social")}>
                   Social
+                </button>
+                <button type="button" className="goals-subtab" onClick={() => window.location.href = "/base"}>
+                  Base
                 </button>
               </nav>
               <div className="goals-filters">
@@ -3716,10 +3732,13 @@ export default function Page() {
                   Reflection
                 </button>
                 <button type="button" className="goals-subtab" onClick={() => setActiveTab("blocks")}>
-                  Block Setup
+                  Blocks
                 </button>
                 <button type="button" className="goals-subtab" onClick={() => setActiveTab("social")}>
                   Social
+                </button>
+                <button type="button" className="goals-subtab" onClick={() => window.location.href = "/base"}>
+                  Base
                 </button>
               </nav>
             </div>
@@ -4056,10 +4075,13 @@ export default function Page() {
                   Reflection
                 </button>
                 <button type="button" className="goals-subtab" onClick={() => setActiveTab("blocks")}>
-                  Block Setup
+                  Blocks
                 </button>
                 <button type="button" className="goals-subtab" onClick={() => setActiveTab("social")}>
                   Social
+                </button>
+                <button type="button" className="goals-subtab" onClick={() => window.location.href = "/base"}>
+                  Base
                 </button>
               </nav>
               <div className="goals-filters">
@@ -4224,7 +4246,7 @@ export default function Page() {
                 className={`goals-subtab ${activeTab === "blocks" ? "active" : ""}`}
                 onClick={() => setActiveTab("blocks")}
               >
-                Block Setup
+                Blocks
               </button>
               <button
                 type="button"
@@ -4232,6 +4254,13 @@ export default function Page() {
                 onClick={() => setActiveTab("social")}
               >
                 Social
+              </button>
+              <button
+                type="button"
+                className="goals-subtab"
+                onClick={() => window.location.href = "/base"}
+              >
+                Base
               </button>
             </nav>
           </div>
@@ -4293,7 +4322,7 @@ export default function Page() {
                 <button
                   key={block.id}
                   type="button"
-                  onClick={() => setSelectedBlockId(isActive ? null : block.id)}
+                  onClick={() => { setSelectedBlockId(isActive ? null : block.id); setShowNewBlockForm(false); }}
                   style={{
                     padding: "0.5rem 0.75rem",
                     borderRadius: "8px",
@@ -4320,7 +4349,7 @@ export default function Page() {
             })}
             <button
               type="button"
-              onClick={() => { setShowNewBlockForm(true); setNewBlockName(""); setNewBlockGameStateId(gameStates[0]?.id ?? ""); setNewBlockUnlockMode("independent"); }}
+              onClick={() => { setShowNewBlockForm(true); setSelectedBlockId(null); setNewBlockName(""); setNewBlockGameStateId(gameStates[0]?.id ?? ""); setNewBlockUnlockMode("independent"); }}
               style={{
                 padding: "0.5rem 0.75rem",
                 borderRadius: "8px",
@@ -4507,8 +4536,6 @@ export default function Page() {
               const requiredTitles = requiredTodoIds
                 .map((todoId) => titleByTodoId.get(todoId))
                 .filter((title): title is string => !!title);
-              const isLocked = zoneState?.isLocked ?? false;
-              const goldUnlockActive = zoneState?.goldUnlockActive ?? false;
               const lockText = lockMessage(requiredTitles, zone.unlockMode, zone.goldCost);
               const lockTextStyle = lockTextStyleForZone(zone.width, zone.height);
               const zoneImage = imageForZone(zone.id);
@@ -4528,10 +4555,10 @@ export default function Page() {
                       isSelected ? "#60a5fa" : "#4b5563"
                     }`,
                     backgroundColor: zoneImage
-                      ? isLocked
+                      ? zone.locked
                         ? "rgba(15,23,42,0.16)"
                         : "rgba(15,23,42,0.1)"
-                      : isLocked
+                      : zone.locked
                         ? "rgba(15,23,42,0.16)"
                         : "rgba(34,197,94,0.2)",
                     backgroundImage: zoneImage ? `url("${zoneImage}")` : undefined,
@@ -4539,10 +4566,10 @@ export default function Page() {
                     backgroundPosition: "center",
                     backgroundBlendMode: zoneImage ? "multiply" : "normal",
                     pointerEvents: "auto",
-                    cursor: isLocked ? "pointer" : "move",
+                    cursor: zone.locked ? "pointer" : "move",
                   }}
                 >
-                  {isLocked && (
+                  {zone.locked && (
                     <div
                       style={{
                         position: "absolute",
@@ -4586,22 +4613,21 @@ export default function Page() {
                       </button>
                     </div>
                   )}
-                  {!isLocked && goldUnlockActive && (
+                  {!zone.locked && (
                     <div
                       style={{
                         position: "absolute",
-                        right: "0.45rem",
-                        top: "0.45rem",
-                        borderRadius: 999,
-                        background: "rgba(120, 53, 15, 0.9)",
-                        color: "#fde68a",
-                        padding: "0.2rem 0.5rem",
-                        fontSize: "0.72rem",
-                        fontWeight: 700,
+                        inset: 0,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
                         pointerEvents: "none",
+                        color: "rgba(156, 163, 175, 0.8)",
+                        fontSize: Math.max(10, Math.min(14, Math.min(zone.width, zone.height) * 0.05)),
+                        fontWeight: 600,
                       }}
                     >
-                      Gold unlocked
+                      Inactive
                     </div>
                   )}
                 </div>
@@ -4682,18 +4708,23 @@ export default function Page() {
                         <option value="todos">Todo unlock</option>
                         <option value="gold">Gold unlock</option>
                       </select>
-                      <button type="button" onClick={() => patchZone(zone.id, { enabled: !zone.enabled })}>
-                        {zone.enabled ? "Disable" : "Enable"}
-                      </button>
+                      <select
+                        value={zone.locked ? "locked" : "unlocked"}
+                        onChange={(e) => {
+                          e.stopPropagation();
+                          const lock = e.target.value === "locked";
+                          setZones((prev) => prev.map((z) => z.id === zone.id ? { ...z, locked: lock } : z));
+                          void runAction(async () => {
+                            await updateZone(zone.id, { locked: lock });
+                            await refresh();
+                          });
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <option value="locked">Locked</option>
+                        <option value="unlocked">Unlocked</option>
+                      </select>
                     </div>
-
-<p style={{ margin: 0, color: isLocked ? "#fca5a5" : "#86efac" }}>
-                      {isLocked ? "Locked in game" : goldUnlockActive
-                        ? cooldownRemainingSec !== null
-                          ? `Unlocked with gold — re-locks in ${Math.ceil(cooldownRemainingSec / 60)}m`
-                          : "Unlocked with gold"
-                        : "Unlocked in game"}
-                    </p>
 
                     <div style={{ display: "grid", gap: "0.25rem" }}>
                       {zone.unlockMode === "gold" ? (
@@ -4738,18 +4769,6 @@ export default function Page() {
                               style={{ width: 50 }}
                             />
                           </label>
-                          {goldUnlockActive && (
-                            <button
-                              type="button"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                relockZone(zone.id);
-                              }}
-                              style={{ justifySelf: "start" }}
-                            >
-                              Re-lock zone
-                            </button>
-                          )}
                         </>
                       ) : (
                         <>
@@ -4903,7 +4922,7 @@ export default function Page() {
                           <small>Match threshold:</small>
                           <input
                             type="range"
-                            min={0}
+                            min={0.5}
                             max={1}
                             step={0.05}
                             value={gs.matchThreshold}
@@ -4913,7 +4932,7 @@ export default function Page() {
                             }}
                             onMouseUp={() => patchGameState(gs.id, { matchThreshold: gs.matchThreshold })}
                             onTouchEnd={() => patchGameState(gs.id, { matchThreshold: gs.matchThreshold })}
-                            style={{ width: 100 }}
+                            style={{ width: 150 }}
                           />
                           <small>{(gs.matchThreshold * 100).toFixed(0)}%</small>
                         </label>
@@ -5093,10 +5112,13 @@ export default function Page() {
                   Reflection
                 </button>
                 <button type="button" className="goals-subtab" onClick={() => setActiveTab("blocks")}>
-                  Block Setup
+                  Blocks
                 </button>
                 <button type="button" className="goals-subtab active" onClick={() => setActiveTab("social")}>
                   Social
+                </button>
+                <button type="button" className="goals-subtab" onClick={() => window.location.href = "/base"}>
+                  Base
                 </button>
               </nav>
             </div>

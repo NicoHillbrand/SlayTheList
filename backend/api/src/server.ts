@@ -5,6 +5,8 @@ import { randomUUID } from "node:crypto";
 import { WebSocketServer } from "ws";
 import {
   accountabilityStateSchema,
+  baseShopPurchaseRequestSchema,
+  baseStateSchema,
   cloudDeviceStartRequestSchema,
   friendRequestSchema,
   friendSearchResultSchema,
@@ -59,9 +61,14 @@ import {
   updateZone,
   getSetting,
   setSetting,
+  getBaseState,
+  saveBaseState,
+  purchaseBaseItem,
+  getProgression,
+  checkAndAwardDiamonds,
 } from "./store.js";
 import { referenceImagesDir } from "./db.js";
-import { testDetection } from "./image-match.js";
+import { testDetection, clearRefPixelCache, getDetectionRefs, DETECTION_COMPARE_SIZE, DETECTION_TEMPLATE_WIDTH, DETECTION_TEMPLATE_HEIGHT } from "./image-match.js";
 import { errorLogger, requestLogger } from "./logger.js";
 import {
   acceptCloudFriendRequest,
@@ -366,6 +373,7 @@ app.patch("/api/todos/:id", (req, res) => {
   const context = req.body?.context;
   const indent = req.body?.indent;
   const archived = req.body?.archived;
+  const pushCount = req.body?.pushCount;
   const deadlineAt = req.body?.deadlineAt;
   const deadlineTime = req.body?.deadlineTime;
   const parsedStatus = status === undefined ? undefined : status === "active" || status === "done" ? status : null;
@@ -392,6 +400,15 @@ app.patch("/api/todos/:id", (req, res) => {
   if (parsedArchived === null) {
     return badRequest(res, "archived must be a boolean");
   }
+  const parsedPushCount =
+    pushCount === undefined
+      ? undefined
+      : typeof pushCount === "number" && Number.isInteger(pushCount) && pushCount >= 0
+        ? pushCount
+        : null;
+  if (parsedPushCount === null) {
+    return badRequest(res, "pushCount must be a non-negative integer");
+  }
   const parsedDeadline = parseDeadlineAt(deadlineAt, deadlineTime, { allowUndefined: true });
   if (parsedDeadline.error) {
     return badRequest(res, parsedDeadline.error);
@@ -402,6 +419,7 @@ app.patch("/api/todos/:id", (req, res) => {
     context === undefined &&
     parsedIndent === undefined &&
     parsedArchived === undefined &&
+    parsedPushCount === undefined &&
     parsedDeadline.value === undefined
   ) {
     return badRequest(res, "no valid todo fields provided");
@@ -413,6 +431,7 @@ app.patch("/api/todos/:id", (req, res) => {
     indent: parsedIndent,
     deadlineAt: parsedDeadline.value,
     archivedAt: parsedArchived === undefined ? undefined : parsedArchived ? new Date().toISOString() : null,
+    pushCount: parsedPushCount,
   });
   if (!updated) {
     return res.status(404).json({ error: "todo not found" });
@@ -777,7 +796,7 @@ app.post("/api/zones", (req, res) => {
     y: asFiniteNumber(body.y, 100),
     width,
     height,
-    enabled: body.enabled !== false,
+    locked: body.locked !== false,
     unlockMode: parseZoneUnlockMode(body.unlockMode) ?? "todos",
     cooldownEnabled: body.cooldownEnabled === true,
     cooldownSeconds: typeof body.cooldownSeconds === "number" && body.cooldownSeconds > 0
@@ -799,7 +818,7 @@ app.patch("/api/zones/:id", (req, res) => {
     y: parseOptionalFiniteNumber(patch.y),
     width: parseOptionalFiniteNumber(patch.width),
     height: parseOptionalFiniteNumber(patch.height),
-    enabled: typeof patch.enabled === "boolean" ? patch.enabled : undefined,
+    locked: typeof patch.locked === "boolean" ? patch.locked : undefined,
     unlockMode: parseZoneUnlockMode(patch.unlockMode),
     cooldownEnabled: typeof patch.cooldownEnabled === "boolean" ? patch.cooldownEnabled : undefined,
     cooldownSeconds: typeof patch.cooldownSeconds === "number" && patch.cooldownSeconds > 0
@@ -821,7 +840,7 @@ app.patch("/api/zones/:id", (req, res) => {
     parsedPatch.y === undefined &&
     parsedPatch.width === undefined &&
     parsedPatch.height === undefined &&
-    parsedPatch.enabled === undefined &&
+    parsedPatch.locked === undefined &&
     parsedPatch.unlockMode === undefined &&
     parsedPatch.cooldownEnabled === undefined &&
     parsedPatch.cooldownSeconds === undefined &&
@@ -869,11 +888,8 @@ app.post("/api/zones/:id/gold-unlock", (req, res) => {
   if (!zoneState) {
     return res.status(404).json({ error: "zone not found" });
   }
-  if (!zoneState.zone.enabled) {
-    return badRequest(res, "zone is disabled");
-  }
-  if (zoneState.zone.unlockMode === "todos" && zoneState.requiredTodoIds.length === 0) {
-    return badRequest(res, "zone has no requirements to unlock");
+  if (!zoneState.zone.locked) {
+    return badRequest(res, "zone is already unlocked");
   }
   if (!zoneState.isLocked) {
     return badRequest(res, "zone is already unlocked");
@@ -1000,6 +1016,7 @@ app.post("/api/game-states/:id/reference-images", (req, res) => {
   }
   const buffer = Buffer.from(imageData, "base64");
   const created = addReferenceImage(req.params.id, buffer, filename.trim());
+  clearRefPixelCache();
   ok(res, created);
 });
 
@@ -1007,6 +1024,7 @@ app.delete("/api/game-states/reference-images/:imageId", (req, res) => {
   if (!deleteReferenceImage(req.params.imageId)) {
     return res.status(404).json({ error: "reference image not found" });
   }
+  clearRefPixelCache();
   ok(res, { deleted: true });
 });
 
@@ -1071,6 +1089,28 @@ app.post("/api/game-states/test-detection", async (req, res) => {
     ok(res, { results });
   } catch (err) {
     res.status(500).json({ error: `detection test failed: ${(err as Error).message}` });
+  }
+});
+
+app.get("/api/detection-refs", async (_req, res) => {
+  try {
+    const states = listGameStates();
+    const refMap = new Map<string, Array<{ id: string; filename: string }>>();
+    const regionsMap = new Map<string, import("./image-match.js").DetectionRegion[]>();
+    for (const gs of states) {
+      refMap.set(gs.id, listReferenceImages(gs.id));
+      const regions = listDetectionRegions(gs.id);
+      if (regions.length > 0) regionsMap.set(gs.id, regions);
+    }
+    const refs = await getDetectionRefs(states, refMap, regionsMap);
+    ok(res, {
+      compareSize: DETECTION_COMPARE_SIZE,
+      templateWidth: DETECTION_TEMPLATE_WIDTH,
+      templateHeight: DETECTION_TEMPLATE_HEIGHT,
+      refs,
+    });
+  } catch (err) {
+    res.status(500).json({ error: `failed to compute detection refs: ${(err as Error).message}` });
   }
 });
 
@@ -1160,6 +1200,39 @@ app.put("/api/settings/:key", (req, res) => {
   setSetting(req.params.key, value);
   broadcastOverlayState();
   ok(res, { updated: true });
+});
+
+// ---------------------------------------------------------------------------
+// Base Builder
+// ---------------------------------------------------------------------------
+
+app.get("/api/base-state", (_req, res) => {
+  ok(res, getBaseState());
+});
+
+app.put("/api/base-state", (req, res) => {
+  const parsed = baseStateSchema.pick({ placements: true, inventory: true }).safeParse(req.body);
+  if (!parsed.success) return badRequest(res, parsed.error.message);
+  ok(res, saveBaseState(parsed.data));
+});
+
+app.get("/api/progression", (_req, res) => {
+  ok(res, getProgression());
+});
+
+app.post("/api/base-shop/purchase", (req, res) => {
+  const parsed = baseShopPurchaseRequestSchema.safeParse(req.body);
+  if (!parsed.success) return badRequest(res, parsed.error.message);
+  try {
+    ok(res, purchaseBaseItem(parsed.data.itemId, parsed.data.cost, parsed.data.currency));
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "purchase failed";
+    badRequest(res, message);
+  }
+});
+
+app.post("/api/base-diamonds/check", (_req, res) => {
+  ok(res, checkAndAwardDiamonds());
 });
 
 app.get("/api/overlay-state", (_req, res) => {

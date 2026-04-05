@@ -7,6 +7,13 @@ const COMPARE_SIZE = 64;
 const TEMPLATE_WIDTH = 1280;
 const TEMPLATE_HEIGHT = 720;
 
+// Cache for reference image pixels — keyed by "imageId:regionsHash"
+const refPixelCache = new Map<string, Float32Array>();
+
+export function clearRefPixelCache(): void {
+  refPixelCache.clear();
+}
+
 export type DetectionRegion = { x: number; y: number; width: number; height: number };
 
 async function toNormalizedPixels(input: Buffer): Promise<Float32Array> {
@@ -134,6 +141,52 @@ export type MatchResult = {
   combined: number;
 };
 
+export type RefPixelData = {
+  gameStateId: string;
+  gameStateName: string;
+  imageId: string;
+  filename: string;
+  pixels: number[];
+  regions: DetectionRegion[];
+};
+
+export async function getDetectionRefs(
+  gameStates: Array<{ id: string; name: string }>,
+  referenceImages: Map<string, Array<{ id: string; filename: string }>>,
+  detectionRegions?: Map<string, DetectionRegion[]>,
+): Promise<RefPixelData[]> {
+  const results: RefPixelData[] = [];
+  for (const gs of gameStates) {
+    const regions = detectionRegions?.get(gs.id) ?? [];
+    const regionsKey = regions.map(r => `${r.x},${r.y},${r.width},${r.height}`).join("|");
+    const refs = referenceImages.get(gs.id) ?? [];
+    for (const ref of refs) {
+      const cacheKey = `${ref.id}:${regionsKey}`;
+      let refPixels = refPixelCache.get(cacheKey);
+      if (!refPixels) {
+        const filePath = path.join(referenceImagesDir, gs.id, ref.filename);
+        if (!fs.existsSync(filePath)) continue;
+        const refBuffer = fs.readFileSync(filePath);
+        refPixels = await toNormalizedPixelsWithRegions(refBuffer, regions);
+        refPixelCache.set(cacheKey, refPixels);
+      }
+      results.push({
+        gameStateId: gs.id,
+        gameStateName: gs.name,
+        imageId: ref.id,
+        filename: ref.filename,
+        pixels: Array.from(refPixels),
+        regions,
+      });
+    }
+  }
+  return results;
+}
+
+export const DETECTION_COMPARE_SIZE = COMPARE_SIZE;
+export const DETECTION_TEMPLATE_WIDTH = TEMPLATE_WIDTH;
+export const DETECTION_TEMPLATE_HEIGHT = TEMPLATE_HEIGHT;
+
 export async function testDetection(
   testImageBuffer: Buffer,
   gameStates: Array<{ id: string; name: string }>,
@@ -142,17 +195,30 @@ export async function testDetection(
 ): Promise<MatchResult[]> {
   const results: MatchResult[] = [];
 
+  // Cache test pixels per unique regions key to avoid reprocessing
+  const testPixelsByRegions = new Map<string, Float32Array>();
+
   for (const gs of gameStates) {
     const regions = detectionRegions?.get(gs.id) ?? [];
-    const testPixels = await toNormalizedPixelsWithRegions(testImageBuffer, regions);
+    const regionsKey = regions.map(r => `${r.x},${r.y},${r.width},${r.height}`).join("|");
+
+    let testPixels = testPixelsByRegions.get(regionsKey);
+    if (!testPixels) {
+      testPixels = await toNormalizedPixelsWithRegions(testImageBuffer, regions);
+      testPixelsByRegions.set(regionsKey, testPixels);
+    }
 
     const refs = referenceImages.get(gs.id) ?? [];
     for (const ref of refs) {
-      const filePath = path.join(referenceImagesDir, gs.id, ref.filename);
-      if (!fs.existsSync(filePath)) continue;
-
-      const refBuffer = fs.readFileSync(filePath);
-      const refPixels = await toNormalizedPixelsWithRegions(refBuffer, regions);
+      const cacheKey = `${ref.id}:${regionsKey}`;
+      let refPixels = refPixelCache.get(cacheKey);
+      if (!refPixels) {
+        const filePath = path.join(referenceImagesDir, gs.id, ref.filename);
+        if (!fs.existsSync(filePath)) continue;
+        const refBuffer = fs.readFileSync(filePath);
+        refPixels = await toNormalizedPixelsWithRegions(refBuffer, regions);
+        refPixelCache.set(cacheKey, refPixels);
+      }
 
       const ncc = computeSimilarity(testPixels, refPixels);
       const hist = histogramSimilarity(testPixels, refPixels);

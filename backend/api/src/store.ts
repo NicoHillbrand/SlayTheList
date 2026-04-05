@@ -4,8 +4,11 @@ import path from "node:path";
 import { db, referenceImagesDir } from "./db.js";
 import type {
   AccountabilityState,
+  BaseCurrencyType,
+  BaseState,
   Block,
   BlockUnlockMode,
+  BuildingPlacement,
   DetectedGameState,
   GameState,
   GameStateDetectionRegion,
@@ -15,6 +18,7 @@ import type {
   LockZone,
   LockZoneState,
   Prediction,
+  Progression,
   ReflectionEntry,
   Todo,
 } from "@slaythelist/contracts";
@@ -29,6 +33,7 @@ type TodoRow = {
   deadline_at: string | null;
   archived_at: string | null;
   completed_at: string | null;
+  push_count: number;
   created_at: string;
   updated_at: string;
 };
@@ -41,6 +46,7 @@ type ZoneRow = {
   width: number;
   height: number;
   enabled: 0 | 1;
+  locked: 0 | 1;
   unlock_mode: "todos" | "gold";
   cooldown_enabled: 0 | 1;
   cooldown_seconds: number;
@@ -87,6 +93,7 @@ function toTodo(row: TodoRow): Todo {
     deadlineAt: row.deadline_at,
     archivedAt: row.archived_at,
     completedAt: row.completed_at,
+    pushCount: row.push_count ?? 0,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -100,7 +107,7 @@ function toZone(row: ZoneRow): LockZone {
     y: row.y,
     width: row.width,
     height: row.height,
-    enabled: !!row.enabled,
+    locked: !!row.locked,
     unlockMode: row.unlock_mode ?? "todos",
     cooldownEnabled: !!row.cooldown_enabled,
     cooldownSeconds: row.cooldown_seconds ?? 3600,
@@ -151,21 +158,22 @@ export function createTodo(title: string, options?: { deadlineAt?: string | null
     deadlineAt: options?.deadlineAt ?? null,
     archivedAt: null,
     completedAt: null,
+    pushCount: 0,
     createdAt: now,
     updatedAt: now,
   };
   db.prepare(
     `INSERT INTO todos
-      (id, title, context, status, indent, sort_order, deadline_at, archived_at, completed_at, created_at, updated_at)
+      (id, title, context, status, indent, sort_order, deadline_at, archived_at, completed_at, push_count, created_at, updated_at)
      VALUES
-      (@id, @title, @context, @status, @indent, @sortOrder, @deadlineAt, @archivedAt, @completedAt, @createdAt, @updatedAt)`,
+      (@id, @title, @context, @status, @indent, @sortOrder, @deadlineAt, @archivedAt, @completedAt, @pushCount, @createdAt, @updatedAt)`,
   ).run(todo);
   return todo;
 }
 
 export function updateTodo(
   id: string,
-  patch: Partial<Pick<Todo, "title" | "context" | "status" | "indent" | "deadlineAt" | "archivedAt">>,
+  patch: Partial<Pick<Todo, "title" | "context" | "status" | "indent" | "deadlineAt" | "archivedAt" | "pushCount">>,
 ): Todo | undefined {
   const row = db.prepare("SELECT * FROM todos WHERE id = ?").get(id) as TodoRow | undefined;
   if (!row) return undefined;
@@ -188,6 +196,7 @@ export function updateTodo(
       : shouldClearCompleted
         ? null
         : current.completedAt,
+    pushCount: patch.pushCount ?? current.pushCount,
     updatedAt: now,
   };
   db.prepare(
@@ -199,6 +208,7 @@ export function updateTodo(
          deadline_at = ?,
          archived_at = ?,
          completed_at = ?,
+         push_count = ?,
          updated_at = ?
      WHERE id = ?`,
   ).run(
@@ -209,6 +219,7 @@ export function updateTodo(
     next.deadlineAt,
     next.archivedAt,
     next.completedAt,
+    next.pushCount,
     next.updatedAt,
     id,
   );
@@ -260,11 +271,11 @@ export function createZone(input: Omit<LockZone, "id" | "createdAt" | "updatedAt
     updatedAt: now,
   };
   db.prepare(
-    `INSERT INTO lock_zones (id, name, x, y, width, height, enabled, unlock_mode, cooldown_enabled, cooldown_seconds, gold_cost, block_id, created_at, updated_at)
-     VALUES (@id, @name, @x, @y, @width, @height, @enabled, @unlockMode, @cooldownEnabled, @cooldownSeconds, @goldCost, @blockId, @createdAt, @updatedAt)`,
+    `INSERT INTO lock_zones (id, name, x, y, width, height, locked, unlock_mode, cooldown_enabled, cooldown_seconds, gold_cost, block_id, created_at, updated_at)
+     VALUES (@id, @name, @x, @y, @width, @height, @locked, @unlockMode, @cooldownEnabled, @cooldownSeconds, @goldCost, @blockId, @createdAt, @updatedAt)`,
   ).run({
     ...zone,
-    enabled: zone.enabled ? 1 : 0,
+    locked: zone.locked ? 1 : 0,
     cooldownEnabled: zone.cooldownEnabled ? 1 : 0,
     blockId: blockId ?? null,
   });
@@ -273,7 +284,7 @@ export function createZone(input: Omit<LockZone, "id" | "createdAt" | "updatedAt
 
 export function updateZone(
   id: string,
-  patch: Partial<Pick<LockZone, "name" | "x" | "y" | "width" | "height" | "enabled" | "unlockMode" | "cooldownEnabled" | "cooldownSeconds" | "goldCost">>,
+  patch: Partial<Pick<LockZone, "name" | "x" | "y" | "width" | "height" | "locked" | "unlockMode" | "cooldownEnabled" | "cooldownSeconds" | "goldCost">>,
 ): LockZone | undefined {
   const currentRow = db.prepare("SELECT * FROM lock_zones WHERE id = ?").get(id) as ZoneRow | undefined;
   if (!currentRow) {
@@ -287,12 +298,12 @@ export function updateZone(
   };
   db.prepare(
     `UPDATE lock_zones
-       SET name = ?, x = ?, y = ?, width = ?, height = ?, enabled = ?, unlock_mode = ?,
+       SET name = ?, x = ?, y = ?, width = ?, height = ?, locked = ?, unlock_mode = ?,
            cooldown_enabled = ?, cooldown_seconds = ?, gold_cost = ?, updated_at = ?
      WHERE id = ?`,
   ).run(
     next.name, next.x, next.y, next.width, next.height,
-    next.enabled ? 1 : 0, next.unlockMode,
+    next.locked ? 1 : 0, next.unlockMode,
     next.cooldownEnabled ? 1 : 0, next.cooldownSeconds, next.goldCost,
     next.updatedAt, id,
   );
@@ -322,10 +333,26 @@ export function setZoneRequirements(zoneId: string, todoIds: string[]): void {
 export function spendGoldAndActivateUnlock(zoneId: string, amount: number, userId?: string): void {
   db.transaction(() => {
     spendGold(amount, userId);
-    activateZoneGoldUnlock(zoneId);
 
-    // Shared block: unlock all sibling zones using the clicked zone's cooldown
+    // Disable the zone (unlocked)
+    db.prepare("UPDATE lock_zones SET locked = 0, updated_at = ? WHERE id = ?")
+      .run(new Date().toISOString(), zoneId);
+
+    // Record cooldown timer if cooldown is enabled, so the zone re-locks later
     const zoneRow = db.prepare("SELECT * FROM lock_zones WHERE id = ?").get(zoneId) as ZoneRow | undefined;
+    if (zoneRow) {
+      const zone = toZone(zoneRow);
+      if (zone.cooldownEnabled && zone.cooldownSeconds > 0) {
+        const expiresAt = new Date(Date.now() + zone.cooldownSeconds * 1000).toISOString();
+        db.prepare(
+          `INSERT INTO lock_zone_gold_unlocks (zone_id, created_at, expires_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(zone_id) DO UPDATE SET created_at = excluded.created_at, expires_at = excluded.expires_at`,
+        ).run(zoneId, new Date().toISOString(), expiresAt);
+      }
+    }
+
+    // Shared block: unlock all sibling zones too
     if (zoneRow?.block_id) {
       const blockRow = db.prepare("SELECT unlock_mode FROM blocks WHERE id = ?").get(zoneRow.block_id) as { unlock_mode: string } | undefined;
       if (blockRow?.unlock_mode === "shared") {
@@ -339,11 +366,15 @@ export function spendGoldAndActivateUnlock(zoneId: string, amount: number, userI
           .prepare("SELECT id FROM lock_zones WHERE block_id = ? AND id != ?")
           .all(zoneRow.block_id, zoneId) as Array<{ id: string }>;
         for (const sibling of siblingRows) {
-          db.prepare(
-            `INSERT INTO lock_zone_gold_unlocks (zone_id, created_at, expires_at)
-             VALUES (?, ?, ?)
-             ON CONFLICT(zone_id) DO UPDATE SET created_at = excluded.created_at, expires_at = excluded.expires_at`,
-          ).run(sibling.id, now, expiresAt);
+          db.prepare("UPDATE lock_zones SET locked = 0, updated_at = ? WHERE id = ?")
+            .run(now, sibling.id);
+          if (expiresAt) {
+            db.prepare(
+              `INSERT INTO lock_zone_gold_unlocks (zone_id, created_at, expires_at)
+               VALUES (?, ?, ?)
+               ON CONFLICT(zone_id) DO UPDATE SET created_at = excluded.created_at, expires_at = excluded.expires_at`,
+            ).run(sibling.id, now, expiresAt);
+          }
         }
       }
     }
@@ -369,9 +400,16 @@ export function clearZoneGoldUnlock(zoneId: string): void {
 }
 
 export function expireGoldUnlocks(): void {
+  const now = new Date().toISOString();
+  const expired = db.prepare(
+    "SELECT zone_id FROM lock_zone_gold_unlocks WHERE expires_at IS NOT NULL AND expires_at <= ?",
+  ).all(now) as Array<{ zone_id: string }>;
+  for (const row of expired) {
+    db.prepare("UPDATE lock_zones SET locked = 1, updated_at = ? WHERE id = ?").run(now, row.zone_id);
+  }
   db.prepare(
     "DELETE FROM lock_zone_gold_unlocks WHERE expires_at IS NOT NULL AND expires_at <= ?",
-  ).run(new Date().toISOString());
+  ).run(now);
 }
 
 function safeParseJsonArray<T>(raw: string): T[] {
@@ -619,7 +657,7 @@ export function createGameState(input: { name: string; matchThreshold?: number }
   db.prepare(
     `INSERT INTO game_states (id, name, enabled, detection_method, match_threshold, created_at, updated_at)
      VALUES (?, ?, 1, 'screenshot_match', ?, ?, ?)`,
-  ).run(id, input.name.trim(), input.matchThreshold ?? 0.8, now, now);
+  ).run(id, input.name.trim(), input.matchThreshold ?? 0.9, now, now);
   return getGameState(id)!;
 }
 
@@ -879,9 +917,12 @@ export function listOverlayState(): LockZoneState[] {
     // Check block-level game state: if the zone belongs to a block with a specific
     // game state, the block's state must match the current detected state.
     const blockGameStateId = zoneBlockId ? (blockGameStateById.get(zoneBlockId) ?? null) : null;
+    // Zones must belong to an enabled block to be active. Orphaned zones are never active.
+    const blockEnabled = zoneBlockId ? (blockEnabledById.get(zoneBlockId) ?? false) : false;
     const blockActiveForCurrentState =
-      blockGameStateId === null ||
-      (currentGameStateId !== null && blockGameStateId === currentGameStateId);
+      blockEnabled &&
+      (blockGameStateId === null ||
+        (currentGameStateId !== null && blockGameStateId === currentGameStateId));
 
     // Check zone-level game state restrictions (if any).
     const zoneActiveForCurrentState =
@@ -889,14 +930,7 @@ export function listOverlayState(): LockZoneState[] {
       (currentGameStateId !== null && activeForGameStateIds.includes(currentGameStateId));
 
     const activeForCurrentState = blockActiveForCurrentState && zoneActiveForCurrentState;
-    const isLocked =
-      activeForCurrentState &&
-      (zone.unlockMode === "gold"
-        ? zone.enabled && !goldUnlockActive
-        : zone.enabled &&
-          requiredTodoIds.length > 0 &&
-          requiredTodoIds.some((todoId) => statusByTodo.get(todoId) !== "done") &&
-          !goldUnlockActive);
+    const isLocked = activeForCurrentState && zone.locked;
     const zoneBlockUnlockMode = zoneBlockId ? (blockUnlockModeById.get(zoneBlockId) ?? null) : null;
     return {
       zone,
@@ -924,4 +958,203 @@ export function getSetting(key: string): string | null {
 
 export function setSetting(key: string, value: string): void {
   db.prepare("INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, value);
+}
+
+// ---------------------------------------------------------------------------
+// Base Builder
+// ---------------------------------------------------------------------------
+
+type BaseStateRow = {
+  placements_json: string;
+  inventory_json: string;
+  diamonds: number;
+  emeralds: number;
+  diamond_milestones_json: string;
+  updated_at: string;
+};
+
+type BaseInventory = Record<string, number>;
+
+export function getBaseState(): BaseState {
+  const row = db.prepare("SELECT placements_json, inventory_json, diamonds, emeralds, diamond_milestones_json, updated_at FROM base_state WHERE id = 1").get() as BaseStateRow | undefined;
+  if (!row) {
+    return { placements: [], inventory: {}, currencies: { gold: 0, diamonds: 0, emeralds: 0 }, diamondMilestones: [], updatedAt: new Date().toISOString() };
+  }
+  const goldState = getGoldState();
+  return {
+    placements: JSON.parse(row.placements_json) as BuildingPlacement[],
+    inventory: JSON.parse(row.inventory_json) as BaseInventory,
+    currencies: { gold: goldState.gold, diamonds: row.diamonds, emeralds: row.emeralds },
+    diamondMilestones: JSON.parse(row.diamond_milestones_json) as number[],
+    updatedAt: row.updated_at,
+  };
+}
+
+export function saveBaseState(state: { placements: BuildingPlacement[]; inventory: BaseInventory }): BaseState {
+  const now = new Date().toISOString();
+  db.prepare(
+    `UPDATE base_state SET placements_json = ?, inventory_json = ?, updated_at = ? WHERE id = 1`,
+  ).run(JSON.stringify(state.placements), JSON.stringify(state.inventory), now);
+  return getBaseState();
+}
+
+/** Streak milestones that award diamonds: [streakLength, diamondReward] */
+const DIAMOND_MILESTONES: [number, number][] = [
+  [3, 1],
+  [7, 3],
+  [14, 5],
+  [30, 10],
+  [60, 20],
+  [90, 30],
+  [180, 50],
+  [365, 100],
+];
+
+/** Check and award diamonds for any new streak milestones reached. */
+export function checkAndAwardDiamonds(): { awarded: number; newMilestones: number[] } {
+  const baseState = getBaseState();
+  const progression = getProgression();
+  const currentStreak = progression.longestDayStreak;
+  const claimed = new Set(baseState.diamondMilestones);
+
+  let awarded = 0;
+  const newMilestones: number[] = [];
+
+  for (const [streak, reward] of DIAMOND_MILESTONES) {
+    if (currentStreak >= streak && !claimed.has(streak)) {
+      awarded += reward;
+      newMilestones.push(streak);
+    }
+  }
+
+  if (awarded > 0) {
+    const allMilestones = [...baseState.diamondMilestones, ...newMilestones];
+    const now = new Date().toISOString();
+    db.prepare(
+      `UPDATE base_state SET diamonds = diamonds + ?, diamond_milestones_json = ?, updated_at = ? WHERE id = 1`,
+    ).run(awarded, JSON.stringify(allMilestones), now);
+  }
+
+  return { awarded, newMilestones };
+}
+
+export function purchaseBaseItem(itemId: string, cost: number, currency: BaseCurrencyType = "gold"): { gold: number; diamonds: number; emeralds: number; inventory: BaseInventory } {
+  if (currency === "gold") {
+    spendGold(cost);
+  } else {
+    const baseState = getBaseState();
+    const current = baseState.currencies[currency];
+    if (current < cost) throw new Error(`not enough ${currency}`);
+    const now = new Date().toISOString();
+    db.prepare(`UPDATE base_state SET ${currency} = ${currency} - ?, updated_at = ? WHERE id = 1`).run(cost, now);
+  }
+
+  // Add item to inventory
+  const baseState = getBaseState();
+  const inventory = { ...baseState.inventory };
+  inventory[itemId] = (inventory[itemId] ?? 0) + 1;
+  const now = new Date().toISOString();
+  db.prepare(`UPDATE base_state SET inventory_json = ?, updated_at = ? WHERE id = 1`).run(JSON.stringify(inventory), now);
+
+  const updated = getBaseState();
+  return { gold: updated.currencies.gold, diamonds: updated.currencies.diamonds, emeralds: updated.currencies.emeralds, inventory: updated.inventory };
+}
+
+export function getProgression(): Progression {
+  const goldState = getGoldState();
+  const baseRow = db.prepare("SELECT diamonds, emeralds FROM base_state WHERE id = 1").get() as { diamonds: number; emeralds: number } | undefined;
+
+  const todoStats = db.prepare(`
+    SELECT
+      COUNT(*) AS total_created,
+      SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS total_completed
+    FROM todos
+  `).get() as { total_created: number; total_completed: number };
+
+  const accRow = db.prepare("SELECT habits_json, predictions_json, reflections_json FROM accountability_state WHERE id = 1").get() as {
+    habits_json: string;
+    predictions_json: string;
+    reflections_json: string;
+  } | undefined;
+
+  const habits: Habit[] = accRow ? JSON.parse(accRow.habits_json) : [];
+  const predictions = accRow ? (JSON.parse(accRow.predictions_json) as unknown[]) : [];
+  const reflections = accRow ? (JSON.parse(accRow.reflections_json) as unknown[]) : [];
+
+  const activeHabitsCount = habits.filter((h) => h.status === "active").length;
+  const totalHabitChecks = habits.reduce((sum, h) => sum + h.checks.filter((c) => c.done).length, 0);
+
+  // Compute day streaks from completed todo dates
+  const completedDates = db.prepare(`
+    SELECT DISTINCT DATE(completed_at) AS d FROM todos
+    WHERE status = 'done' AND completed_at IS NOT NULL
+    ORDER BY d DESC
+  `).all() as Array<{ d: string }>;
+
+  let currentDayStreak = 0;
+  let longestDayStreak = 0;
+
+  if (completedDates.length > 0) {
+    const dates = completedDates.map((r) => r.d);
+    const today = new Date().toISOString().slice(0, 10);
+
+    // Current streak: count consecutive days backwards from today (or yesterday)
+    let streak = 0;
+    let expected = today;
+    for (const d of dates) {
+      if (d === expected) {
+        streak++;
+        const prev = new Date(expected);
+        prev.setDate(prev.getDate() - 1);
+        expected = prev.toISOString().slice(0, 10);
+      } else if (streak === 0 && d === expected) {
+        // already handled
+      } else if (streak === 0) {
+        // Check if yesterday
+        const yesterday = new Date(today);
+        yesterday.setDate(yesterday.getDate() - 1);
+        if (d === yesterday.toISOString().slice(0, 10)) {
+          streak = 1;
+          const prev = new Date(d);
+          prev.setDate(prev.getDate() - 1);
+          expected = prev.toISOString().slice(0, 10);
+        } else {
+          break;
+        }
+      } else {
+        break;
+      }
+    }
+    currentDayStreak = streak;
+
+    // Longest streak: scan all dates
+    const dateSet = new Set(dates);
+    const sorted = [...dateSet].sort();
+    let run = 1;
+    longestDayStreak = 1;
+    for (let i = 1; i < sorted.length; i++) {
+      const prev = new Date(sorted[i - 1]);
+      prev.setDate(prev.getDate() + 1);
+      if (prev.toISOString().slice(0, 10) === sorted[i]) {
+        run++;
+        if (run > longestDayStreak) longestDayStreak = run;
+      } else {
+        run = 1;
+      }
+    }
+  }
+
+  return {
+    gold: goldState.gold,
+    diamonds: baseRow?.diamonds ?? 0,
+    emeralds: baseRow?.emeralds ?? 0,
+    totalTodosCompleted: todoStats.total_completed ?? 0,
+    totalTodosCreated: todoStats.total_created ?? 0,
+    currentDayStreak,
+    longestDayStreak,
+    activeHabitsCount,
+    totalHabitChecks,
+    totalPredictions: predictions.length,
+    totalReflections: reflections.length,
+  };
 }

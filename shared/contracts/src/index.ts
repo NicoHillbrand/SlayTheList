@@ -13,6 +13,7 @@ export const todoSchema = z.object({
   deadlineAt: z.string().nullable(),
   archivedAt: z.string().nullable(),
   completedAt: z.string().nullable(),
+  pushCount: z.number().int().nonnegative(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -328,7 +329,7 @@ export const lockZoneSchema = z.object({
   y: z.number().nonnegative(),
   width: z.number().positive(),
   height: z.number().positive(),
-  enabled: z.boolean(),
+  locked: z.boolean(),
   unlockMode: lockZoneUnlockModeSchema,
   cooldownEnabled: z.boolean(),
   cooldownSeconds: z.number().int().positive(),
@@ -389,3 +390,68 @@ export const eventEnvelopeSchema = z.object({
   payload: z.unknown(),
 });
 export type EventEnvelope = z.infer<typeof eventEnvelopeSchema>;
+
+// ---------------------------------------------------------------------------
+// Base Builder
+// ---------------------------------------------------------------------------
+
+export const buildingPlacementSchema = z.object({
+  itemId: z.string(),
+  x: z.number(),
+  y: z.number(),
+  rotation: z.number().int().min(0).max(3).default(0),
+  flipped: z.boolean().default(false),
+});
+export type BuildingPlacement = z.infer<typeof buildingPlacementSchema>;
+
+export const baseCurrenciesSchema = z.object({
+  gold: z.number().int().nonnegative(),
+  diamonds: z.number().int().nonnegative(),
+  emeralds: z.number().int().nonnegative(),
+});
+export type BaseCurrencies = z.infer<typeof baseCurrenciesSchema>;
+
+export const baseInventorySchema = z.record(z.string(), z.number().int().nonnegative());
+export type BaseInventory = z.infer<typeof baseInventorySchema>;
+
+export const baseStateSchema = z.object({
+  placements: z.array(buildingPlacementSchema),
+  inventory: baseInventorySchema,
+  currencies: baseCurrenciesSchema,
+  /** Tracks which streak milestones have already been rewarded */
+  diamondMilestones: z.array(z.number().int()),
+  updatedAt: z.string(),
+});
+export type BaseState = z.infer<typeof baseStateSchema>;
+
+export const progressionSchema = z.object({
+  gold: z.number(),
+  diamonds: z.number(),
+  emeralds: z.number(),
+  totalTodosCompleted: z.number(),
+  totalTodosCreated: z.number(),
+  currentDayStreak: z.number(),
+  longestDayStreak: z.number(),
+  activeHabitsCount: z.number(),
+  totalHabitChecks: z.number(),
+  totalPredictions: z.number(),
+  totalReflections: z.number(),
+});
+export type Progression = z.infer<typeof progressionSchema>;
+
+export type BaseCurrencyType = "gold" | "diamonds" | "emeralds";
+
+export const baseShopPurchaseRequestSchema = z.object({
+  itemId: z.string(),
+  cost: z.number().int().nonnegative(),
+  currency: z.enum(["gold", "diamonds", "emeralds"]).default("gold"),
+});
+export type BaseShopPurchaseRequest = z.infer<typeof baseShopPurchaseRequestSchema>;
+
+export const baseShopPurchaseResponseSchema = z.object({
+  gold: z.number(),
+  diamonds: z.number(),
+  emeralds: z.number(),
+  inventory: baseInventorySchema,
+});
+export type BaseShopPurchaseResponse = z.infer<typeof baseShopPurchaseResponseSchema>;
