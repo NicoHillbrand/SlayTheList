@@ -36,7 +36,7 @@ struct Zone: Codable {
     let y: Double
     let width: Double
     let height: Double
-    let enabled: Bool
+    let locked: Bool
     let unlockMode: String
     let goldCost: Int
 }

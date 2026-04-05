@@ -82,8 +82,8 @@ public sealed class Zone
     [JsonPropertyName("height")]
     public double Height { get; set; }
 
-    [JsonPropertyName("enabled")]
-    public bool Enabled { get; set; }
+    [JsonPropertyName("locked")]
+    public bool Locked { get; set; }
 
     [JsonPropertyName("unlockMode")]
     public string UnlockMode { get; set; } = "todos";
@@ -153,4 +153,52 @@ public sealed class TestDetectionResult
 
     [JsonPropertyName("combined")]
     public double Combined { get; set; }
+}
+
+public sealed class DetectionRefsResponse
+{
+    [JsonPropertyName("compareSize")]
+    public int CompareSize { get; set; } = 64;
+
+    [JsonPropertyName("templateWidth")]
+    public int TemplateWidth { get; set; } = 1280;
+
+    [JsonPropertyName("templateHeight")]
+    public int TemplateHeight { get; set; } = 720;
+
+    [JsonPropertyName("refs")]
+    public List<RefPixelData> Refs { get; set; } = [];
+}
+
+public sealed class RefPixelData
+{
+    [JsonPropertyName("gameStateId")]
+    public string GameStateId { get; set; } = string.Empty;
+
+    [JsonPropertyName("gameStateName")]
+    public string GameStateName { get; set; } = string.Empty;
+
+    [JsonPropertyName("imageId")]
+    public string ImageId { get; set; } = string.Empty;
+
+    [JsonPropertyName("pixels")]
+    public float[] Pixels { get; set; } = [];
+
+    [JsonPropertyName("regions")]
+    public List<DetectionRegionInfo> Regions { get; set; } = [];
+}
+
+public sealed class DetectionRegionInfo
+{
+    [JsonPropertyName("x")]
+    public double X { get; set; }
+
+    [JsonPropertyName("y")]
+    public double Y { get; set; }
+
+    [JsonPropertyName("width")]
+    public double Width { get; set; }
+
+    [JsonPropertyName("height")]
+    public double Height { get; set; }
 }

@@ -8,6 +8,7 @@ internal static class NativeMethods
     public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
     private const int GwlExStyle = -20;
     private const int WsExNoActivate = 0x08000000;
+    private const int WsExTransparent = 0x00000020;
 
     [DllImport("user32.dll")]
     public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
@@ -144,7 +145,7 @@ internal static class NativeMethods
             using var bitmap = System.Drawing.Image.FromHbitmap(hBitmap);
             DeleteObject(hBitmap);
             using var ms = new System.IO.MemoryStream();
-            bitmap.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+            bitmap.Save(ms, System.Drawing.Imaging.ImageFormat.Jpeg);
             return ms.ToArray();
         }
         catch
@@ -176,7 +177,7 @@ internal static class NativeMethods
             using var bitmap = System.Drawing.Image.FromHbitmap(hBitmap);
             DeleteObject(hBitmap);
             using var ms = new System.IO.MemoryStream();
-            bitmap.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+            bitmap.Save(ms, System.Drawing.Imaging.ImageFormat.Jpeg);
             return ms.ToArray();
         }
         catch
@@ -186,23 +187,101 @@ internal static class NativeMethods
         }
     }
 
+    public static System.Drawing.Bitmap? CaptureScreenBitmap()
+    {
+        var width = GetSystemMetrics(SmCxScreen);
+        var height = GetSystemMetrics(SmCyScreen);
+        if (width <= 0 || height <= 0) return null;
+
+        var hdcScreen = GetDC(IntPtr.Zero);
+        var hdcMem = CreateCompatibleDC(hdcScreen);
+        var hBitmap = CreateCompatibleBitmap(hdcScreen, width, height);
+        var hOld = SelectObject(hdcMem, hBitmap);
+
+        BitBlt(hdcMem, 0, 0, width, height, hdcScreen, 0, 0, SrcCopy);
+
+        SelectObject(hdcMem, hOld);
+        DeleteDC(hdcMem);
+        ReleaseDC(IntPtr.Zero, hdcScreen);
+
+        try
+        {
+            var bitmap = System.Drawing.Image.FromHbitmap(hBitmap);
+            DeleteObject(hBitmap);
+            return (System.Drawing.Bitmap)bitmap;
+        }
+        catch
+        {
+            DeleteObject(hBitmap);
+            return null;
+        }
+    }
+
+    public static System.Drawing.Bitmap? CaptureWindowBitmap(IntPtr hWnd)
+    {
+        if (!GetWindowRect(hWnd, out var rect)) return null;
+        var width = rect.Right - rect.Left;
+        var height = rect.Bottom - rect.Top;
+        if (width <= 0 || height <= 0) return null;
+
+        var hdcScreen = GetDC(IntPtr.Zero);
+        var hdcMem = CreateCompatibleDC(hdcScreen);
+        var hBitmap = CreateCompatibleBitmap(hdcScreen, width, height);
+        var hOld = SelectObject(hdcMem, hBitmap);
+
+        BitBlt(hdcMem, 0, 0, width, height, hdcScreen, rect.Left, rect.Top, SrcCopy);
+
+        SelectObject(hdcMem, hOld);
+        DeleteDC(hdcMem);
+        ReleaseDC(IntPtr.Zero, hdcScreen);
+
+        try
+        {
+            var bitmap = System.Drawing.Image.FromHbitmap(hBitmap);
+            DeleteObject(hBitmap);
+            return (System.Drawing.Bitmap)bitmap;
+        }
+        catch
+        {
+            DeleteObject(hBitmap);
+            return null;
+        }
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool SetWindowDisplayAffinity(IntPtr hWnd, uint dwAffinity);
+
+    private const uint WdaNone = 0x00000000;
+    private const uint WdaExcludeFromCapture = 0x00000011;
+
+    public static void ExcludeFromCapture(IntPtr hWnd)
+    {
+        if (hWnd == IntPtr.Zero) return;
+        SetWindowDisplayAffinity(hWnd, WdaExcludeFromCapture);
+    }
+
     public static void EnableNoActivate(IntPtr hWnd)
     {
-        if (hWnd == IntPtr.Zero)
-        {
-            return;
-        }
+        if (hWnd == IntPtr.Zero) return;
+        SetExStyleFlag(hWnd, WsExNoActivate);
+    }
 
+    public static void EnableClickThrough(IntPtr hWnd)
+    {
+        if (hWnd == IntPtr.Zero) return;
+        SetExStyleFlag(hWnd, WsExTransparent);
+    }
+
+    private static void SetExStyleFlag(IntPtr hWnd, int flag)
+    {
         if (IntPtr.Size == 8)
         {
             var current = GetWindowLongPtr64(hWnd, GwlExStyle).ToInt64();
-            var next = current | WsExNoActivate;
-            _ = SetWindowLongPtr64(hWnd, GwlExStyle, new IntPtr(next));
+            _ = SetWindowLongPtr64(hWnd, GwlExStyle, new IntPtr(current | flag));
             return;
         }
 
         var current32 = GetWindowLong32(hWnd, GwlExStyle);
-        var next32 = current32 | WsExNoActivate;
-        _ = SetWindowLong32(hWnd, GwlExStyle, next32);
+        _ = SetWindowLong32(hWnd, GwlExStyle, current32 | flag);
     }
 }

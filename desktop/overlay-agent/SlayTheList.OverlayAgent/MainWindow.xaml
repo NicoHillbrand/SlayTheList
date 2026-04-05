@@ -15,17 +15,5 @@
                 HorizontalAlignment="Stretch"
                 VerticalAlignment="Stretch"
                 Background="Transparent" />
-        <Border HorizontalAlignment="Right"
-                VerticalAlignment="Top"
-                Margin="12"
-                Padding="8"
-                CornerRadius="6"
-                Background="#A0111826"
-                IsHitTestVisible="False">
-            <TextBlock Name="StatusText"
-                       Foreground="#E5E7EB"
-                       FontSize="12"
-                       Text="Waiting for API and game window..." />
-        </Border>
     </Grid>
 </Window>

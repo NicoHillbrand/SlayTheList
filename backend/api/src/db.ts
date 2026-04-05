@@ -179,7 +179,7 @@ CREATE TABLE IF NOT EXISTS game_states (
   name TEXT NOT NULL,
   enabled INTEGER NOT NULL DEFAULT 1,
   detection_method TEXT NOT NULL DEFAULT 'screenshot_match',
-  match_threshold REAL NOT NULL DEFAULT 0.8,
+  match_threshold REAL NOT NULL DEFAULT 0.9,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -240,6 +240,16 @@ CREATE TABLE IF NOT EXISTS local_social_settings (
 CREATE TABLE IF NOT EXISTS app_settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS base_state (
+  id INTEGER PRIMARY KEY CHECK(id = 1),
+  placements_json TEXT NOT NULL DEFAULT '[]',
+  inventory_json TEXT NOT NULL DEFAULT '{}',
+  diamonds INTEGER NOT NULL DEFAULT 0,
+  emeralds INTEGER NOT NULL DEFAULT 0,
+  diamond_milestones_json TEXT NOT NULL DEFAULT '[]',
+  updated_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS cloud_connection_state (
@@ -352,11 +362,23 @@ ensureTodoColumn("sort_order", "INTEGER NOT NULL DEFAULT 0");
 ensureTodoColumn("deadline_at", "TEXT");
 ensureTodoColumn("archived_at", "TEXT");
 ensureTodoColumn("completed_at", "TEXT");
+ensureTodoColumn("push_count", "INTEGER NOT NULL DEFAULT 0");
 ensureLockZoneColumn("unlock_mode", "TEXT NOT NULL DEFAULT 'todos' CHECK(unlock_mode IN ('todos', 'gold'))");
 ensureLockZoneColumn("cooldown_enabled", "INTEGER NOT NULL DEFAULT 0");
 ensureLockZoneColumn("cooldown_seconds", "INTEGER NOT NULL DEFAULT 3600");
 ensureLockZoneColumn("block_id", "TEXT REFERENCES blocks(id) ON DELETE CASCADE");
 ensureLockZoneColumn("gold_cost", "INTEGER NOT NULL DEFAULT 10");
+ensureLockZoneColumn("locked", "INTEGER NOT NULL DEFAULT 1");
+
+// Migrate enabled → locked for existing rows
+{
+  const hasEnabled = db
+    .prepare("SELECT 1 FROM pragma_table_info('lock_zones') WHERE name = 'enabled' LIMIT 1")
+    .get();
+  if (hasEnabled) {
+    db.exec("UPDATE lock_zones SET locked = enabled WHERE locked != enabled");
+  }
+}
 ensureLockZoneGoldUnlockColumn("expires_at", "TEXT");
 ensureGameStateColumn("always_detect", "INTEGER NOT NULL DEFAULT 0");
 
@@ -397,6 +419,28 @@ if (!existingLocalSocialSettingsRow) {
      VALUES (1, 'friends', 'friends', 'friends', ?)`,
   ).run(new Date().toISOString());
 }
+
+const existingBaseStateRow = db
+  .prepare("SELECT 1 FROM base_state WHERE id = 1 LIMIT 1")
+  .get() as { 1: number } | undefined;
+if (!existingBaseStateRow) {
+  db.prepare(
+    "INSERT INTO base_state (id, placements_json, inventory_json, diamonds, emeralds, diamond_milestones_json, updated_at) VALUES (1, '[]', '{}', 0, 0, '[]', ?)",
+  ).run(new Date().toISOString());
+}
+
+// Migrate base_state: add new columns if missing
+function ensureBaseStateColumn(name: string, definition: string) {
+  const existing = db
+    .prepare("SELECT 1 FROM pragma_table_info('base_state') WHERE name = ? LIMIT 1")
+    .get(name) as { 1: number } | undefined;
+  if (existing) return;
+  db.exec(`ALTER TABLE base_state ADD COLUMN ${name} ${definition};`);
+}
+ensureBaseStateColumn("diamonds", "INTEGER NOT NULL DEFAULT 0");
+ensureBaseStateColumn("emeralds", "INTEGER NOT NULL DEFAULT 0");
+ensureBaseStateColumn("diamond_milestones_json", "TEXT NOT NULL DEFAULT '[]'");
+ensureBaseStateColumn("inventory_json", "TEXT NOT NULL DEFAULT '{}'");
 
 const existingCloudConnectionRow = db
   .prepare("SELECT 1 FROM cloud_connection_state WHERE id = 1 LIMIT 1")

@@ -1,7 +1,11 @@
 import type {
   AccountabilityState,
+  BaseCurrencyType,
+  BaseShopPurchaseResponse,
+  BaseState,
   Block,
   BlockUnlockMode,
+  BuildingPlacement,
   CloudConnectionStatus,
   DetectedGameState,
   FriendRequest,
@@ -18,6 +22,7 @@ import type {
   OverlayState,
   Prediction,
   PredictionOutcome,
+  Progression,
   ReflectionEntry,
   SharedProfile,
   SocialSettings,
@@ -166,6 +171,7 @@ export async function updateTodo(
     deadlineAt: string | null;
     deadlineTime: string;
     archived: boolean;
+    pushCount: number;
   }>,
 ) {
   return request<Todo>(`/api/todos/${id}`, {
@@ -197,7 +203,7 @@ export async function createZone(input: {
   y?: number;
   width?: number;
   height?: number;
-  enabled?: boolean;
+  locked?: boolean;
   unlockMode?: LockZoneUnlockMode;
   cooldownEnabled?: boolean;
   cooldownSeconds?: number;
@@ -532,5 +538,37 @@ export async function updateBlock(
 export async function deleteBlock(id: string) {
   return request<{ deleted: true }>(`/api/blocks/${id}`, {
     method: "DELETE",
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Base Builder
+// ---------------------------------------------------------------------------
+
+export async function getBaseState() {
+  return request<BaseState>("/api/base-state");
+}
+
+export async function saveBaseState(state: { placements: BuildingPlacement[]; unlockedItemIds: string[] }) {
+  return request<BaseState>("/api/base-state", {
+    method: "PUT",
+    body: JSON.stringify(state),
+  });
+}
+
+export async function getProgression() {
+  return request<Progression>("/api/progression");
+}
+
+export async function purchaseBaseItem(itemId: string, cost: number, currency: BaseCurrencyType = "gold") {
+  return request<BaseShopPurchaseResponse>("/api/base-shop/purchase", {
+    method: "POST",
+    body: JSON.stringify({ itemId, cost, currency }),
+  });
+}
+
+export async function checkDiamondMilestones() {
+  return request<{ awarded: number; newMilestones: number[] }>("/api/base-diamonds/check", {
+    method: "POST",
   });
 }

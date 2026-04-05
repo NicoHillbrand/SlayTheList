@@ -40,9 +40,9 @@ class OverlayWindow: NSWindow {
         gameWindowSize: CGSize,
         onGoldUnlock: @escaping (String, String, Int) -> Void
     ) {
-        // Remove views for zones that are no longer locked or enabled
+        // Remove views for zones that are no longer locked
         for (id, view) in zoneViews {
-            if !zones.contains(where: { $0.zone.id == id && $0.isLocked && $0.zone.enabled }) {
+            if !zones.contains(where: { $0.zone.id == id && $0.isLocked }) {
                 view.removeFromSuperview()
                 zoneViews.removeValue(forKey: id)
             }
@@ -53,7 +53,7 @@ class OverlayWindow: NSWindow {
         let scaleY = gameWindowSize.height / 720.0
 
         for zoneState in zones {
-            guard zoneState.isLocked && zoneState.zone.enabled else { continue }
+            guard zoneState.isLocked else { continue }
             let zone = zoneState.zone
 
             // Calculate position (flip Y for macOS coordinate system)
