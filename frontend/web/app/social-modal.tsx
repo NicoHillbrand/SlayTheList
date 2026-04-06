@@ -35,6 +35,8 @@ type Props = {
   open?: boolean;
   onClose?: () => void;
   embedded?: boolean;
+  showSettings?: boolean;
+  onCloseSettings?: () => void;
 };
 
 const DEFAULT_SETTINGS: SocialSettings = {
@@ -43,7 +45,6 @@ const DEFAULT_SETTINGS: SocialSettings = {
   goldVisibility: "friends",
 };
 
-type SocialTab = "friends" | "settings";
 
 function toErrorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
@@ -105,7 +106,7 @@ function syncLabel(status: CloudConnectionStatus | null) {
   return status.lastSyncState;
 }
 
-export default function SocialModal({ open = false, onClose, embedded = false }: Props) {
+export default function SocialModal({ open = false, onClose, embedded = false, showSettings = false, onCloseSettings }: Props) {
   const isVisible = embedded || open;
   const [status, setStatus] = useState<CloudConnectionStatus | null>(null);
   const [settings, setSettings] = useState<SocialSettings>(DEFAULT_SETTINGS);
@@ -120,7 +121,7 @@ export default function SocialModal({ open = false, onClose, embedded = false }:
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<SocialTab>("friends");
+  const closeSettings = onCloseSettings ?? (() => {});
 
   const refreshConnectedData = useCallback(async (currentStatus?: CloudConnectionStatus | null) => {
     const nextStatus = currentStatus ?? (await getCloudConnectionStatus());
@@ -340,8 +341,6 @@ export default function SocialModal({ open = false, onClose, embedded = false }:
   }
 
   if (!embedded && !open) return null;
-
-  const pendingRequestCount = incomingRequests.length;
 
   /* ── Not configured ── */
   const notConfiguredContent = (
@@ -735,26 +734,22 @@ export default function SocialModal({ open = false, onClose, embedded = false }:
   /* ── Connected: full layout ── */
   const connectedContent = (
     <>
-      {/* Sub-tabs */}
-      <div className="social-subtabs">
-        <button
-          type="button"
-          className={`social-subtab ${activeTab === "friends" ? "active" : ""}`}
-          onClick={() => setActiveTab("friends")}
-        >
-          Friends{pendingRequestCount > 0 && <span className="social-badge">{pendingRequestCount}</span>}
-        </button>
-        <button
-          type="button"
-          className={`social-subtab ${activeTab === "settings" ? "active" : ""}`}
-          onClick={() => setActiveTab("settings")}
-        >
-          Settings
-        </button>
-      </div>
+      {friendsTabContent}
 
-      {/* Tab content */}
-      {activeTab === "friends" ? friendsTabContent : settingsTabContent}
+      {/* Settings overlay */}
+      {showSettings && (
+        <div className="social-settings-overlay-backdrop" role="presentation" onClick={closeSettings}>
+          <div className="social-settings-overlay" onClick={(event) => event.stopPropagation()}>
+            <div className="social-settings-overlay-header">
+              <h3>Social Settings</h3>
+              <button type="button" className="social-settings-close" onClick={closeSettings}>
+                &times;
+              </button>
+            </div>
+            {settingsTabContent}
+          </div>
+        </div>
+      )}
     </>
   );
 
