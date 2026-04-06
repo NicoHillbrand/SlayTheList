@@ -7,6 +7,7 @@ import type {
   FriendRequest,
   FriendSearchResult,
   FriendSummary,
+  Prediction,
   SharedProfile,
   SocialSettings,
   SocialVisibility,
@@ -42,6 +43,8 @@ const DEFAULT_SETTINGS: SocialSettings = {
   goldVisibility: "friends",
 };
 
+type SocialTab = "friends" | "settings";
+
 function toErrorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
   return "Something went wrong";
@@ -60,6 +63,37 @@ function relationshipLabel(relationship: FriendRelationship) {
     default:
       return "Not connected";
   }
+}
+
+function recentPredictionsByDay(predictions: Prediction[]) {
+  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const recent = predictions.filter((p) => p.createdAt >= sevenDaysAgo);
+  recent.sort((a, b) => b.createdAt - a.createdAt);
+
+  const grouped: { label: string; items: Prediction[] }[] = [];
+  for (const prediction of recent) {
+    const date = new Date(prediction.createdAt);
+    const label = date.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+    const last = grouped[grouped.length - 1];
+    if (last && last.label === label) {
+      last.items.push(prediction);
+    } else {
+      grouped.push({ label, items: [prediction] });
+    }
+  }
+  return grouped;
+}
+
+function outcomeIcon(outcome: string) {
+  if (outcome === "hit") return "\u2713";
+  if (outcome === "miss") return "\u2717";
+  return "\u2022";
+}
+
+function outcomeClass(outcome: string) {
+  if (outcome === "hit") return "social-outcome-hit";
+  if (outcome === "miss") return "social-outcome-miss";
+  return "social-outcome-pending";
 }
 
 function syncLabel(status: CloudConnectionStatus | null) {
@@ -86,6 +120,7 @@ export default function SocialModal({ open = false, onClose, embedded = false }:
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<SocialTab>("friends");
 
   const refreshConnectedData = useCallback(async (currentStatus?: CloudConnectionStatus | null) => {
     const nextStatus = currentStatus ?? (await getCloudConnectionStatus());
@@ -306,418 +341,433 @@ export default function SocialModal({ open = false, onClose, embedded = false }:
 
   if (!embedded && !open) return null;
 
-  const content = (
-    <>
-      <div className="social-modal-header">
-        <div>
-          <h3>Social sync</h3>
-          <p className="settings-section-copy">
-            Your local app stays authoritative. When connected, it syncs a shareable copy of habits, predictions, and gold to the cloud.
-          </p>
-        </div>
-        {!embedded && onClose && (
-          <button type="button" onClick={onClose}>
-            Close
+  const pendingRequestCount = incomingRequests.length;
+
+  /* ── Not configured ── */
+  const notConfiguredContent = (
+    <section className="social-card">
+      <p className="settings-section-title">Cloud sync unavailable</p>
+      <p className="settings-section-copy">
+        The cloud service URL has been explicitly unset. Remove the <code>CLOUD_SOCIAL_BASE_URL</code> override to restore the default server.
+      </p>
+    </section>
+  );
+
+  /* ── Not connected (login page) ── */
+  const notConnectedContent = (
+    <div className="social-login-page">
+      <div className="social-login-hero">
+        <h3>Connect to Social</h3>
+        <p className="settings-section-copy">
+          Sign in with Google to sync habits, predictions, and gold — and connect with friends.
+        </p>
+        {!status?.pendingAuth ? (
+          <button
+            type="button"
+            className="social-connect-button"
+            onClick={() => void onStartConnect()}
+            disabled={busyAction === "connect-start"}
+          >
+            {busyAction === "connect-start" ? "Starting..." : "Connect with Google"}
           </button>
+        ) : (
+          <div className="social-form">
+            <p className="settings-section-copy">
+              Finish Google sign-in in the browser window. This page will keep checking automatically.
+            </p>
+            <div className="social-inline-actions">
+              <a
+                className="social-connect-button"
+                href={status.pendingAuth.authorizationUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open Google sign-in
+              </a>
+              <button type="button" onClick={() => void onPollConnect()} disabled={busyAction === "connect-poll"}>
+                {busyAction === "connect-poll" ? "Checking..." : "Check now"}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  /* ── Connected: Friends tab ── */
+  const friendsTabContent = (
+    <div className="social-friends-layout">
+      {/* Profile panel */}
+      <div className="social-profile-panel">
+        {!selectedUsername ? (
+          <div className="social-empty-state">
+            <p className="settings-section-copy">Select a friend or search for someone to view their profile.</p>
+          </div>
+        ) : busyAction === `profile:${selectedUsername}` && !selectedProfile ? (
+          <div className="social-empty-state">
+            <p className="settings-hint">Loading @{selectedUsername}...</p>
+          </div>
+        ) : !selectedProfile ? (
+          <div className="social-empty-state">
+            <p className="settings-hint">Could not load profile.</p>
+          </div>
+        ) : (
+          <div className="social-profile-content">
+            <div className="social-profile-top">
+              <h4>@{selectedProfile.user.username}</h4>
+              {selectedProfile.gold.canView && (
+                <span className="social-gold-value">{selectedProfile.gold.state?.gold ?? 0} gold</span>
+              )}
+            </div>
+
+            <section className="social-profile-section">
+              <h5>Habits</h5>
+              {!selectedProfile.habits.canView ? (
+                <p className="settings-hint">Hidden</p>
+              ) : selectedProfile.habits.items.length === 0 ? (
+                <p className="settings-hint">No habits shared yet.</p>
+              ) : (
+                <ul className="social-profile-list">
+                  {selectedProfile.habits.items.map((habit) => (
+                    <li key={habit.id}>
+                      {habit.name} <span className="settings-hint">({habit.status})</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+
+            <section className="social-profile-section">
+              <h5>Predictions <span className="settings-hint">(last 7 days)</span></h5>
+              {!selectedProfile.predictions.canView ? (
+                <p className="settings-hint">Hidden</p>
+              ) : (() => {
+                const days = recentPredictionsByDay(selectedProfile.predictions.items);
+                if (days.length === 0) return <p className="settings-hint">No predictions in the last week.</p>;
+                const todayLabel = new Date().toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+                const yesterday = new Date();
+                yesterday.setDate(yesterday.getDate() - 1);
+                const yesterdayLabel = yesterday.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+                const recentLabels = new Set([todayLabel, yesterdayLabel]);
+                const todayDays = days.filter((d) => recentLabels.has(d.label));
+                const pastDays = days.filter((d) => !recentLabels.has(d.label));
+
+                const renderDayItems = (day: { label: string; items: Prediction[] }) => (
+                  <div key={day.label} className="social-predictions-day">
+                    <p className="social-day-label">{day.label}</p>
+                    <div className="social-predictions-day-items">
+                      {day.items.map((prediction) => (
+                        <div key={prediction.id} className="social-prediction-row">
+                          <span className={outcomeClass(prediction.outcome)}>{outcomeIcon(prediction.outcome)}</span>
+                          <span className="social-prediction-title">{prediction.title}</span>
+                          <span className="social-prediction-confidence">{prediction.confidence}%</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+
+                return (
+                  <div className="social-predictions-timeline">
+                    {todayDays.map(renderDayItems)}
+                    {pastDays.length > 0 && (
+                      <details className="social-predictions-past">
+                        <summary className="social-day-label">Previous days</summary>
+                        {pastDays.map(renderDayItems)}
+                      </details>
+                    )}
+                  </div>
+                );
+              })()}
+            </section>
+
+          </div>
         )}
       </div>
 
-      {error && <p className="social-error">{error}</p>}
-      {isLoading && <p className="settings-hint">Loading social sync...</p>}
-
-      {!status?.configured ? (
-        <section className="social-card">
-          <p className="settings-section-title">Cloud sync unavailable</p>
-          <p className="settings-section-copy">
-            The cloud service URL has been explicitly unset. Remove the <code>CLOUD_SOCIAL_BASE_URL</code> override to restore the default server.
-          </p>
-        </section>
-      ) : !status.connected ? (
-        <div className="social-auth-grid">
-          <section className="social-card">
-            <p className="settings-section-title">Connect your account</p>
-            <p className="settings-section-copy">
-              Connect your account with Google. The local app stays authoritative and syncs only the shared social snapshot to the cloud.
-            </p>
-            {!status.pendingAuth ? (
-              <button type="button" onClick={() => void onStartConnect()} disabled={busyAction === "connect-start"}>
-                {busyAction === "connect-start" ? "Starting..." : "Connect with Google"}
-              </button>
-            ) : (
-              <div className="social-form">
-                <p className="settings-section-copy">
-                  Finish Google sign-in in the browser window. This page will keep checking automatically while the auth is pending.
-                </p>
-                <div className="social-inline-actions">
-                  <a
-                    className="social-link-button"
-                    href={status.pendingAuth.authorizationUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    Open Google sign-in
-                  </a>
-                  <button type="button" onClick={() => void onPollConnect()} disabled={busyAction === "connect-poll"}>
-                    {busyAction === "connect-poll" ? "Checking..." : "Check now"}
-                  </button>
-                </div>
-              </div>
-            )}
-          </section>
-
-          <section className="social-card">
-            <p className="settings-section-title">Visibility snapshot</p>
-            <div className="social-form">
-              <label>
-                Habits
-                <select
-                  value={settings.habitsVisibility}
-                  onChange={(event) =>
-                    setSettings((current) => ({
-                      ...current,
-                      habitsVisibility: event.target.value as SocialVisibility,
-                    }))
-                  }
-                >
-                  <option value="private">Private</option>
-                  <option value="friends">Friends</option>
-                  <option value="public">Public</option>
-                </select>
-              </label>
-              <label>
-                Predictions
-                <select
-                  value={settings.predictionsVisibility}
-                  onChange={(event) =>
-                    setSettings((current) => ({
-                      ...current,
-                      predictionsVisibility: event.target.value as SocialVisibility,
-                    }))
-                  }
-                >
-                  <option value="private">Private</option>
-                  <option value="friends">Friends</option>
-                  <option value="public">Public</option>
-                </select>
-              </label>
-              <label>
-                Gold
-                <select
-                  value={settings.goldVisibility}
-                  onChange={(event) =>
-                    setSettings((current) => ({
-                      ...current,
-                      goldVisibility: event.target.value as SocialVisibility,
-                    }))
-                  }
-                >
-                  <option value="private">Private</option>
-                  <option value="friends">Friends</option>
-                  <option value="public">Public</option>
-                </select>
-              </label>
-              <button type="button" onClick={() => void onSaveSettings()} disabled={busyAction === "save-settings"}>
-                {busyAction === "save-settings" ? "Saving..." : "Save visibility"}
-              </button>
-            </div>
-          </section>
+      <div className="social-friends-sidebar">
+        {/* Search */}
+        <div className="social-search-box">
+          <input
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder="Search users..."
+          />
         </div>
-      ) : (
-        <div className="social-layout">
-          <aside className="social-sidebar">
-            <section className="social-card">
-              <div className="social-account-row">
-                <div>
-                  <p className="settings-section-title">@{status.user?.username}</p>
-                  <p className="settings-section-copy">{status.user?.email ?? "Cloud-connected account"}</p>
-                </div>
-                <button type="button" onClick={() => void onDisconnect()} disabled={busyAction === "disconnect"}>
-                  {busyAction === "disconnect" ? "Disconnecting..." : "Disconnect"}
-                </button>
-              </div>
-              <div className="social-pill-group">
-                <span className="social-pill">Cloud: connected</span>
-                <span className="social-pill">Sync: {syncLabel(status)}</span>
-              </div>
-              <button type="button" onClick={() => void onSyncNow()} disabled={busyAction === "sync-now"}>
-                {busyAction === "sync-now" ? "Syncing..." : "Sync now"}
-              </button>
-            </section>
 
-            <section className="social-card">
-              <p className="settings-section-title">Public username</p>
-              <p className="settings-section-copy">
-                This is the name other people search for and see on your shared profile.
-              </p>
-              <form className="social-form" onSubmit={onSaveUsername}>
-                <label>
-                  Username
-                  <input value={usernameDraft} onChange={(event) => setUsernameDraft(event.target.value)} />
-                </label>
-                <button type="submit" disabled={busyAction === "save-username"}>
-                  {busyAction === "save-username" ? "Saving..." : "Save username"}
-                </button>
-              </form>
-            </section>
-
-            <section className="social-card">
-              <p className="settings-section-title">Visibility</p>
-              <div className="social-form">
-                <label>
-                  Habits
-                  <select
-                    value={settings.habitsVisibility}
-                    onChange={(event) =>
-                      setSettings((current) => ({
-                        ...current,
-                        habitsVisibility: event.target.value as SocialVisibility,
-                      }))
-                    }
-                  >
-                    <option value="private">Private</option>
-                    <option value="friends">Friends</option>
-                    <option value="public">Public</option>
-                  </select>
-                </label>
-                <label>
-                  Predictions
-                  <select
-                    value={settings.predictionsVisibility}
-                    onChange={(event) =>
-                      setSettings((current) => ({
-                        ...current,
-                        predictionsVisibility: event.target.value as SocialVisibility,
-                      }))
-                    }
-                  >
-                    <option value="private">Private</option>
-                    <option value="friends">Friends</option>
-                    <option value="public">Public</option>
-                  </select>
-                </label>
-                <label>
-                  Gold
-                  <select
-                    value={settings.goldVisibility}
-                    onChange={(event) =>
-                      setSettings((current) => ({
-                        ...current,
-                        goldVisibility: event.target.value as SocialVisibility,
-                      }))
-                    }
-                  >
-                    <option value="private">Private</option>
-                    <option value="friends">Friends</option>
-                    <option value="public">Public</option>
-                  </select>
-                </label>
-                <button type="button" onClick={() => void onSaveSettings()} disabled={busyAction === "save-settings"}>
-                  {busyAction === "save-settings" ? "Saving..." : "Save visibility"}
-                </button>
-              </div>
-            </section>
-
-            <section className="social-card">
-              <p className="settings-section-title">Find people</p>
-              <label className="social-form">
-                <span className="settings-section-copy">Search by username</span>
-                <input
-                  value={searchQuery}
-                  onChange={(event) => setSearchQuery(event.target.value)}
-                  placeholder="Search users..."
-                />
-              </label>
-              <div className="social-list">
-                {searchResults.length === 0 ? (
-                  <p className="settings-hint">Search to find people.</p>
-                ) : (
-                  searchResults.map((result) => {
-                    const outgoingRequest = outgoingByUsername.get(result.user.username.toLowerCase());
-                    const incomingRequest = incomingByUsername.get(result.user.username.toLowerCase());
-                    return (
-                      <div key={result.user.id} className="social-row">
+        {/* Search results */}
+        {searchQuery.trim() && (
+          <div className="social-search-results">
+            {searchResults.length === 0 ? (
+              <p className="settings-hint">No results found.</p>
+            ) : (
+              searchResults.map((result) => {
+                const outgoingRequest = outgoingByUsername.get(result.user.username.toLowerCase());
+                const incomingRequest = incomingByUsername.get(result.user.username.toLowerCase());
+                return (
+                  <div key={result.user.id} className="social-user-row">
+                    <button
+                      type="button"
+                      className="social-user-name"
+                      onClick={() => setSelectedUsername(result.user.username)}
+                    >
+                      @{result.user.username}
+                    </button>
+                    <div className="social-user-actions">
+                      <span className="social-pill social-pill-sm">{relationshipLabel(result.relationship)}</span>
+                      {result.relationship === "none" && (
                         <button
                           type="button"
-                          className="social-link-button"
-                          onClick={() => setSelectedUsername(result.user.username)}
+                          className="social-action-btn"
+                          onClick={() => void onSendFriendRequest(result.user.username)}
+                          disabled={busyAction === `request:${result.user.username}`}
                         >
-                          @{result.user.username}
+                          {busyAction === `request:${result.user.username}` ? "..." : "Add"}
                         </button>
-                        <span className="social-pill">{relationshipLabel(result.relationship)}</span>
-                        {result.relationship === "none" && (
-                          <button
-                            type="button"
-                            onClick={() => void onSendFriendRequest(result.user.username)}
-                            disabled={busyAction === `request:${result.user.username}`}
-                          >
-                            {busyAction === `request:${result.user.username}` ? "Sending..." : "Add"}
-                          </button>
-                        )}
-                        {result.relationship === "outgoing_request" && outgoingRequest && (
-                          <button
-                            type="button"
-                            onClick={() => void onCancelRequest(outgoingRequest.id)}
-                            disabled={busyAction === `cancel:${outgoingRequest.id}`}
-                          >
-                            Cancel
-                          </button>
-                        )}
-                        {result.relationship === "incoming_request" && incomingRequest && (
-                          <button
-                            type="button"
-                            onClick={() => void onAcceptRequest(incomingRequest.id)}
-                            disabled={busyAction === `accept:${incomingRequest.id}`}
-                          >
-                            Accept
-                          </button>
-                        )}
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            </section>
-
-            <section className="social-card">
-              <p className="settings-section-title">Friend requests</p>
-              <div className="social-list">
-                {incomingRequests.length === 0 && outgoingRequests.length === 0 ? (
-                  <p className="settings-hint">No pending requests.</p>
-                ) : (
-                  <>
-                    {incomingRequests.map((request) => (
-                      <div key={request.id} className="social-row">
-                        <span>@{request.sender.username}</span>
-                        <div className="social-inline-actions">
-                          <button
-                            type="button"
-                            onClick={() => void onAcceptRequest(request.id)}
-                            disabled={busyAction === `accept:${request.id}`}
-                          >
-                            Accept
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => void onDeclineRequest(request.id)}
-                            disabled={busyAction === `decline:${request.id}`}
-                          >
-                            Decline
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                    {outgoingRequests.map((request) => (
-                      <div key={request.id} className="social-row">
-                        <span>@{request.receiver.username}</span>
+                      )}
+                      {result.relationship === "outgoing_request" && outgoingRequest && (
                         <button
                           type="button"
-                          onClick={() => void onCancelRequest(request.id)}
-                          disabled={busyAction === `cancel:${request.id}`}
+                          className="social-action-btn social-action-btn-muted"
+                          onClick={() => void onCancelRequest(outgoingRequest.id)}
+                          disabled={busyAction === `cancel:${outgoingRequest.id}`}
                         >
                           Cancel
                         </button>
-                      </div>
-                    ))}
-                  </>
-                )}
-              </div>
-            </section>
-
-            <section className="social-card">
-              <p className="settings-section-title">Friends</p>
-              <div className="social-list">
-                {friends.length === 0 ? (
-                  <p className="settings-hint">No friends yet.</p>
-                ) : (
-                  friends.map((friend) => (
-                    <button
-                      key={friend.id}
-                      type="button"
-                      className={`social-friend-button ${selectedUsername === friend.username ? "active" : ""}`}
-                      onClick={() => setSelectedUsername(friend.username)}
-                    >
-                      @{friend.username}
-                    </button>
-                  ))
-                )}
-              </div>
-            </section>
-          </aside>
-
-          <section className="social-card social-profile-card">
-            {!selectedUsername ? (
-              <div className="social-empty-state">
-                <p className="settings-section-title">Open a profile</p>
-                <p className="settings-section-copy">Pick a friend or search result to see the latest cloud-synced habits, predictions, and gold.</p>
-              </div>
-            ) : busyAction === `profile:${selectedUsername}` && !selectedProfile ? (
-              <p className="settings-hint">Loading @{selectedUsername}...</p>
-            ) : !selectedProfile ? (
-              <p className="settings-hint">Select a user to load their profile.</p>
-            ) : (
-              <div className="social-profile-grid">
-                <div className="social-profile-header">
-                  <div>
-                    <h4>@{selectedProfile.user.username}</h4>
-                    <p className="settings-section-copy">{relationshipLabel(selectedProfile.relationship)}</p>
+                      )}
+                      {result.relationship === "incoming_request" && incomingRequest && (
+                        <button
+                          type="button"
+                          className="social-action-btn"
+                          onClick={() => void onAcceptRequest(incomingRequest.id)}
+                          disabled={busyAction === `accept:${incomingRequest.id}`}
+                        >
+                          Accept
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <div className="social-pill-group">
-                    <span className="social-pill">Habits: {selectedProfile.habits.visibility}</span>
-                    <span className="social-pill">Predictions: {selectedProfile.predictions.visibility}</span>
-                    <span className="social-pill">Gold: {selectedProfile.gold.visibility}</span>
-                  </div>
-                </div>
-
-                <section className="social-profile-section">
-                  <h5>Habits</h5>
-                  {!selectedProfile.habits.canView ? (
-                    <p className="settings-hint">This section is hidden.</p>
-                  ) : selectedProfile.habits.items.length === 0 ? (
-                    <p className="settings-hint">No habits shared yet.</p>
-                  ) : (
-                    <ul className="social-list">
-                      {selectedProfile.habits.items.map((habit) => (
-                        <li key={habit.id}>
-                          {habit.name} <span className="settings-hint">({habit.status})</span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </section>
-
-                <section className="social-profile-section">
-                  <h5>Predictions</h5>
-                  {!selectedProfile.predictions.canView ? (
-                    <p className="settings-hint">This section is hidden.</p>
-                  ) : selectedProfile.predictions.items.length === 0 ? (
-                    <p className="settings-hint">No predictions shared yet.</p>
-                  ) : (
-                    <ul className="social-list">
-                      {selectedProfile.predictions.items.map((prediction) => (
-                        <li key={prediction.id}>
-                          {prediction.title}{" "}
-                          <span className="settings-hint">
-                            ({prediction.confidence}% · {prediction.outcome})
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </section>
-
-                <section className="social-profile-section">
-                  <h5>Gold</h5>
-                  {!selectedProfile.gold.canView ? (
-                    <p className="settings-hint">This section is hidden.</p>
-                  ) : (
-                    <p className="social-gold-value">{selectedProfile.gold.state?.gold ?? 0} gold</p>
-                  )}
-                </section>
-              </div>
+                );
+              })
             )}
-          </section>
+          </div>
+        )}
+
+        {/* Incoming friend requests */}
+        {incomingRequests.length > 0 && (
+          <div className="social-requests-section">
+            <p className="social-section-label">Requests</p>
+            {incomingRequests.map((request) => (
+              <div key={request.id} className="social-user-row">
+                <span className="social-user-name-text">@{request.sender.username}</span>
+                <div className="social-user-actions">
+                  <button
+                    type="button"
+                    className="social-action-btn"
+                    onClick={() => void onAcceptRequest(request.id)}
+                    disabled={busyAction === `accept:${request.id}`}
+                  >
+                    Accept
+                  </button>
+                  <button
+                    type="button"
+                    className="social-action-btn social-action-btn-muted"
+                    onClick={() => void onDeclineRequest(request.id)}
+                    disabled={busyAction === `decline:${request.id}`}
+                  >
+                    Decline
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Outgoing requests */}
+        {outgoingRequests.length > 0 && (
+          <div className="social-requests-section">
+            <p className="social-section-label">Sent</p>
+            {outgoingRequests.map((request) => (
+              <div key={request.id} className="social-user-row">
+                <span className="social-user-name-text">@{request.receiver.username}</span>
+                <button
+                  type="button"
+                  className="social-action-btn social-action-btn-muted"
+                  onClick={() => void onCancelRequest(request.id)}
+                  disabled={busyAction === `cancel:${request.id}`}
+                >
+                  Cancel
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Friends list */}
+        <div className="social-friends-list">
+          <p className="social-section-label">Friends</p>
+          {friends.length === 0 ? (
+            <p className="settings-hint">No friends yet. Search above to add someone.</p>
+          ) : (
+            friends.map((friend) => (
+              <button
+                key={friend.id}
+                type="button"
+                className={`social-friend-item ${selectedUsername === friend.username ? "active" : ""}`}
+                onClick={() => setSelectedUsername(friend.username)}
+              >
+                @{friend.username}
+              </button>
+            ))
+          )}
         </div>
-      )}
+      </div>
+    </div>
+  );
+
+  /* ── Connected: Settings tab ── */
+  const settingsTabContent = (
+    <div className="social-settings-grid">
+      <section className="social-card">
+        <p className="settings-section-title">Public username</p>
+        <p className="settings-section-copy">
+          This is the name other people search for and see on your shared profile.
+        </p>
+        <form className="social-form" onSubmit={onSaveUsername}>
+          <input value={usernameDraft} onChange={(event) => setUsernameDraft(event.target.value)} />
+          <button type="submit" disabled={busyAction === "save-username"}>
+            {busyAction === "save-username" ? "Saving..." : "Save username"}
+          </button>
+        </form>
+      </section>
+
+      <section className="social-card">
+        <p className="settings-section-title">Visibility</p>
+        <p className="settings-section-copy">
+          Control who can see your habits, predictions, and gold on your profile.
+        </p>
+        <div className="social-visibility-grid">
+          <label className="social-visibility-row">
+            <span>Habits</span>
+            <select
+              value={settings.habitsVisibility}
+              onChange={(event) =>
+                setSettings((current) => ({
+                  ...current,
+                  habitsVisibility: event.target.value as SocialVisibility,
+                }))
+              }
+            >
+              <option value="private">Private</option>
+              <option value="friends">Friends</option>
+              <option value="public">Public</option>
+            </select>
+          </label>
+          <label className="social-visibility-row">
+            <span>Predictions</span>
+            <select
+              value={settings.predictionsVisibility}
+              onChange={(event) =>
+                setSettings((current) => ({
+                  ...current,
+                  predictionsVisibility: event.target.value as SocialVisibility,
+                }))
+              }
+            >
+              <option value="private">Private</option>
+              <option value="friends">Friends</option>
+              <option value="public">Public</option>
+            </select>
+          </label>
+          <label className="social-visibility-row">
+            <span>Gold</span>
+            <select
+              value={settings.goldVisibility}
+              onChange={(event) =>
+                setSettings((current) => ({
+                  ...current,
+                  goldVisibility: event.target.value as SocialVisibility,
+                }))
+              }
+            >
+              <option value="private">Private</option>
+              <option value="friends">Friends</option>
+              <option value="public">Public</option>
+            </select>
+          </label>
+        </div>
+        <button type="button" onClick={() => void onSaveSettings()} disabled={busyAction === "save-settings"}>
+          {busyAction === "save-settings" ? "Saving..." : "Save visibility"}
+        </button>
+      </section>
+
+      <section className="social-card">
+        <p className="settings-section-title">Sync</p>
+        <div className="social-sync-status">
+          <span className="social-pill">Cloud: connected</span>
+          <span className="social-pill">Sync: {syncLabel(status)}</span>
+        </div>
+        <p className="settings-section-copy">
+          Your local app stays authoritative. Syncing pushes a snapshot of your shared data to the cloud.
+        </p>
+        <button type="button" onClick={() => void onSyncNow()} disabled={busyAction === "sync-now"}>
+          {busyAction === "sync-now" ? "Syncing..." : "Sync now"}
+        </button>
+      </section>
+
+      <section className="social-card social-card-danger">
+        <p className="settings-section-title">Disconnect</p>
+        <p className="settings-section-copy">
+          Disconnect your cloud account. Your local data stays intact.
+        </p>
+        <button
+          type="button"
+          className="social-disconnect-btn"
+          onClick={() => void onDisconnect()}
+          disabled={busyAction === "disconnect"}
+        >
+          {busyAction === "disconnect" ? "Disconnecting..." : "Disconnect account"}
+        </button>
+      </section>
+    </div>
+  );
+
+  /* ── Connected: full layout ── */
+  const connectedContent = (
+    <>
+      {/* Sub-tabs */}
+      <div className="social-subtabs">
+        <button
+          type="button"
+          className={`social-subtab ${activeTab === "friends" ? "active" : ""}`}
+          onClick={() => setActiveTab("friends")}
+        >
+          Friends{pendingRequestCount > 0 && <span className="social-badge">{pendingRequestCount}</span>}
+        </button>
+        <button
+          type="button"
+          className={`social-subtab ${activeTab === "settings" ? "active" : ""}`}
+          onClick={() => setActiveTab("settings")}
+        >
+          Settings
+        </button>
+      </div>
+
+      {/* Tab content */}
+      {activeTab === "friends" ? friendsTabContent : settingsTabContent}
+    </>
+  );
+
+  const content = (
+    <>
+      {error && <p className="social-error">{error}</p>}
+      {isLoading && <p className="settings-hint">Loading...</p>}
+
+      {!status?.configured
+        ? notConfiguredContent
+        : !status.connected
+          ? notConnectedContent
+          : connectedContent}
     </>
   );
 

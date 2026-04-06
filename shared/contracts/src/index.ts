@@ -319,8 +319,15 @@ export const detectedGameStateSchema = z.object({
 });
 export type DetectedGameState = z.infer<typeof detectedGameStateSchema>;
 
-export const lockZoneUnlockModeSchema = z.enum(["todos", "gold"]);
+export const lockZoneUnlockModeSchema = z.enum(["todos", "gold", "permanent", "schedule"]);
 export type LockZoneUnlockMode = z.infer<typeof lockZoneUnlockModeSchema>;
+
+export const lockScheduleEntrySchema = z.object({
+  days: z.array(z.number().int().min(0).max(6)),
+  startTime: z.string().regex(/^\d{2}:\d{2}$/),
+  endTime: z.string().regex(/^\d{2}:\d{2}$/),
+});
+export type LockScheduleEntry = z.infer<typeof lockScheduleEntrySchema>;
 
 export const lockZoneSchema = z.object({
   id: z.string(),
@@ -334,6 +341,7 @@ export const lockZoneSchema = z.object({
   cooldownEnabled: z.boolean(),
   cooldownSeconds: z.number().int().positive(),
   goldCost: z.number().int().positive(),
+  schedules: z.array(lockScheduleEntrySchema),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

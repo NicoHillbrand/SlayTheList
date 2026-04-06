@@ -32,6 +32,7 @@ import type {
   GameStateReferenceImage,
   Habit,
   HabitStatus,
+  LockScheduleEntry,
   LockZone,
   LockZoneUnlockMode,
   OverlayState,
@@ -97,6 +98,17 @@ type MoveState = {
   startPointerY: number;
   startZoneX: number;
   startZoneY: number;
+};
+type ResizeEdge = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
+type ResizeState = {
+  zoneId: string;
+  edge: ResizeEdge;
+  startPointerX: number;
+  startPointerY: number;
+  startX: number;
+  startY: number;
+  startWidth: number;
+  startHeight: number;
 };
 type ViewTab = "goals" | "habits" | "predictions" | "reflection" | "blocks" | "social";
 type TodoFilter = "active" | "completed" | "all" | "unrefined";
@@ -250,6 +262,12 @@ function truncateText(input: string, max = 40) {
 }
 
 function lockMessage(requiredTodoTitles: string[], unlockMode: LockZoneUnlockMode, goldCost = 10) {
+  if (unlockMode === "permanent") {
+    return "Locked";
+  }
+  if (unlockMode === "schedule") {
+    return "Scheduled\n\nlock";
+  }
   if (unlockMode === "gold") {
     return `Unlock for\n\n${goldCost} gold`;
   }
@@ -288,6 +306,77 @@ function lockTextTopPadding(zoneWidth: number, zoneHeight: number): string {
   const minDim = Math.max(1, Math.min(zoneWidth, zoneHeight));
   const topPadding = Math.max(6, Math.min(30, minDim * 0.18));
   return `${topPadding}px`;
+}
+
+const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+
+function ScheduleEditor({ schedules, onChange }: { schedules: LockScheduleEntry[]; onChange: (s: LockScheduleEntry[]) => void }) {
+  function addEntry() {
+    onChange([...schedules, { days: [1, 2, 3, 4, 5], startTime: "09:00", endTime: "17:00" }]);
+  }
+  function removeEntry(idx: number) {
+    onChange(schedules.filter((_, i) => i !== idx));
+  }
+  function updateEntry(idx: number, patch: Partial<LockScheduleEntry>) {
+    onChange(schedules.map((e, i) => i === idx ? { ...e, ...patch } : e));
+  }
+  function toggleDay(idx: number, day: number) {
+    const entry = schedules[idx];
+    const days = entry.days.includes(day) ? entry.days.filter((d) => d !== day) : [...entry.days, day].sort();
+    updateEntry(idx, { days });
+  }
+
+  return (
+    <div style={{ display: "grid", gap: "0.5rem" }} onClick={(e) => e.stopPropagation()}>
+      <strong style={{ fontSize: "0.85rem" }}>Lock schedules</strong>
+      <small style={{ opacity: 0.7 }}>Zone is locked during these time windows.</small>
+      {schedules.map((entry, idx) => (
+        <div key={idx} style={{ display: "grid", gap: "0.3rem", padding: "0.4rem", background: "rgba(255,255,255,0.05)", borderRadius: 4 }}>
+          <div style={{ display: "flex", gap: "0.2rem", flexWrap: "wrap" }}>
+            {DAY_LABELS.map((label, dayIdx) => (
+              <button
+                key={dayIdx}
+                type="button"
+                onClick={() => toggleDay(idx, dayIdx)}
+                style={{
+                  padding: "2px 6px",
+                  fontSize: "0.75rem",
+                  borderRadius: 3,
+                  border: "1px solid rgba(255,255,255,0.2)",
+                  background: entry.days.includes(dayIdx) ? "rgba(99,102,241,0.7)" : "transparent",
+                  color: entry.days.includes(dayIdx) ? "#fff" : "inherit",
+                  cursor: "pointer",
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: "0.4rem", alignItems: "center" }}>
+            <input
+              type="time"
+              value={entry.startTime}
+              onChange={(e) => updateEntry(idx, { startTime: e.target.value })}
+              style={{ width: 100 }}
+            />
+            <small>to</small>
+            <input
+              type="time"
+              value={entry.endTime}
+              onChange={(e) => updateEntry(idx, { endTime: e.target.value })}
+              style={{ width: 100 }}
+            />
+            <button type="button" onClick={() => removeEntry(idx)} style={{ marginLeft: "auto", cursor: "pointer", background: "none", border: "none", color: "#ef4444", fontSize: "0.85rem" }}>
+              Remove
+            </button>
+          </div>
+        </div>
+      ))}
+      <button type="button" onClick={addEntry} style={{ cursor: "pointer", fontSize: "0.8rem", padding: "4px 8px", background: "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.2)", borderRadius: 4, color: "inherit", width: "fit-content" }}>
+        + Add schedule
+      </button>
+    </div>
+  );
 }
 
 function getDefaultDeadline(range: TodoRange): string {
@@ -681,6 +770,7 @@ export default function Page() {
   const [error, setError] = useState<string | null>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [move, setMove] = useState<MoveState | null>(null);
+  const [resize, setResize] = useState<ResizeState | null>(null);
   const [selectedZoneIds, setSelectedZoneIds] = useState<string[]>([]);
   const [isCanvasFullscreen, setIsCanvasFullscreen] = useState(false);
   const [activeTab, setActiveTab] = useState<ViewTab>("goals");
@@ -743,6 +833,7 @@ export default function Page() {
   const [selectedGameStateId, setSelectedGameStateId] = useState<string | null>(null);
   const [gameStateRefImages, setGameStateRefImages] = useState<Map<string, GameStateReferenceImage[]>>(new Map());
   const [gameStateDetectionRegions, setGameStateDetectionRegions] = useState<Map<string, GameStateDetectionRegion[]>>(new Map());
+  const [dragOverGameStateId, setDragOverGameStateId] = useState<string | null>(null);
   const [regionDrag, setRegionDrag] = useState<{ gsId: string; startX: number; startY: number; currentX: number; currentY: number; active: boolean } | null>(null);
   const [, setCooldownTick] = useState(0);
   const [blockSubtab, setBlockSubtab] = useState<"blocks" | "screen-states">("blocks");
@@ -1143,6 +1234,20 @@ export default function Page() {
   }, [selectedGameStateId]);
 
   useEffect(() => {
+    if (!selectedGameStateId) return;
+    const onPaste = (event: ClipboardEvent) => {
+      const imageFiles = Array.from(event.clipboardData?.files ?? []).filter((f) =>
+        f.type.startsWith("image/"),
+      );
+      if (imageFiles.length === 0) return;
+      event.preventDefault();
+      handleRefImageUpload(selectedGameStateId, imageFiles);
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [selectedGameStateId]);
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Delete") return;
       const activeElement = document.activeElement;
@@ -1356,8 +1461,8 @@ export default function Page() {
       if (!proceed) return;
     }
     void runAction(async () => {
-      const base = todo.deadlineAt ? new Date(todo.deadlineAt) : new Date();
-      const next = new Date(base.getFullYear(), base.getMonth(), base.getDate() + 1, 23, 59, 59);
+      const now = new Date();
+      const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 23, 59, 59);
       const newDeadline = next.toISOString();
       await updateTodo(todo.id, { deadlineAt: newDeadline, pushCount: newPushCount });
       for (const sub of getSubTodos(todo, todos)) {
@@ -1868,7 +1973,7 @@ export default function Page() {
     if (!name) return;
     void runAction(async () => {
       const created = await createGameStateApi({ name });
-      setGameStates((prev) => [...prev, created]);
+      setGameStates((prev) => [created, ...prev]);
       setNewGameStateName("");
       setSelectedGameStateId(created.id);
       await refresh();
@@ -1953,7 +2058,7 @@ export default function Page() {
     void saveDetectionRegionsForState(gsId, updated);
   }
 
-  function handleRefImageUpload(gameStateId: string, files: FileList | null) {
+  function handleRefImageUpload(gameStateId: string, files: FileList | File[] | null) {
     if (!files || files.length === 0) return;
     void runAction(async () => {
       for (const file of Array.from(files)) {
@@ -2043,6 +2148,39 @@ export default function Page() {
   }
 
   function onTemplatePointerMove(event: PointerEvent<HTMLDivElement>) {
+    if (resize) {
+      const point = getRelativePoint(event);
+      const dx = point.x - resize.startPointerX;
+      const dy = point.y - resize.startPointerY;
+      const MIN_SIZE = 12;
+      setZones((prev) =>
+        prev.map((zone) => {
+          if (zone.id !== resize.zoneId) return zone;
+          let { startX: nx, startY: ny, startWidth: nw, startHeight: nh } = resize;
+          const edge = resize.edge;
+          if (edge.includes("w")) {
+            nw = Math.max(MIN_SIZE, resize.startWidth - dx);
+            nx = resize.startX + resize.startWidth - nw;
+            if (nx < 0) { nw += nx; nx = 0; }
+          }
+          if (edge.includes("e")) {
+            nw = Math.max(MIN_SIZE, resize.startWidth + dx);
+            if (nx + nw > TEMPLATE_WIDTH) nw = TEMPLATE_WIDTH - nx;
+          }
+          if (edge.includes("n")) {
+            nh = Math.max(MIN_SIZE, resize.startHeight - dy);
+            ny = resize.startY + resize.startHeight - nh;
+            if (ny < 0) { nh += ny; ny = 0; }
+          }
+          if (edge.includes("s")) {
+            nh = Math.max(MIN_SIZE, resize.startHeight + dy);
+            if (ny + nh > TEMPLATE_HEIGHT) nh = TEMPLATE_HEIGHT - ny;
+          }
+          return { ...zone, x: nx, y: ny, width: nw, height: nh };
+        }),
+      );
+      return;
+    }
     if (move) {
       const point = getRelativePoint(event);
       const dx = point.x - move.startPointerX;
@@ -2074,6 +2212,14 @@ export default function Page() {
   }
 
   function onTemplatePointerUp(event: PointerEvent<HTMLDivElement>) {
+    if (resize) {
+      const resizedZone = zones.find((zone) => zone.id === resize.zoneId);
+      setResize(null);
+      if (resizedZone) {
+        patchZone(resizedZone.id, { x: resizedZone.x, y: resizedZone.y, width: resizedZone.width, height: resizedZone.height });
+      }
+      return;
+    }
     if (move) {
       const movedZone = zones.find((zone) => zone.id === move.zoneId);
       setMove(null);
@@ -2132,6 +2278,24 @@ export default function Page() {
         setError(`Deleted ${successCount} area(s), but ${failedCount} failed.`);
       }
     });
+  }
+
+  function onResizePointerDown(zone: LockZone, edge: ResizeEdge, event: PointerEvent<HTMLDivElement>) {
+    event.stopPropagation();
+    event.preventDefault();
+    const point = getRelativePointFromClient(event.clientX, event.clientY);
+    setResize({
+      zoneId: zone.id,
+      edge,
+      startPointerX: point.x,
+      startPointerY: point.y,
+      startX: zone.x,
+      startY: zone.y,
+      startWidth: zone.width,
+      startHeight: zone.height,
+    });
+    selectZone(zone.id, false);
+    event.currentTarget.setPointerCapture(event.pointerId);
   }
 
   async function toggleCanvasFullscreen() {
@@ -2745,15 +2909,20 @@ export default function Page() {
     outcome === "hit" ? "Happened" : outcome === "miss" ? "Didn't happen" : "Pending";
   const resetPredictionCalibration = () => setPredictionCalibrationResetAt(Date.now());
   const todaysPredictionGoals = useMemo(
-    () =>
-      todos.filter(
+    () => {
+      const existingTitles = new Set(
+        activePredictions.map((p) => p.title.toLowerCase()),
+      );
+      return todos.filter(
         (todo) =>
           !todo.archivedAt &&
           todo.status === "active" &&
           getViewForDeadline(todo.deadlineAt) === "daily" &&
-          todo.title.trim().length > 0,
-      ),
-    [todos],
+          todo.title.trim().length > 0 &&
+          !existingTitles.has(todo.title.trim().toLowerCase()),
+      );
+    },
+    [todos, activePredictions],
   );
 
   const pendingMurphyPredictions = useMemo(
@@ -3197,6 +3366,7 @@ export default function Page() {
                                     className="habit-name-input"
                                     value={habit.name}
                                     rows={1}
+                                    spellCheck={false}
                                     onFocus={() => setEditingHabitId(habit.id)}
                                     onChange={(event) => {
                                       setHabits((prev) =>
@@ -3297,6 +3467,7 @@ export default function Page() {
                                 className="habit-name-input"
                                 value={habit.name}
                                 rows={1}
+                                spellCheck={false}
                                 onFocus={() => setEditingHabitId(habit.id)}
                                 onChange={(event) => {
                                   setHabits((prev) =>
@@ -3447,6 +3618,7 @@ export default function Page() {
                               className="habit-name-input"
                               value={habit.name}
                               rows={1}
+                              spellCheck={false}
                               onFocus={() => setEditingHabitId(habit.id)}
                               onChange={(event) => {
                                 setHabits((prev) =>
@@ -3608,6 +3780,7 @@ export default function Page() {
                                       className="habit-name-input"
                                       value={habit.name}
                                       rows={1}
+                                      spellCheck={false}
                                       onFocus={() => setEditingHabitId(habit.id)}
                                       onChange={(event) => {
                                         setHabits((prev) =>
@@ -4367,12 +4540,28 @@ export default function Page() {
           </div>
 
           {showNewBlockForm && (
-            <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem", flexWrap: "wrap", alignItems: "flex-end" }}>
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                if (!newBlockName.trim() || !newBlockGameStateId) return;
+                const created = await createBlock(newBlockName.trim(), newBlockGameStateId, newBlockUnlockMode);
+                await refresh();
+                setSelectedBlockId(created.id);
+                setShowNewBlockForm(false);
+              }}
+              style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem", flexWrap: "wrap", alignItems: "flex-end" }}
+            >
               <label style={{ display: "grid", gap: "0.2rem" }}>
                 <small>Name</small>
                 <input
                   value={newBlockName}
                   onChange={(e) => setNewBlockName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      e.currentTarget.form?.requestSubmit();
+                    }
+                  }}
                   placeholder="Block name"
                   style={{ width: 160 }}
                 />
@@ -4394,19 +4583,13 @@ export default function Page() {
                 </select>
               </label>
               <button
-                type="button"
+                type="submit"
                 disabled={!newBlockName.trim() || !newBlockGameStateId}
-                onClick={async () => {
-                  const created = await createBlock(newBlockName.trim(), newBlockGameStateId, newBlockUnlockMode);
-                  await refresh();
-                  setSelectedBlockId(created.id);
-                  setShowNewBlockForm(false);
-                }}
               >
                 Create
               </button>
               <button type="button" onClick={() => setShowNewBlockForm(false)}>Cancel</button>
-            </div>
+            </form>
           )}
 
           {blocks.length === 0 && !showNewBlockForm && (
@@ -4591,6 +4774,7 @@ export default function Page() {
                       >
                         {lockText}
                       </div>
+                      {zone.unlockMode !== "permanent" && zone.unlockMode !== "schedule" && (
                       <button
                         type="button"
                         onPointerDown={(event) => event.stopPropagation()}
@@ -4611,6 +4795,7 @@ export default function Page() {
                       >
                         Unlock for {zone.goldCost} gold
                       </button>
+                      )}
                     </div>
                   )}
                   {!zone.locked && (
@@ -4629,6 +4814,32 @@ export default function Page() {
                     >
                       Inactive
                     </div>
+                  )}
+                  {isSelected && (
+                    <>
+                      {(["n", "s", "e", "w", "ne", "nw", "se", "sw"] as ResizeEdge[]).map((edge) => {
+                        const size = 8;
+                        const half = size / 2;
+                        const pos: React.CSSProperties = { position: "absolute", width: size, height: size, background: "#60a5fa", border: "1px solid #1e40af", zIndex: 10, pointerEvents: "auto" };
+                        if (edge.includes("n")) { pos.top = -half; }
+                        if (edge.includes("s")) { pos.bottom = -half; }
+                        if (edge.includes("w")) { pos.left = -half; }
+                        if (edge.includes("e")) { pos.right = -half; }
+                        if (edge === "n" || edge === "s") { pos.left = "50%"; pos.marginLeft = -half; }
+                        if (edge === "e" || edge === "w") { pos.top = "50%"; pos.marginTop = -half; }
+                        const cursorMap: Record<ResizeEdge, string> = { n: "ns-resize", s: "ns-resize", e: "ew-resize", w: "ew-resize", ne: "nesw-resize", sw: "nesw-resize", nw: "nwse-resize", se: "nwse-resize" };
+                        pos.cursor = cursorMap[edge];
+                        return (
+                          <div
+                            key={edge}
+                            style={pos}
+                            onPointerDown={(e) => onResizePointerDown(zone, edge, e)}
+                            onPointerMove={onTemplatePointerMove}
+                            onPointerUp={onTemplatePointerUp}
+                          />
+                        );
+                      })}
+                    </>
                   )}
                 </div>
               );
@@ -4707,7 +4918,10 @@ export default function Page() {
                       >
                         <option value="todos">Todo unlock</option>
                         <option value="gold">Gold unlock</option>
+                        <option value="permanent">Permanent lock</option>
+                        <option value="schedule">Schedule lock</option>
                       </select>
+                      {zone.unlockMode !== "permanent" && zone.unlockMode !== "schedule" && (
                       <select
                         value={zone.locked ? "locked" : "unlocked"}
                         onChange={(e) => {
@@ -4724,10 +4938,24 @@ export default function Page() {
                         <option value="locked">Locked</option>
                         <option value="unlocked">Unlocked</option>
                       </select>
+                      )}
                     </div>
 
                     <div style={{ display: "grid", gap: "0.25rem" }}>
-                      {zone.unlockMode === "gold" ? (
+                      {zone.unlockMode === "permanent" ? (
+                        <small style={{ opacity: 0.7 }}>This zone is always locked and cannot be unlocked.</small>
+                      ) : zone.unlockMode === "schedule" ? (
+                        <ScheduleEditor
+                          schedules={zone.schedules}
+                          onChange={(schedules) => {
+                            setZones((prev) => prev.map((z) => z.id === zone.id ? { ...z, schedules } : z));
+                            void runAction(async () => {
+                              await updateZone(zone.id, { schedules });
+                              await refresh();
+                            });
+                          }}
+                        />
+                      ) : zone.unlockMode === "gold" ? (
                         <>
                           <label style={{ display: "flex", gap: "0.4rem", alignItems: "center", width: "fit-content" }} onClick={(e) => e.stopPropagation()}>
                             <input
@@ -4846,6 +5074,12 @@ export default function Page() {
             <input
               value={newGameStateName}
               onChange={(event) => setNewGameStateName(event.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  e.currentTarget.form?.requestSubmit();
+                }
+              }}
               placeholder="e.g. YouTube, Twitch, Slay the Spire"
               style={{ flex: 1 }}
             />
@@ -4946,17 +5180,30 @@ export default function Page() {
 
                         <label
                           onClick={(event) => event.stopPropagation()}
+                          onDragOver={(event) => { event.preventDefault(); event.stopPropagation(); setDragOverGameStateId(gs.id); }}
+                          onDragEnter={(event) => { event.preventDefault(); event.stopPropagation(); setDragOverGameStateId(gs.id); }}
+                          onDragLeave={(event) => { event.preventDefault(); event.stopPropagation(); setDragOverGameStateId(null); }}
+                          onDrop={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            setDragOverGameStateId(null);
+                            const imageFiles = Array.from(event.dataTransfer.files).filter((f) => f.type.startsWith("image/"));
+                            handleRefImageUpload(gs.id, imageFiles);
+                          }}
                           style={{
-                            display: "inline-block",
-                            padding: "0.35rem 0.75rem",
-                            border: "1px dashed #4b5563",
+                            display: "block",
+                            padding: "1rem",
+                            border: dragOverGameStateId === gs.id ? "2px dashed #60a5fa" : "1px dashed #4b5563",
+                            background: dragOverGameStateId === gs.id ? "rgba(96,165,250,0.08)" : "transparent",
                             borderRadius: "6px",
                             cursor: "pointer",
                             marginBottom: "0.5rem",
                             fontSize: "0.85rem",
+                            textAlign: "center",
+                            transition: "border-color 0.15s, background 0.15s",
                           }}
                         >
-                          Upload image(s)
+                          Drop images here, paste from clipboard, or click to upload
                           <input
                             type="file"
                             accept="image/*"
@@ -5134,7 +5381,7 @@ export default function Page() {
             <h3>Edit item</h3>
             <label>
               Title
-              <input value={editTitle} onChange={(event) => setEditTitle(event.target.value)} autoFocus />
+              <input value={editTitle} onChange={(event) => setEditTitle(event.target.value)} autoFocus spellCheck={false} />
             </label>
             <label>
               Deadline

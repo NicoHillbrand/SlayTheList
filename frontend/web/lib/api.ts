@@ -17,6 +17,7 @@ import type {
   GoldState,
   Habit,
   HabitStatus,
+  LockScheduleEntry,
   LockZone,
   LockZoneUnlockMode,
   OverlayState,
@@ -208,6 +209,7 @@ export async function createZone(input: {
   cooldownEnabled?: boolean;
   cooldownSeconds?: number;
   goldCost?: number;
+  schedules?: LockScheduleEntry[];
   blockId?: string;
 }) {
   return request<LockZone>("/api/zones", {
@@ -218,7 +220,7 @@ export async function createZone(input: {
 
 export async function updateZone(
   id: string,
-  patch: Partial<LockZone> & { cooldownEnabled?: boolean; cooldownSeconds?: number },
+  patch: Partial<LockZone> & { cooldownEnabled?: boolean; cooldownSeconds?: number; schedules?: LockScheduleEntry[] },
 ) {
   return request<LockZone>(`/api/zones/${id}`, {
     method: "PATCH",

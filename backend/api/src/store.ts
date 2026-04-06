@@ -15,6 +15,7 @@ import type {
   GameStateReferenceImage,
   GoldState,
   Habit,
+  LockScheduleEntry,
   LockZone,
   LockZoneState,
   Prediction,
@@ -47,11 +48,12 @@ type ZoneRow = {
   height: number;
   enabled: 0 | 1;
   locked: 0 | 1;
-  unlock_mode: "todos" | "gold";
+  unlock_mode: "todos" | "gold" | "permanent" | "schedule";
   cooldown_enabled: 0 | 1;
   cooldown_seconds: number;
   gold_cost: number;
   block_id: string | null;
+  schedule_json: string;
   created_at: string;
   updated_at: string;
 };
@@ -99,6 +101,34 @@ function toTodo(row: TodoRow): Todo {
   };
 }
 
+function parseSchedules(raw: string | undefined | null): LockScheduleEntry[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function isWithinSchedule(schedules: LockScheduleEntry[]): boolean {
+  if (schedules.length === 0) return false;
+  const now = new Date();
+  const dayOfWeek = now.getDay(); // 0=Sun..6=Sat
+  const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+  for (const entry of schedules) {
+    if (!entry.days.includes(dayOfWeek)) continue;
+    if (entry.startTime <= entry.endTime) {
+      // Normal range: e.g. 09:00–17:00
+      if (hhmm >= entry.startTime && hhmm < entry.endTime) return true;
+    } else {
+      // Overnight range: e.g. 22:00–06:00
+      if (hhmm >= entry.startTime || hhmm < entry.endTime) return true;
+    }
+  }
+  return false;
+}
+
 function toZone(row: ZoneRow): LockZone {
   return {
     id: row.id,
@@ -112,6 +142,7 @@ function toZone(row: ZoneRow): LockZone {
     cooldownEnabled: !!row.cooldown_enabled,
     cooldownSeconds: row.cooldown_seconds ?? 3600,
     goldCost: row.gold_cost ?? 10,
+    schedules: parseSchedules(row.schedule_json),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -271,12 +302,13 @@ export function createZone(input: Omit<LockZone, "id" | "createdAt" | "updatedAt
     updatedAt: now,
   };
   db.prepare(
-    `INSERT INTO lock_zones (id, name, x, y, width, height, locked, unlock_mode, cooldown_enabled, cooldown_seconds, gold_cost, block_id, created_at, updated_at)
-     VALUES (@id, @name, @x, @y, @width, @height, @locked, @unlockMode, @cooldownEnabled, @cooldownSeconds, @goldCost, @blockId, @createdAt, @updatedAt)`,
+    `INSERT INTO lock_zones (id, name, x, y, width, height, locked, unlock_mode, cooldown_enabled, cooldown_seconds, gold_cost, schedule_json, block_id, created_at, updated_at)
+     VALUES (@id, @name, @x, @y, @width, @height, @locked, @unlockMode, @cooldownEnabled, @cooldownSeconds, @goldCost, @scheduleJson, @blockId, @createdAt, @updatedAt)`,
   ).run({
     ...zone,
     locked: zone.locked ? 1 : 0,
     cooldownEnabled: zone.cooldownEnabled ? 1 : 0,
+    scheduleJson: JSON.stringify(zone.schedules),
     blockId: blockId ?? null,
   });
   return zone;
@@ -284,7 +316,7 @@ export function createZone(input: Omit<LockZone, "id" | "createdAt" | "updatedAt
 
 export function updateZone(
   id: string,
-  patch: Partial<Pick<LockZone, "name" | "x" | "y" | "width" | "height" | "locked" | "unlockMode" | "cooldownEnabled" | "cooldownSeconds" | "goldCost">>,
+  patch: Partial<Pick<LockZone, "name" | "x" | "y" | "width" | "height" | "locked" | "unlockMode" | "cooldownEnabled" | "cooldownSeconds" | "goldCost" | "schedules">>,
 ): LockZone | undefined {
   const currentRow = db.prepare("SELECT * FROM lock_zones WHERE id = ?").get(id) as ZoneRow | undefined;
   if (!currentRow) {
@@ -299,12 +331,13 @@ export function updateZone(
   db.prepare(
     `UPDATE lock_zones
        SET name = ?, x = ?, y = ?, width = ?, height = ?, locked = ?, unlock_mode = ?,
-           cooldown_enabled = ?, cooldown_seconds = ?, gold_cost = ?, updated_at = ?
+           cooldown_enabled = ?, cooldown_seconds = ?, gold_cost = ?, schedule_json = ?, updated_at = ?
      WHERE id = ?`,
   ).run(
     next.name, next.x, next.y, next.width, next.height,
     next.locked ? 1 : 0, next.unlockMode,
     next.cooldownEnabled ? 1 : 0, next.cooldownSeconds, next.goldCost,
+    JSON.stringify(next.schedules),
     next.updatedAt, id,
   );
   if (patch.unlockMode !== undefined && patch.unlockMode !== current.unlockMode) {
@@ -930,7 +963,16 @@ export function listOverlayState(): LockZoneState[] {
       (currentGameStateId !== null && activeForGameStateIds.includes(currentGameStateId));
 
     const activeForCurrentState = blockActiveForCurrentState && zoneActiveForCurrentState;
-    const isLocked = activeForCurrentState && zone.locked;
+    let isLocked: boolean;
+    if (!activeForCurrentState) {
+      isLocked = false;
+    } else if (zone.unlockMode === "permanent") {
+      isLocked = true;
+    } else if (zone.unlockMode === "schedule") {
+      isLocked = isWithinSchedule(zone.schedules);
+    } else {
+      isLocked = zone.locked;
+    }
     const zoneBlockUnlockMode = zoneBlockId ? (blockUnlockModeById.get(zoneBlockId) ?? null) : null;
     return {
       zone,
