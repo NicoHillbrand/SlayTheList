@@ -1338,6 +1338,71 @@ body.desktop-app main {
   line-height: 1;
 }
 
+/* ── Social: gear button ── */
+
+.social-gear-btn {
+  background: none;
+  border: none;
+  color: #8b8477;
+  font-size: 1.35rem;
+  cursor: pointer;
+  padding: 0.25rem;
+  line-height: 1;
+  transition: color 0.15s ease;
+}
+
+.social-gear-btn:hover {
+  color: #f2cb7d;
+}
+
+/* ── Social: settings overlay ── */
+
+.social-settings-overlay-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.55);
+  display: grid;
+  place-items: center;
+}
+
+.social-settings-overlay {
+  background: #111827;
+  border: 1px solid rgba(173, 142, 84, 0.35);
+  border-radius: 12px;
+  padding: 1.5rem;
+  width: 90%;
+  max-width: 36rem;
+  max-height: 85vh;
+  overflow-y: auto;
+}
+
+.social-settings-overlay-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.social-settings-overlay-header h3 {
+  margin: 0;
+  color: #f3ede0;
+}
+
+.social-settings-close {
+  background: none;
+  border: none;
+  color: #8b8477;
+  font-size: 1.5rem;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+
+.social-settings-close:hover {
+  color: #f2cb7d;
+}
+
 /* ── Social: login page (not connected) ── */
 
 .social-login-page {

@@ -774,6 +774,7 @@ export default function Page() {
   const [selectedZoneIds, setSelectedZoneIds] = useState<string[]>([]);
   const [isCanvasFullscreen, setIsCanvasFullscreen] = useState(false);
   const [activeTab, setActiveTab] = useState<ViewTab>("goals");
+  const [socialSettingsOpen, setSocialSettingsOpen] = useState(false);
   const [todoFilter, setTodoFilter] = useState<TodoFilter>("active");
   const [todoRange, setTodoRange] = useState<TodoRange>("daily");
   const [habitsSubtab, setHabitsSubtab] = useState<HabitsSubtab>("week");
@@ -5368,8 +5369,17 @@ export default function Page() {
                   Base
                 </button>
               </nav>
+              <button
+                type="button"
+                className="social-gear-btn"
+                onClick={() => setSocialSettingsOpen(true)}
+                aria-label="Social settings"
+                title="Social settings"
+              >
+                &#9881;
+              </button>
             </div>
-            <SocialModal embedded />
+            <SocialModal embedded showSettings={socialSettingsOpen} onCloseSettings={() => setSocialSettingsOpen(false)} />
           </section>
           )}
           </div>
