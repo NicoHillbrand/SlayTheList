@@ -141,9 +141,9 @@ function parseOptionalFiniteNumber(value: unknown): number | undefined {
   return value;
 }
 
-function parseZoneUnlockMode(value: unknown): "todos" | "gold" | undefined {
+function parseZoneUnlockMode(value: unknown): "todos" | "gold" | "permanent" | "schedule" | undefined {
   if (value === undefined) return undefined;
-  return value === "todos" || value === "gold" ? value : undefined;
+  return value === "todos" || value === "gold" || value === "permanent" || value === "schedule" ? value : undefined;
 }
 
 function pruneUndefined<T extends Record<string, unknown>>(input: T): Partial<T> {
@@ -805,6 +805,7 @@ app.post("/api/zones", (req, res) => {
     goldCost: typeof body.goldCost === "number" && Number.isInteger(body.goldCost) && body.goldCost > 0
       ? body.goldCost
       : 10,
+    schedules: Array.isArray(body.schedules) ? body.schedules : [],
   }, blockId);
   ok(res, zone);
   broadcastOverlayState();
@@ -827,6 +828,7 @@ app.patch("/api/zones/:id", (req, res) => {
     goldCost: typeof patch.goldCost === "number" && Number.isInteger(patch.goldCost) && patch.goldCost > 0
       ? patch.goldCost
       : undefined,
+    schedules: Array.isArray(patch.schedules) ? patch.schedules : undefined,
   };
   if (parsedPatch.width !== undefined && parsedPatch.width <= 0) {
     return badRequest(res, "width must be positive");
@@ -844,7 +846,8 @@ app.patch("/api/zones/:id", (req, res) => {
     parsedPatch.unlockMode === undefined &&
     parsedPatch.cooldownEnabled === undefined &&
     parsedPatch.cooldownSeconds === undefined &&
-    parsedPatch.goldCost === undefined
+    parsedPatch.goldCost === undefined &&
+    parsedPatch.schedules === undefined
   ) {
     return badRequest(res, "no valid zone fields provided");
   }

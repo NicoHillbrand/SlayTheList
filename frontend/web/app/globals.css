@@ -1247,6 +1247,8 @@ body.desktop-app main {
   width: min(560px, calc(100vw - 2rem));
 }
 
+/* ── Social: shell ── */
+
 .social-modal {
   width: min(1100px, calc(100vw - 2rem));
   max-height: min(90vh, 54rem);
@@ -1258,44 +1260,317 @@ body.desktop-app main {
   gap: 1rem;
 }
 
-.social-modal-header {
+.social-error {
+  margin: 0;
+  padding: 0.55rem 0.75rem;
+  border-radius: 8px;
+  background: rgba(111, 28, 34, 0.45);
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  color: #fda4af;
+  font-size: 0.82rem;
+}
+
+/* ── Social: top bar ── */
+
+.social-topbar {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  align-items: flex-start;
+  margin-bottom: 0.25rem;
+}
+
+.social-topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.social-topbar-user {
+  font-weight: 700;
+  font-size: 1rem;
+  color: #f3ede0;
+}
+
+/* ── Social: sub-tabs ── */
+
+.social-subtabs {
+  display: inline-flex;
+  gap: 0.35rem;
+  padding: 0.22rem;
+  border-radius: 10px;
+  border: 1px solid rgba(173, 142, 84, 0.35);
+  background: rgba(17, 24, 39, 0.55);
   margin-bottom: 1rem;
+  justify-self: start;
 }
 
-.social-layout {
+.social-subtab {
+  position: relative;
+  padding: 0.4rem 1.1rem;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #c9c1b0;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.social-subtab.active {
+  border-color: #f2cb7d;
+  background: rgba(99, 77, 39, 0.5);
+  color: #f3ede0;
+}
+
+.social-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.15rem;
+  height: 1.15rem;
+  margin-left: 0.35rem;
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  background: rgba(220, 80, 80, 0.85);
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* ── Social: login page (not connected) ── */
+
+.social-login-page {
   display: grid;
-  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  place-items: center;
+  min-height: 14rem;
+  text-align: center;
+}
+
+.social-login-hero {
+  display: grid;
+  gap: 0.75rem;
+  max-width: 26rem;
+  justify-items: center;
+}
+
+.social-login-hero h3 {
+  margin: 0;
+}
+
+.social-connect-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.55rem 1.25rem;
+  border-radius: 8px;
+  border: 1px solid rgba(173, 142, 84, 0.5);
+  background: rgba(99, 77, 39, 0.5);
+  color: #f8f3e5;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+/* ── Social: friends tab ── */
+
+.social-friends-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 240px;
   gap: 1rem;
+  min-height: 22rem;
 }
 
-.social-sidebar {
+.social-friends-sidebar {
   display: grid;
-  gap: 0.9rem;
+  gap: 0.75rem;
   align-content: start;
+  padding-left: 1rem;
+  border-left: 1px solid rgba(173, 142, 84, 0.15);
+}
+
+.social-search-box input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.social-search-results {
+  display: grid;
+  gap: 0.35rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid rgba(173, 142, 84, 0.12);
+}
+
+.social-user-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.3rem 0;
+}
+
+.social-user-name {
+  background: none;
+  border: none;
+  padding: 0;
+  color: #ead8a7;
+  font-size: 0.85rem;
+  cursor: pointer;
+  text-align: left;
+}
+
+.social-user-name:hover {
+  color: #f2cb7d;
+}
+
+.social-user-name-text {
+  color: #ead8a7;
+  font-size: 0.85rem;
+}
+
+.social-user-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.social-action-btn {
+  padding: 0.2rem 0.55rem;
+  font-size: 0.75rem;
+  border-radius: 6px;
+  border: 1px solid rgba(173, 142, 84, 0.4);
+  background: rgba(61, 74, 96, 0.7);
+  color: #f8f3e5;
+  cursor: pointer;
+}
+
+.social-action-btn-muted {
+  background: rgba(40, 50, 68, 0.6);
+  color: #c9c1b0;
+}
+
+.social-requests-section {
+  display: grid;
+  gap: 0.3rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid rgba(173, 142, 84, 0.12);
+}
+
+.social-section-label {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #8b8477;
+}
+
+.social-friends-list {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.social-friend-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 0.4rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #c9c1b0;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.social-friend-item:hover {
+  background: rgba(29, 40, 60, 0.6);
+}
+
+.social-friend-item.active {
+  border-color: rgba(242, 203, 125, 0.45);
+  background: rgba(99, 77, 39, 0.35);
+  color: #f3ede0;
+}
+
+/* ── Social: profile panel ── */
+
+.social-profile-panel {
+  min-height: 0;
+}
+
+.social-profile-content {
+  display: grid;
+  gap: 1rem;
+  align-content: start;
+}
+
+.social-profile-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid rgba(173, 142, 84, 0.16);
+}
+
+.social-profile-top h4 {
+  margin: 0;
+}
+
+.social-profile-section {
+  display: grid;
+  gap: 0.5rem;
+  padding-top: 0.8rem;
+  border-top: 1px solid rgba(173, 142, 84, 0.12);
+}
+
+.social-profile-section h5 {
+  margin: 0;
+}
+
+.social-profile-list {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding-left: 1rem;
+  list-style: disc;
+}
+
+.social-empty-state {
+  display: grid;
+  place-items: center;
+  min-height: 16rem;
+  text-align: center;
+}
+
+.social-gold-value {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: #f8df8b;
+}
+
+/* ── Social: settings tab ── */
+
+.social-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
 }
 
 .social-card {
   display: grid;
   gap: 0.75rem;
-  padding: 0.9rem;
+  padding: 1rem;
   border-radius: 10px;
   border: 1px solid rgba(173, 142, 84, 0.2);
   background: rgba(14, 20, 31, 0.72);
-}
-
-.social-profile-card {
-  min-height: 28rem;
   align-content: start;
 }
 
-.social-auth-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1rem;
+.social-card-danger {
+  border-color: rgba(248, 113, 113, 0.25);
 }
 
 .social-form {
@@ -1303,48 +1578,51 @@ body.desktop-app main {
   gap: 0.65rem;
 }
 
-.social-list {
-  display: grid;
-  gap: 0.55rem;
-  margin: 0;
-  padding-left: 1rem;
-}
-
-.social-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  align-items: center;
-  justify-content: space-between;
-}
-
 .social-inline-actions {
   display: flex;
   gap: 0.5rem;
 }
 
-.social-account-row {
+.social-visibility-grid {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.social-visibility-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 1rem;
+  gap: 0.75rem;
 }
 
-.social-link-button,
-.social-friend-button {
+.social-visibility-row span {
+  font-size: 0.85rem;
+  color: #c9c1b0;
+}
+
+.social-visibility-row select {
+  min-width: 7rem;
+}
+
+.social-sync-status {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.social-disconnect-btn {
   justify-self: start;
-  background: rgba(29, 40, 60, 0.82);
+  background: rgba(111, 28, 34, 0.65);
+  border-color: rgba(248, 113, 113, 0.4);
+  color: #ffe2e2;
 }
 
-.social-friend-button.active {
-  border-color: #f2cb7d;
-  background: rgba(99, 77, 39, 0.5);
-}
+/* ── Social: shared ── */
 
 .social-pill-group {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.45rem;
+  gap: 0.4rem;
 }
 
 .social-pill {
@@ -1358,52 +1636,109 @@ body.desktop-app main {
   font-size: 0.78rem;
 }
 
-.social-profile-grid {
+.social-pill-sm {
+  padding: 0.15rem 0.45rem;
+  font-size: 0.72rem;
+}
+
+/* ── Social: predictions timeline ── */
+
+.social-predictions-timeline {
   display: grid;
-  gap: 1rem;
+  gap: 0.75rem;
 }
 
-.social-profile-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 1rem;
-  align-items: flex-start;
+.social-predictions-day {
+  display: grid;
+  gap: 0.3rem;
 }
 
-.social-profile-header h4,
-.social-profile-section h5 {
+.social-day-label {
   margin: 0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #8b8477;
 }
 
-.social-profile-section {
+.social-predictions-past {
+  margin-top: 0.25rem;
+}
+
+.social-predictions-past > summary {
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.social-predictions-past > summary::before {
+  content: "\25b6";
+  display: inline-block;
+  margin-right: 0.4em;
+  font-size: 0.6em;
+  transition: transform 0.15s ease;
+}
+
+.social-predictions-past[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.social-predictions-past > summary::-webkit-details-marker {
+  display: none;
+}
+
+.social-predictions-past > .social-predictions-day {
+  margin-top: 0.5rem;
+}
+
+.social-predictions-day-items {
   display: grid;
+  gap: 0.2rem;
+}
+
+.social-prediction-row {
+  display: flex;
+  align-items: center;
   gap: 0.5rem;
-  padding-top: 0.8rem;
-  border-top: 1px solid rgba(173, 142, 84, 0.16);
+  padding: 0.3rem 0.5rem;
+  border-radius: 6px;
+  background: rgba(17, 24, 39, 0.45);
 }
 
-.social-empty-state {
-  display: grid;
-  place-items: center;
-  min-height: 24rem;
+.social-prediction-title {
+  flex: 1;
+  font-size: 0.85rem;
+  color: #e8e0d0;
+}
+
+.social-prediction-confidence {
+  font-size: 0.78rem;
+  color: #8b8477;
+  font-variant-numeric: tabular-nums;
+}
+
+.social-outcome-hit {
+  color: #6ee7b7;
+  font-weight: 700;
+  font-size: 0.85rem;
+  min-width: 1rem;
   text-align: center;
 }
 
-.social-gold-value {
-  margin: 0;
-  font-size: 1.15rem;
-  font-weight: 700;
-  color: #f8df8b;
-}
-
-.social-error {
-  margin: 0 0 1rem;
+.social-outcome-miss {
   color: #fda4af;
+  font-weight: 700;
+  font-size: 0.85rem;
+  min-width: 1rem;
+  text-align: center;
 }
 
-.social-helper-copy {
-  margin: 0;
-  color: #ead8a7;
+.social-outcome-pending {
+  color: #8b8477;
+  font-size: 0.85rem;
+  min-width: 1rem;
+  text-align: center;
 }
 
 .settings-section {
@@ -1528,15 +1863,20 @@ h2 {
     grid-template-columns: 1fr;
   }
 
-  .social-layout,
-  .social-auth-grid {
+  .social-friends-layout,
+  .social-settings-grid {
     grid-template-columns: 1fr;
   }
 
-  .social-profile-header,
-  .social-account-row,
-  .social-modal-header {
-    grid-template-columns: 1fr;
-    display: grid;
+  .social-friends-sidebar {
+    border-left: none;
+    padding-left: 0;
+    border-top: 1px solid rgba(173, 142, 84, 0.15);
+    padding-top: 1rem;
+  }
+
+  .social-profile-top,
+  .social-topbar {
+    flex-direction: column;
   }
 }

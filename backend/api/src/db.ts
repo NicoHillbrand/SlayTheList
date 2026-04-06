@@ -369,6 +369,52 @@ ensureLockZoneColumn("cooldown_seconds", "INTEGER NOT NULL DEFAULT 3600");
 ensureLockZoneColumn("block_id", "TEXT REFERENCES blocks(id) ON DELETE CASCADE");
 ensureLockZoneColumn("gold_cost", "INTEGER NOT NULL DEFAULT 10");
 ensureLockZoneColumn("locked", "INTEGER NOT NULL DEFAULT 1");
+ensureLockZoneColumn("schedule_json", "TEXT NOT NULL DEFAULT '[]'");
+
+// Migrate lock_zones unlock_mode CHECK constraint to allow 'permanent' and 'schedule'
+{
+  const tableSqlRow = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'lock_zones' LIMIT 1")
+    .get() as { sql: string } | undefined;
+  const tableSql = tableSqlRow?.sql ?? "";
+  if (tableSql.includes("CHECK(unlock_mode IN ('todos', 'gold'))") && !tableSql.includes("'permanent'")) {
+    db.pragma("foreign_keys = OFF");
+    const tx = db.transaction(() => {
+      db.exec(`
+        CREATE TABLE lock_zones_new (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          x REAL NOT NULL,
+          y REAL NOT NULL,
+          width REAL NOT NULL,
+          height REAL NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          unlock_mode TEXT NOT NULL DEFAULT 'todos' CHECK(unlock_mode IN ('todos', 'gold', 'permanent', 'schedule')),
+          locked INTEGER NOT NULL DEFAULT 1,
+          cooldown_enabled INTEGER NOT NULL DEFAULT 0,
+          cooldown_seconds INTEGER NOT NULL DEFAULT 3600,
+          gold_cost INTEGER NOT NULL DEFAULT 10,
+          block_id TEXT REFERENCES blocks(id) ON DELETE CASCADE,
+          schedule_json TEXT NOT NULL DEFAULT '[]',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        INSERT INTO lock_zones_new (id, name, x, y, width, height, enabled, unlock_mode, locked, cooldown_enabled, cooldown_seconds, gold_cost, block_id, schedule_json, created_at, updated_at)
+        SELECT id, name, x, y, width, height, COALESCE(enabled, 1), COALESCE(unlock_mode, 'todos'), COALESCE(locked, 1), COALESCE(cooldown_enabled, 0), COALESCE(cooldown_seconds, 3600), COALESCE(gold_cost, 10), block_id, COALESCE(schedule_json, '[]'), created_at, updated_at
+        FROM lock_zones;
+
+        DROP TABLE lock_zones;
+        ALTER TABLE lock_zones_new RENAME TO lock_zones;
+      `);
+    });
+    try {
+      tx();
+    } finally {
+      db.pragma("foreign_keys = ON");
+    }
+  }
+}
 
 // Migrate enabled → locked for existing rows
 {
