@@ -614,6 +614,12 @@ export function cancelFriendRequest(requestId: string, senderUserId: string) {
   return toFriendRequest({ ...request, status: "cancelled", responded_at: respondedAt });
 }
 
+export function removeFriend(userId: string, friendUserId: string) {
+  const [lowId, highId] = pairUsers(userId, friendUserId);
+  const result = db.prepare("DELETE FROM friendships WHERE user_low_id = ? AND user_high_id = ?").run(lowId, highId);
+  if (result.changes === 0) throw new Error("friendship not found");
+}
+
 function canViewerSeeSection(
   visibility: SocialSettings["habitsVisibility"],
   relationship: FriendRelationship,
