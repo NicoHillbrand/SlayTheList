@@ -25,6 +25,7 @@ import {
   pollCloudConnect,
   saveCloudSocialSettings,
   searchCloudSocialUsers,
+  removeCloudFriend,
   sendCloudFriendRequest,
   startCloudConnect,
   syncCloudSnapshot,
@@ -340,6 +341,19 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
     }).catch((nextError) => setError(toErrorMessage(nextError)));
   }
 
+  async function onRemoveFriend(friendUserId: string) {
+    await withBusyAction(`remove:${friendUserId}`, async () => {
+      await removeCloudFriend(friendUserId);
+      if (selectedUsername) {
+        const removed = friends.find((f) => f.id === friendUserId);
+        if (removed && removed.username === selectedUsername) {
+          setSelectedUsername(null);
+        }
+      }
+      await refreshAfterMutation();
+    }).catch((nextError) => setError(toErrorMessage(nextError)));
+  }
+
   if (!embedded && !open) return null;
 
   /* ── Not configured ── */
@@ -609,14 +623,27 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
             <p className="settings-hint">No friends yet. Search above to add someone.</p>
           ) : (
             friends.map((friend) => (
-              <button
+              <div
                 key={friend.id}
-                type="button"
                 className={`social-friend-item ${selectedUsername === friend.username ? "active" : ""}`}
-                onClick={() => setSelectedUsername(friend.username)}
               >
-                @{friend.username}
-              </button>
+                <button
+                  type="button"
+                  className="social-friend-item-name"
+                  onClick={() => setSelectedUsername(friend.username)}
+                >
+                  @{friend.username}
+                </button>
+                <button
+                  type="button"
+                  className="social-friend-remove"
+                  title="Remove friend"
+                  onClick={() => void onRemoveFriend(friend.id)}
+                  disabled={busyAction === `remove:${friend.id}`}
+                >
+                  &times;
+                </button>
+              </div>
             ))
           )}
         </div>

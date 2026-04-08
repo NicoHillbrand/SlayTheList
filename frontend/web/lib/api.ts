@@ -28,6 +28,10 @@ import type {
   SharedProfile,
   SocialSettings,
   Todo,
+  VaultPullResponse,
+  VaultPushRequest,
+  VaultPushResponse,
+  VaultVersionResponse,
 } from "@slaythelist/contracts";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8788";
@@ -133,8 +137,33 @@ export async function cancelCloudFriendRequest(requestId: string) {
   });
 }
 
+export async function removeCloudFriend(friendUserId: string) {
+  return request<{ success: boolean }>(`/api/cloud-social/friends/${friendUserId}`, {
+    method: "DELETE",
+  });
+}
+
 export async function getCloudSharedProfile(username: string) {
   return request<SharedProfile>(`/api/cloud-social/users/${encodeURIComponent(username)}`);
+}
+
+// ---------------------------------------------------------------------------
+// Cloud Vault
+// ---------------------------------------------------------------------------
+
+export async function getVaultVersion() {
+  return request<VaultVersionResponse>("/api/vault/version");
+}
+
+export async function pullVaultData() {
+  return request<VaultPullResponse>("/api/vault/pull");
+}
+
+export async function pushVaultData(data: VaultPushRequest) {
+  return request<VaultPushResponse>("/api/vault/push", {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
 }
 
 export async function listTodos() {
@@ -313,7 +342,7 @@ export async function createHabit(input: { name: string; status?: HabitStatus })
 
 export async function updateHabit(
   id: string,
-  patch: Partial<{ name: string; status: HabitStatus; checks: Habit["checks"] }>,
+  patch: Partial<{ name: string; status: HabitStatus; checks: Habit["checks"]; visibility: "visible" | "private" }>,
 ) {
   return request<Habit>(`/api/habits/${id}`, {
     method: "PATCH",
@@ -345,6 +374,7 @@ export async function updatePrediction(
     confidence: number;
     outcome: PredictionOutcome;
     resolvedAt: number | null;
+    visibility: "visible" | "private";
   }>,
 ) {
   return request<Prediction>(`/api/predictions/${id}`, {

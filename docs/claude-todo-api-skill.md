@@ -66,6 +66,86 @@ Requires the SlayTheList API server to be running. See the rest of this doc.
 
 ---
 
+## Starting SlayTheList
+
+### Platform-specific launchers
+
+Each platform has a launcher script at the repo root:
+
+| Platform | Script | Usage |
+|----------|--------|-------|
+| Windows | `start.bat` | Double-click for GUI mode selector, or pass a CLI argument |
+| macOS | `start.command` | Double-click in Finder, or run from terminal |
+| Linux | `start.sh` | Run from terminal |
+
+All launchers automatically stop any previous SlayTheList instance before starting.
+
+### CLI arguments (all platforms)
+
+| Argument | Effect |
+|----------|--------|
+| `browser` | Start API + web app, open in browser |
+| `desktop` | Start Electron desktop app |
+| `stop` | Kill all running SlayTheList processes |
+
+Examples:
+
+```bash
+# Windows
+start.bat browser
+start.bat desktop
+start.bat stop
+
+# macOS / Linux
+./start.sh browser
+./start.sh stop
+```
+
+On Windows, running `start.bat` with no argument opens a GUI mode selector (via `scripts/launcher.vbs` → `scripts/launcher.ps1`). On macOS/Linux, no argument shows an interactive terminal prompt.
+
+### npm scripts (cross-platform, manual)
+
+| Command | What it starts |
+|---------|---------------|
+| `npm run dev:api` | API server only (port 8788) |
+| `npm run dev:web` | Web frontend only (default port 4000) |
+| `npm run desktop:dev` | Electron app (starts API + web internally) |
+| `npm run desktop:package` | Build packaged desktop app |
+| `npm run build` | Full production build |
+
+For browser development, run `npm run dev:api` and `npm run dev:web` in separate terminals.
+
+### Ports
+
+| Service | Default port | Fallback behavior |
+|---------|-------------|-------------------|
+| API | 8788 | Fixed |
+| Web | 4000 | Auto-increments to next free port if 4000 is busy |
+
+### Overlay agents
+
+The overlay agent is an optional component that blocks game windows until todos are completed.
+
+| Platform | Location | Runtime |
+|----------|----------|---------|
+| Windows | `desktop/overlay-agent/` | .NET 8 WPF (self-contained, no .NET install needed) |
+| Linux | `desktop/overlay-agent-linux/` | Python 3 + tkinter (uses a venv) |
+
+The Windows overlay launches automatically in browser mode if a built exe is found. The Linux overlay launches automatically if its venv is set up. Neither is required for core functionality.
+
+### Startup status GUI
+
+The launchers show a small status window while services start:
+- Windows: `scripts/startup-status.ps1` (PowerShell)
+- macOS/Linux: `scripts/startup-status.py` (Python 3 + tkinter, if available)
+
+### Prerequisites
+
+- Node.js v20+
+- Run `install.bat` (Windows) or `./install.sh` (macOS/Linux) before first launch — installs npm dependencies and builds shared contracts.
+
+---
+
 ## Morning predictions check (startup tip)
 
 Once you have SlayTheList connected via MCP from your regular working directory (using the absolute-path setup above), here's a small thing you can do: add a morning check to the CLAUDE.md in that directory so Claude nudges you about your predictions at the start of each day.
@@ -118,24 +198,24 @@ To link a Murphy prediction to a specific goal, add `targetTitle = "Goal title h
 
 ## Start the app first (HTTP API only)
 
-Before making any API calls, make sure the local API is running from the repo root.
+Before making any API calls, make sure the local API is running.
 
 1. Start SlayTheList using one of these options:
-   - API only: `npm run dev:api`
-   - Browser workflow: run `npm run dev:api` and `npm run dev:web` in separate terminals
-   - Desktop workflow: `npm run desktop:dev`
-   - Windows launcher: double-click `launch-slaythelist.bat`
+   - **Launcher (easiest):** `start.bat browser` (Windows) or `./start.sh` (macOS/Linux)
+   - **API only:** `npm run dev:api`
+   - **Browser workflow:** `npm run dev:api` and `npm run dev:web` in separate terminals
+   - **Desktop workflow:** `npm run desktop:dev`
 2. Verify the API is up before mutating data:
    - `(Invoke-RestMethod "http://localhost:8788/api/todos").items`
 
-If startup fails because dependencies are missing, run `npm install` from the repo root and try again.
+If startup fails because dependencies are missing, run the install script (`install.bat` or `./install.sh`) and try again.
 
 If the API call still fails, do not proceed with mutations until the user starts the app or you start the correct dev command.
 
 ## Runtime assumptions
 
 - API base URL: `http://localhost:8788`
-- Platform shell: PowerShell
+- Platform shell: PowerShell (Windows) or bash (macOS/Linux)
 
 ## Endpoints
 

@@ -80,7 +80,11 @@ import {
   deleteBlock,
   getAppSetting,
   setAppSetting,
+  getVaultVersion,
+  pullVaultData,
+  pushVaultData,
 } from "../lib/api";
+import { encryptVault, decryptVault } from "../lib/vault-crypto";
 import SocialModal from "./social-modal";
 
 type LoadState = "idle" | "loading" | "error";
@@ -812,6 +816,13 @@ export default function Page() {
   const [todoDrafts, setTodoDrafts] = useState<Record<string, string>>({});
   const [showDetectionIndicator, setShowDetectionIndicatorState] = useState(true);
   const [showTodoDuration, setShowTodoDuration] = useState(true);
+  const [storageMode, setStorageMode] = useState<"local" | "cloud-vault">("local");
+  const [vaultPassphrase, setVaultPassphrase] = useState("");
+  const [vaultPassphraseConfirm, setVaultPassphraseConfirm] = useState("");
+  const [vaultSyncStatus, setVaultSyncStatus] = useState<"idle" | "syncing" | "success" | "error">("idle");
+  const [vaultSyncError, setVaultSyncError] = useState<string | null>(null);
+  const [vaultVersion, setVaultVersion] = useState(0);
+  const [vaultPassphraseSet, setVaultPassphraseSet] = useState(false);
   const [todoDurations, setTodoDurations] = useState<Record<string, number>>({});
   const [zoneImageOverrides, setZoneImageOverrides] = useState<Record<string, string>>({});
   const [blockedImages, setBlockedImages] = useState<string[]>([]);
@@ -1023,6 +1034,17 @@ export default function Page() {
       try {
         const indicatorSetting = await getAppSetting("showDetectionIndicator");
         setShowDetectionIndicatorState(indicatorSetting.value !== "false");
+        const storageSetting = await getAppSetting("storageMode");
+        if (storageSetting.value === "cloud-vault") {
+          setStorageMode("cloud-vault");
+          if (window.sessionStorage.getItem("vaultPassphrase")) {
+            setVaultPassphraseSet(true);
+          }
+          try {
+            const ver = await getVaultVersion();
+            setVaultVersion(ver.version);
+          } catch { /* cloud may be unreachable */ }
+        }
       } catch { /* ignore */ }
     } catch (err) {
       setLoadState("error");
@@ -1473,6 +1495,80 @@ export default function Page() {
       }
       await refresh();
     });
+  }
+
+  async function handleVaultPush() {
+    const passphrase = window.sessionStorage.getItem("vaultPassphrase");
+    if (!passphrase) {
+      setVaultSyncError("Vault is locked. Enter your passphrase first.");
+      return;
+    }
+    setVaultSyncStatus("syncing");
+    setVaultSyncError(null);
+    try {
+      const accountabilityState = await getAccountabilityState();
+      const goldState = await getGoldState();
+      const todosResponse = await listTodos();
+      const payload = {
+        todos: todosResponse.items,
+        habits: accountabilityState.habits,
+        predictions: accountabilityState.predictions,
+        reflections: accountabilityState.reflections,
+        gold: goldState,
+        updatedAt: new Date().toISOString(),
+      };
+      const encrypted = await encryptVault(payload, passphrase);
+      const result = await pushVaultData({
+        ...encrypted,
+        version: vaultVersion,
+      });
+      setVaultVersion(result.version);
+      setVaultSyncStatus("success");
+    } catch (err) {
+      setVaultSyncStatus("error");
+      setVaultSyncError(err instanceof Error ? err.message : "Vault push failed");
+    }
+  }
+
+  async function handleVaultPull() {
+    const passphrase = window.sessionStorage.getItem("vaultPassphrase");
+    if (!passphrase) {
+      setVaultSyncError("Vault is locked. Enter your passphrase first.");
+      return;
+    }
+    setVaultSyncStatus("syncing");
+    setVaultSyncError(null);
+    try {
+      const vaultData = await pullVaultData();
+      if (!vaultData.encryptedBlob || !vaultData.salt || !vaultData.iv) {
+        setVaultSyncStatus("idle");
+        setVaultSyncError("No vault data found in the cloud. Push first to initialize.");
+        return;
+      }
+      const decrypted = await decryptVault<{
+        todos: Todo[];
+        habits: Habit[];
+        predictions: Prediction[];
+        reflections: ReflectionEntry[];
+        gold: { gold: number; rewardedTodoIds: string[] };
+        updatedAt: string;
+      }>({ encryptedBlob: vaultData.encryptedBlob, salt: vaultData.salt, iv: vaultData.iv }, passphrase);
+      // Apply decrypted data locally
+      await saveAccountabilityState({
+        habits: decrypted.habits,
+        predictions: decrypted.predictions,
+        reflections: decrypted.reflections,
+      });
+      await saveGoldState(decrypted.gold);
+      // Refresh UI with pulled data
+      await refresh();
+      setVaultVersion(vaultData.version);
+      setVaultSyncStatus("success");
+    } catch (err) {
+      setVaultSyncStatus("error");
+      const message = err instanceof Error ? err.message : "Vault pull failed";
+      setVaultSyncError(message.includes("decrypt") ? "Wrong passphrase or corrupted data." : message);
+    }
   }
 
   function saveSettings() {
@@ -2729,6 +2825,18 @@ export default function Page() {
     });
   }
 
+  function toggleHabitVisibility(habitId: string) {
+    const nextHabits = habits.map((habit) =>
+      habit.id === habitId
+        ? { ...habit, visibility: habit.visibility === "private" ? ("visible" as const) : ("private" as const) }
+        : habit,
+    );
+    setHabits(nextHabits);
+    void runAction(async () => {
+      await saveAccountabilityState({ habits: nextHabits, predictions, reflections });
+    });
+  }
+
   const activeHabits = useMemo(
     () => habits.filter((habit) => (habit.status ?? "active") === "active"),
     [habits],
@@ -2827,6 +2935,16 @@ export default function Page() {
   function updatePredictionConfidence(predictionId: string, confidence: number) {
     setPredictions((prev) =>
       prev.map((p) => (p.id === predictionId ? { ...p, confidence } : p)),
+    );
+  }
+
+  function togglePredictionVisibility(predictionId: string) {
+    setPredictions((prev) =>
+      prev.map((p) =>
+        p.id === predictionId
+          ? { ...p, visibility: p.visibility === "private" ? ("visible" as const) : ("private" as const) }
+          : p,
+      ),
     );
   }
 
@@ -3363,6 +3481,7 @@ export default function Page() {
                               <td>
                                 <div className="habit-name-cell">
                                   <textarea
+                                    ref={(node) => { if (node) autoResizeTextarea(node); }}
                                     id={`habit-name-${habit.id}`}
                                     className="habit-name-input"
                                     value={habit.name}
@@ -3383,20 +3502,15 @@ export default function Page() {
                                       if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); }
                                     }}
                                   />
-                                  <button
-                                    type="button"
-                                    className="habit-edit-trigger"
-                                    onClick={() => {
-                                      setEditingHabitId(habit.id);
-                                      requestAnimationFrame(() => {
-                                        document.getElementById(`habit-name-${habit.id}`)?.focus();
-                                      });
-                                    }}
-                                    aria-label={`Edit ${habit.name}`}
-                                  >
-                                    ✎
-                                  </button>
                                   <div className="habit-row-actions">
+                                    <button
+                                      type="button"
+                                      className={`visibility-toggle ${habit.visibility === "private" ? "is-private" : ""}`}
+                                      onClick={() => toggleHabitVisibility(habit.id)}
+                                      title={habit.visibility === "private" ? "Private (hidden from friends)" : "Visible to friends"}
+                                    >
+                                      {habit.visibility === "private" ? "🔒" : "👁"}
+                                    </button>
                                     <button
                                       type="button"
                                       onClick={() => setHabitStatus(habit.id, "active")}
@@ -3464,6 +3578,7 @@ export default function Page() {
                           >
                             <div className="habit-name-cell">
                               <textarea
+                                ref={(node) => { if (node) autoResizeTextarea(node); }}
                                 id={`habit-name-${habit.id}`}
                                 className="habit-name-input"
                                 value={habit.name}
@@ -3484,20 +3599,15 @@ export default function Page() {
                                   if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); }
                                 }}
                               />
-                              <button
-                                type="button"
-                                className="habit-edit-trigger"
-                                onClick={() => {
-                                  setEditingHabitId(habit.id);
-                                  requestAnimationFrame(() => {
-                                    document.getElementById(`habit-name-${habit.id}`)?.focus();
-                                  });
-                                }}
-                                aria-label={`Edit ${habit.name}`}
-                              >
-                                ✎
-                              </button>
                               <div className="habit-row-actions">
+                                <button
+                                  type="button"
+                                  className={`visibility-toggle ${habit.visibility === "private" ? "is-private" : ""}`}
+                                  onClick={() => toggleHabitVisibility(habit.id)}
+                                  title={habit.visibility === "private" ? "Private (hidden from friends)" : "Visible to friends"}
+                                >
+                                  {habit.visibility === "private" ? "🔒" : "👁"}
+                                </button>
                                 <button
                                   type="button"
                                   onClick={() => setHabitStatus(habit.id, "active")}
@@ -3615,6 +3725,7 @@ export default function Page() {
                         <td>
                           <div className="habit-name-cell">
                             <textarea
+                              ref={(node) => { if (node) autoResizeTextarea(node); }}
                               id={`habit-name-${habit.id}`}
                               className="habit-name-input"
                               value={habit.name}
@@ -3633,20 +3744,15 @@ export default function Page() {
                                 if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); }
                               }}
                             />
-                            <button
-                              type="button"
-                              className="habit-edit-trigger"
-                              onClick={() => {
-                                setEditingHabitId(habit.id);
-                                requestAnimationFrame(() => {
-                                  document.getElementById(`habit-name-${habit.id}`)?.focus();
-                                });
-                              }}
-                              aria-label={`Edit ${habit.name}`}
-                            >
-                              ✎
-                            </button>
                             <div className="habit-row-actions">
+                              <button
+                                type="button"
+                                className={`visibility-toggle ${habit.visibility === "private" ? "is-private" : ""}`}
+                                onClick={() => toggleHabitVisibility(habit.id)}
+                                title={habit.visibility === "private" ? "Private (hidden from friends)" : "Visible to friends"}
+                              >
+                                {habit.visibility === "private" ? "🔒" : "👁"}
+                              </button>
                               <button type="button" onClick={() => setHabitBonus(habit.id, true)}>
                                 Bonus
                               </button>
@@ -3777,6 +3883,7 @@ export default function Page() {
                                 <td>
                                   <div className="habit-name-cell">
                                     <textarea
+                                      ref={(node) => { if (node) autoResizeTextarea(node); }}
                                       id={`habit-name-${habit.id}`}
                                       className="habit-name-input"
                                       value={habit.name}
@@ -3795,20 +3902,15 @@ export default function Page() {
                                         if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); }
                                       }}
                                     />
-                                    <button
-                                      type="button"
-                                      className="habit-edit-trigger"
-                                      onClick={() => {
-                                        setEditingHabitId(habit.id);
-                                        requestAnimationFrame(() => {
-                                          document.getElementById(`habit-name-${habit.id}`)?.focus();
-                                        });
-                                      }}
-                                      aria-label={`Edit ${habit.name}`}
-                                    >
-                                      ✎
-                                    </button>
                                     <div className="habit-row-actions">
+                                      <button
+                                        type="button"
+                                        className={`visibility-toggle ${habit.visibility === "private" ? "is-private" : ""}`}
+                                        onClick={() => toggleHabitVisibility(habit.id)}
+                                        title={habit.visibility === "private" ? "Private (hidden from friends)" : "Visible to friends"}
+                                      >
+                                        {habit.visibility === "private" ? "🔒" : "👁"}
+                                      </button>
                                       <button type="button" onClick={() => setHabitBonus(habit.id, false)}>
                                         Core
                                       </button>
@@ -3952,6 +4054,14 @@ export default function Page() {
                     <div className="prediction-row">
                       <span className="prediction-title">{prediction.title}</span>
                       <div className="goal-actions prediction-actions">
+                        <button
+                          type="button"
+                          className="prediction-visibility-toggle"
+                          onClick={() => togglePredictionVisibility(prediction.id)}
+                          title={prediction.visibility === "private" ? "Private (hidden from friends)" : "Visible to friends"}
+                        >
+                          {prediction.visibility === "private" ? "🔒" : "👁"}
+                        </button>
                         <button type="button" onClick={() => setPredictionOutcome(prediction.id, "hit")}>Happened</button>
                         <button type="button" onClick={() => setPredictionOutcome(prediction.id, "miss")}>Didn't happen</button>
                         <button type="button" onClick={() => deletePrediction(prediction.id)}>Delete</button>
@@ -5436,6 +5546,124 @@ export default function Page() {
             onClick={(event) => event.stopPropagation()}
           >
             <h3>Settings</h3>
+            <section className="settings-section">
+              <p className="settings-section-title">Data storage</p>
+              <div className="settings-radio-group">
+                <label className="settings-radio-label">
+                  <input
+                    type="radio"
+                    name="storageMode"
+                    value="local"
+                    checked={storageMode === "local"}
+                    onChange={async () => {
+                      setStorageMode("local");
+                      await setAppSetting("storageMode", "local");
+                    }}
+                  />
+                  <div>
+                    <span className="settings-radio-title">Local only</span>
+                    <span className="settings-radio-desc">Data stays on this device. Social features push a copy of visible items to the cloud.</span>
+                  </div>
+                </label>
+                <label className="settings-radio-label">
+                  <input
+                    type="radio"
+                    name="storageMode"
+                    value="cloud-vault"
+                    checked={storageMode === "cloud-vault"}
+                    onChange={async () => {
+                      setStorageMode("cloud-vault");
+                      await setAppSetting("storageMode", "cloud-vault");
+                    }}
+                  />
+                  <div>
+                    <span className="settings-radio-title">Cloud Vault</span>
+                    <span className="settings-radio-desc">End-to-end encrypted cloud sync. The cloud is the source of truth — access from any device including Android.</span>
+                  </div>
+                </label>
+              </div>
+              {storageMode === "cloud-vault" && !vaultPassphraseSet && (
+                <div className="settings-vault-setup">
+                  <p className="settings-section-copy">
+                    Set a vault passphrase to encrypt your data. This passphrase never leaves your device — if you forget it, your cloud data cannot be recovered.
+                  </p>
+                  <label>
+                    Vault passphrase
+                    <input
+                      type="password"
+                      value={vaultPassphrase}
+                      onChange={(event) => setVaultPassphrase(event.target.value)}
+                      placeholder="Enter a strong passphrase"
+                      autoComplete="new-password"
+                    />
+                  </label>
+                  <label>
+                    Confirm passphrase
+                    <input
+                      type="password"
+                      value={vaultPassphraseConfirm}
+                      onChange={(event) => setVaultPassphraseConfirm(event.target.value)}
+                      placeholder="Re-enter passphrase"
+                      autoComplete="new-password"
+                    />
+                  </label>
+                  {vaultPassphrase && vaultPassphraseConfirm && vaultPassphrase !== vaultPassphraseConfirm && (
+                    <p className="settings-hint" style={{ color: "#f87171" }}>Passphrases do not match.</p>
+                  )}
+                  <button
+                    type="button"
+                    disabled={!vaultPassphrase || vaultPassphrase !== vaultPassphraseConfirm || vaultPassphrase.length < 8}
+                    onClick={async () => {
+                      window.sessionStorage.setItem("vaultPassphrase", vaultPassphrase);
+                      setVaultPassphraseSet(true);
+                      setVaultPassphrase("");
+                      setVaultPassphraseConfirm("");
+                    }}
+                  >
+                    Set passphrase
+                  </button>
+                  {vaultPassphrase && vaultPassphrase.length < 8 && (
+                    <p className="settings-hint">Passphrase must be at least 8 characters.</p>
+                  )}
+                </div>
+              )}
+              {storageMode === "cloud-vault" && vaultPassphraseSet && (
+                <div className="settings-vault-status">
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <span className="social-pill">Vault: {vaultSyncStatus}</span>
+                    {vaultVersion > 0 && <span className="settings-hint">v{vaultVersion}</span>}
+                  </div>
+                  {vaultSyncError && <p className="settings-hint" style={{ color: "#f87171" }}>{vaultSyncError}</p>}
+                  <div style={{ display: "flex", gap: "0.5rem" }}>
+                    <button
+                      type="button"
+                      disabled={vaultSyncStatus === "syncing"}
+                      onClick={() => void handleVaultPush()}
+                    >
+                      {vaultSyncStatus === "syncing" ? "Syncing..." : "Push to vault"}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={vaultSyncStatus === "syncing"}
+                      onClick={() => void handleVaultPull()}
+                    >
+                      Pull from vault
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    className="social-action-btn-muted"
+                    style={{ fontSize: "0.8rem", opacity: 0.7 }}
+                    onClick={() => {
+                      window.sessionStorage.removeItem("vaultPassphrase");
+                      setVaultPassphraseSet(false);
+                    }}
+                  >
+                    Lock vault
+                  </button>
+                </div>
+              )}
+            </section>
             <section className="settings-section">
               <label className="settings-checkbox-label">
                 <input

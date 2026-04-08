@@ -1,6 +1,6 @@
 # SlayTheList
 
-SlayTheList combines a todo app with a local API and a desktop launcher. The current cross-platform focus is the `frontend/web` + `backend/api` stack; the game overlay remains Windows-only for now.
+SlayTheList combines a todo app with a local API and a desktop launcher. The current cross-platform focus is the `frontend/web` + `backend/api` stack; the game overlay is available on Windows (.NET) and Linux (Python).
 
 ## Packages
 
@@ -8,37 +8,35 @@ SlayTheList combines a todo app with a local API and a desktop launcher. The cur
 - `backend/api`: Express + WebSocket API for todo persistence and local app services
 - `shared/contracts`: Shared TypeScript types and validation schemas
 - `desktop/app`: Electron launcher that starts the local stack without visible shells
-- `desktop/overlay-agent`: Windows-only WPF overlay client
+- `desktop/overlay-agent`: Windows WPF overlay client (self-contained, no .NET install needed)
+- `desktop/overlay-agent-linux`: Linux overlay client (Python 3 + tkinter)
 
 ## Quick start
 
 1. Install dependencies:
-   - `npm install`
-2. Double-click `launch-slaythelist.bat`
-3. Choose how you want to run STL:
+   - Windows: `install.bat`
+   - macOS / Linux: `./install.sh`
+2. Launch:
+   - Windows: double-click `start.bat` (GUI mode selector) or `start.bat browser`
+   - macOS: double-click `start.command`
+   - Linux: `./start.sh`
+3. Or run manually:
    - Desktop app: `npm run desktop:dev`
    - Browser workflow: `npm run dev:api` and `npm run dev:web`
 
 The desktop option starts the API on `8788`, prefers web port `4000`, falls back to a free local port if needed, and opens the UI inside an Electron window without separate terminal windows.
 
-## Unified Windows launcher
+## Launchers
 
-If you want one double-click entry point on Windows, use:
+Each platform has a launcher script at the repo root:
 
-- `launch-slaythelist.bat`
+| Platform | Script | Notes |
+|----------|--------|-------|
+| Windows | `start.bat` | No argument → GUI mode selector; accepts `browser`, `desktop`, `stop` |
+| macOS | `start.command` | Double-click in Finder or run from terminal |
+| Linux | `start.sh` | Run from terminal; accepts `stop` to kill running processes |
 
-It lets you choose:
-
-- Browser mode
-- Browser mode with hidden shells
-- Desktop mode
-- Stop running SlayTheList processes
-
-If you want a no-console launcher window, use:
-
-- `launch-slaythelist-hidden.vbs`
-
-That gives you the same mode choices from a small prompt without leaving a batch window open.
+All launchers automatically stop previous SlayTheList instances before starting.
 
 ## Desktop option
 
@@ -73,23 +71,18 @@ The older alias still works:
 
 See `docs/desktop-launcher.md` for details.
 
-## Windows-only overlay tools
+## Overlay agents
 
-The legacy batch launchers and the overlay agent are still Windows-specific:
+The overlay agent blocks game windows until todos are completed. It is optional and platform-specific:
 
-- `launchers/windows/start-slaythelist.bat`
-- `launchers/windows/start-slaythelist-hidden.bat`
-- `launchers/windows/stop-slaythelist.bat`
-- `launchers/windows/restart-slaythelist.bat`
-- `desktop/overlay-agent`
-
-They are no longer required for running the core app on macOS.
+- **Windows:** `desktop/overlay-agent/` — .NET 8 WPF, self-contained (no .NET install needed). Launches automatically in browser mode if a built exe is found.
+- **Linux:** `desktop/overlay-agent-linux/` — Python 3 + tkinter. Launches automatically if its venv is set up via `./install.sh`.
 
 ## API usage from CLI/agents
 
 For command-line usage patterns (including PowerShell examples suitable for Claude Code), see:
 
-- `docs/agent-api-usage.md`
+- `docs/claude-todo-api-skill.md`
 
 ## Validation
 

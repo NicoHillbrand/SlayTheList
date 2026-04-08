@@ -1,10 +1,12 @@
 # Architecture
 
-SlayTheList MVP has three cooperating runtimes:
+SlayTheList has three cooperating runtimes:
 
 1. Browser UI (`frontend/web`) for todos and lock-zone setup.
 2. Local API (`backend/api`) for persistence and live state distribution.
-3. Windows overlay agent (`desktop/overlay-agent`) for game window tracking and click blocking.
+3. Overlay agent for game window tracking and click blocking:
+   - Windows: `desktop/overlay-agent/` — .NET 8 WPF (self-contained, no .NET install needed)
+   - Linux: `desktop/overlay-agent-linux/` — Python 3 + tkinter
 
 ## Data flow
 
