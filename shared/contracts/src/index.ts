@@ -28,6 +28,9 @@ export type HabitCheck = z.infer<typeof habitCheckSchema>;
 export const habitStatusSchema = z.enum(["active", "archived", "idea"]);
 export type HabitStatus = z.infer<typeof habitStatusSchema>;
 
+export const itemVisibilitySchema = z.enum(["visible", "private"]);
+export type ItemVisibility = z.infer<typeof itemVisibilitySchema>;
+
 export const habitSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -35,6 +38,7 @@ export const habitSchema = z.object({
   createdAt: z.number(),
   status: habitStatusSchema.default("active"),
   bonus: z.boolean().optional(),
+  visibility: itemVisibilitySchema.optional(),
 });
 export type Habit = z.infer<typeof habitSchema>;
 
@@ -50,6 +54,7 @@ export const predictionSchema = z.object({
   resolvedAt: z.number().nullable(),
   murphy: z.boolean().optional(),
   targetTitle: z.string().optional(),
+  visibility: itemVisibilitySchema.optional(),
 });
 export type Prediction = z.infer<typeof predictionSchema>;
 
@@ -463,3 +468,47 @@ export const baseShopPurchaseResponseSchema = z.object({
   inventory: baseInventorySchema,
 });
 export type BaseShopPurchaseResponse = z.infer<typeof baseShopPurchaseResponseSchema>;
+
+// ---------------------------------------------------------------------------
+// Cloud Vault (E2E encrypted full-data sync)
+// ---------------------------------------------------------------------------
+
+export const vaultPushRequestSchema = z.object({
+  encryptedBlob: z.string(),  // base64-encoded encrypted data
+  salt: z.string(),            // base64-encoded PBKDF2 salt (stored alongside blob)
+  iv: z.string(),              // base64-encoded AES-GCM IV
+  version: z.number().int().nonnegative(),  // optimistic concurrency version
+});
+export type VaultPushRequest = z.infer<typeof vaultPushRequestSchema>;
+
+export const vaultPushResponseSchema = z.object({
+  version: z.number().int().nonnegative(),
+  updatedAt: z.string(),
+});
+export type VaultPushResponse = z.infer<typeof vaultPushResponseSchema>;
+
+export const vaultPullResponseSchema = z.object({
+  encryptedBlob: z.string().nullable(),
+  salt: z.string().nullable(),
+  iv: z.string().nullable(),
+  version: z.number().int().nonnegative(),
+  updatedAt: z.string().nullable(),
+});
+export type VaultPullResponse = z.infer<typeof vaultPullResponseSchema>;
+
+export const vaultVersionResponseSchema = z.object({
+  version: z.number().int().nonnegative(),
+  updatedAt: z.string().nullable(),
+});
+export type VaultVersionResponse = z.infer<typeof vaultVersionResponseSchema>;
+
+/** The shape of the unencrypted data inside the vault blob */
+export const vaultPayloadSchema = z.object({
+  todos: z.array(todoSchema),
+  habits: z.array(habitSchema),
+  predictions: z.array(predictionSchema),
+  reflections: z.array(reflectionEntrySchema),
+  gold: goldStateSchema,
+  updatedAt: z.string(),
+});
+export type VaultPayload = z.infer<typeof vaultPayloadSchema>;

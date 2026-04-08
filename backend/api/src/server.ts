@@ -13,10 +13,12 @@ import {
   goldStateSchema,
   habitCheckSchema,
   habitStatusSchema,
+  itemVisibilitySchema,
   predictionOutcomeSchema,
   reflectionEntrySchema,
   sharedProfileSchema,
   socialSettingsSchema,
+  vaultPushRequestSchema,
   type EventEnvelope,
   type OverlayState,
 } from "@slaythelist/contracts";
@@ -73,6 +75,7 @@ import { errorLogger, requestLogger } from "./logger.js";
 import {
   acceptCloudFriendRequest,
   cancelCloudFriendRequest,
+  removeCloudFriend,
   declineCloudFriendRequest,
   disconnectCloudConnection,
   getCloudConnectionStatus,
@@ -88,6 +91,9 @@ import {
   startCloudConnection,
   syncCloudSnapshot,
   updateCloudUsername,
+  getVaultVersion,
+  pullVault,
+  pushVault,
 } from "./cloud-sync.js";
 
 const port = Number(process.env.PORT ?? 8788);
@@ -331,6 +337,14 @@ app.post("/api/cloud-social/friend-requests/:id/decline", async (req, res) => {
   }
 });
 
+app.delete("/api/cloud-social/friends/:friendUserId", async (req, res) => {
+  try {
+    ok(res, await removeCloudFriend(req.params.friendUserId));
+  } catch (error) {
+    return badRequest(res, (error as Error).message);
+  }
+});
+
 app.delete("/api/cloud-social/friend-requests/:id", async (req, res) => {
   try {
     ok(res, friendRequestSchema.parse(await cancelCloudFriendRequest(req.params.id)));
@@ -344,6 +358,43 @@ app.get("/api/cloud-social/users/:username", async (req, res) => {
     ok(res, sharedProfileSchema.parse(await getCloudSharedProfile(req.params.username)));
   } catch (error) {
     return badRequest(res, (error as Error).message);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Cloud Vault (E2E encrypted full-data sync)
+// ---------------------------------------------------------------------------
+
+app.get("/api/vault/version", async (_req, res) => {
+  try {
+    ok(res, await getVaultVersion());
+  } catch (error) {
+    return badRequest(res, (error as Error).message);
+  }
+});
+
+app.get("/api/vault/pull", async (_req, res) => {
+  try {
+    ok(res, await pullVault());
+  } catch (error) {
+    return badRequest(res, (error as Error).message);
+  }
+});
+
+app.put("/api/vault/push", async (req, res) => {
+  const parsed = vaultPushRequestSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return badRequest(res, parsed.error.issues[0]?.message ?? "invalid vault push payload");
+  }
+  try {
+    ok(res, await pushVault(parsed.data));
+  } catch (error) {
+    const err = error as Error & { message: string };
+    if (err.message.includes("409") || err.message.includes("version conflict")) {
+      res.status(409).json({ error: err.message });
+    } else {
+      return badRequest(res, err.message);
+    }
   }
 });
 
@@ -546,6 +597,7 @@ app.patch("/api/habits/:id", (req, res) => {
   const nextName = patch.name;
   const nextStatus = patch.status;
   const nextChecks = patch.checks;
+  const nextVisibility = patch.visibility;
   if (nextName !== undefined && typeof nextName !== "string") {
     return badRequest(res, "name must be a string");
   }
@@ -558,6 +610,11 @@ app.patch("/api/habits/:id", (req, res) => {
   if (!checksParsed.success) {
     return badRequest(res, "checks must be an array of { date, done }");
   }
+  const visibilityParsed =
+    nextVisibility === undefined ? { success: true, data: undefined } : itemVisibilitySchema.safeParse(nextVisibility);
+  if (!visibilityParsed.success) {
+    return badRequest(res, "visibility must be visible or private");
+  }
   const state = accountabilityStateSchema.parse(getAccountabilityState());
   const index = state.habits.findIndex((habit) => habit.id === req.params.id);
   if (index < 0) {
@@ -569,6 +626,7 @@ app.patch("/api/habits/:id", (req, res) => {
     name: nextName === undefined ? current.name : nextName.trim(),
     status: statusParsed.data === undefined ? current.status : statusParsed.data,
     checks: checksParsed.data === undefined ? current.checks : checksParsed.data,
+    ...(visibilityParsed.data !== undefined ? { visibility: visibilityParsed.data } : {}),
   };
   const nextHabits = [...state.habits];
   nextHabits[index] = updated;
@@ -622,6 +680,7 @@ app.patch("/api/predictions/:id", (req, res) => {
   const nextConfidence = patch.confidence;
   const nextOutcome = patch.outcome;
   const nextResolvedAt = patch.resolvedAt;
+  const nextVisibility = patch.visibility;
   if (nextTitle !== undefined && typeof nextTitle !== "string") {
     return badRequest(res, "title must be a string");
   }
@@ -642,6 +701,11 @@ app.patch("/api/predictions/:id", (req, res) => {
     (typeof nextResolvedAt !== "number" || !Number.isFinite(nextResolvedAt))
   ) {
     return badRequest(res, "resolvedAt must be a number timestamp or null");
+  }
+  const visibilityParsed =
+    nextVisibility === undefined ? { success: true, data: undefined } : itemVisibilitySchema.safeParse(nextVisibility);
+  if (!visibilityParsed.success) {
+    return badRequest(res, "visibility must be visible or private");
   }
   const state = accountabilityStateSchema.parse(getAccountabilityState());
   const index = state.predictions.findIndex((prediction) => prediction.id === req.params.id);
@@ -666,6 +730,7 @@ app.patch("/api/predictions/:id", (req, res) => {
           ? current.resolvedAt
           : resolvedAtFromOutcome
         : nextResolvedAt,
+    ...(visibilityParsed.data !== undefined ? { visibility: visibilityParsed.data } : {}),
   };
   const nextPredictions = [...state.predictions];
   nextPredictions[index] = updated;

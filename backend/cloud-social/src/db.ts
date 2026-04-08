@@ -95,6 +95,16 @@ CREATE TABLE IF NOT EXISTS friendships (
   FOREIGN KEY(user_high_id) REFERENCES cloud_users(id) ON DELETE CASCADE,
   CHECK(user_low_id < user_high_id)
 );
+
+CREATE TABLE IF NOT EXISTS user_vault (
+  user_id TEXT PRIMARY KEY,
+  encrypted_blob TEXT NOT NULL,
+  salt TEXT NOT NULL,
+  iv TEXT NOT NULL,
+  version INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(user_id) REFERENCES cloud_users(id) ON DELETE CASCADE
+);
 `);
 
 db.exec(`

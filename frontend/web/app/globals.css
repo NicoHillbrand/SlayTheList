@@ -401,13 +401,64 @@ body.desktop-app main {
   color: #c4b896;
 }
 
-.settings-checkbox-label {
+.todo-edit-modal .settings-checkbox-label {
   display: flex;
+  flex-direction: row;
   align-items: center;
   gap: 0.5rem;
   cursor: pointer;
   font-size: 0.9rem;
   color: #cec6b5;
+}
+.settings-radio-group {
+  display: grid;
+  gap: 0.5rem;
+}
+.settings-radio-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  cursor: pointer;
+  padding: 0.55rem 0.65rem;
+  border-radius: 8px;
+  border: 1px solid rgba(173, 142, 84, 0.18);
+  background: rgba(255, 255, 255, 0.02);
+  transition: border-color 0.15s, background 0.15s;
+}
+.settings-radio-label:hover {
+  border-color: rgba(173, 142, 84, 0.35);
+  background: rgba(255, 255, 255, 0.04);
+}
+.settings-radio-label:has(input:checked) {
+  border-color: rgba(173, 142, 84, 0.5);
+  background: rgba(173, 142, 84, 0.08);
+}
+.settings-radio-label input[type="radio"] {
+  margin-top: 0.2rem;
+  accent-color: #9a7d4e;
+  flex-shrink: 0;
+}
+.settings-radio-title {
+  display: block;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #f3ede0;
+}
+.settings-radio-desc {
+  display: block;
+  font-size: 0.8rem;
+  line-height: 1.35;
+  color: #a09882;
+  margin-top: 0.15rem;
+}
+.settings-vault-setup,
+.settings-vault-status {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.65rem;
+  border-radius: 8px;
+  border: 1px solid rgba(173, 142, 84, 0.2);
+  background: rgba(173, 142, 84, 0.04);
 }
 
 @media (max-width: 700px) {
@@ -559,33 +610,6 @@ body.desktop-app main {
 .habits-side-lists {
   display: grid;
   gap: 0.6rem;
-}
-
-.habit-edit-trigger {
-  width: 1.8rem;
-  height: 1.8rem;
-  padding: 0;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  color: #8e887d;
-  opacity: 0;
-  transition: opacity 120ms ease-in-out, background 120ms ease-in-out, color 120ms ease-in-out;
-}
-
-.habit-row:hover .habit-edit-trigger,
-.habit-row:focus-within .habit-edit-trigger,
-.habit-row.editing .habit-edit-trigger,
-.habit-side-row:hover .habit-edit-trigger,
-.habit-side-row:focus-within .habit-edit-trigger,
-.habit-side-row.editing .habit-edit-trigger {
-  opacity: 1;
-}
-
-.habit-edit-trigger:hover,
-.habit-edit-trigger:focus-visible {
-  background: rgba(255, 255, 255, 0.06);
-  color: #f3ede0;
 }
 
 .habit-row-actions {
@@ -858,6 +882,52 @@ body.desktop-app main {
   margin-left: 0.45rem;
   white-space: nowrap;
   flex-shrink: 0;
+}
+
+.visibility-toggle {
+  background: rgba(20, 31, 47, 0.85);
+  color: #cec6b5;
+  border: 1px solid rgba(173, 142, 84, 0.25);
+  padding: 0.24rem 0.45rem;
+  border-radius: 8px;
+  font-size: 0.74rem;
+  white-space: nowrap;
+  cursor: pointer;
+  filter: grayscale(1);
+  transition: background 120ms ease-in-out, border-color 120ms ease-in-out;
+}
+
+.visibility-toggle.is-private {
+  background: rgba(40, 20, 20, 0.85);
+  border-color: rgba(180, 80, 80, 0.35);
+}
+
+.visibility-toggle:hover {
+  background: rgba(30, 45, 65, 0.9);
+  border-color: rgba(173, 142, 84, 0.4);
+}
+
+.prediction-visibility-toggle {
+  background: none;
+  border: none;
+  color: #8e887d;
+  cursor: pointer;
+  font-size: 0.82rem;
+  padding: 0.15rem 0.3rem;
+  border-radius: 4px;
+  filter: grayscale(1);
+  opacity: 0.5;
+  transition: opacity 120ms ease-in-out, background 120ms ease-in-out;
+}
+
+.goal-row:hover .prediction-visibility-toggle {
+  opacity: 0.8;
+}
+
+.prediction-visibility-toggle:hover,
+.prediction-visibility-toggle:focus-visible {
+  background: rgba(255, 255, 255, 0.06);
+  opacity: 1;
 }
 
 .prediction-goals-panel {
@@ -1536,16 +1606,15 @@ body.desktop-app main {
 }
 
 .social-friend-item {
-  display: block;
+  display: flex;
+  align-items: center;
   width: 100%;
-  text-align: left;
   padding: 0.4rem 0.6rem;
   border-radius: 6px;
   border: 1px solid transparent;
   background: transparent;
   color: #c9c1b0;
   font-size: 0.85rem;
-  cursor: pointer;
 }
 
 .social-friend-item:hover {
@@ -1556,6 +1625,45 @@ body.desktop-app main {
   border-color: rgba(242, 203, 125, 0.45);
   background: rgba(99, 77, 39, 0.35);
   color: #f3ede0;
+}
+
+.social-friend-item-name {
+  flex: 1;
+  text-align: left;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+
+.social-friend-remove {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 1.2rem;
+  height: 1.2rem;
+  margin-left: 0.3rem;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #8a7e6e;
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.social-friend-item:hover .social-friend-remove,
+.social-friend-item:focus-within .social-friend-remove {
+  display: flex;
+}
+
+.social-friend-remove:hover {
+  background: rgba(180, 60, 60, 0.35);
+  color: #e8554a;
 }
 
 /* ── Social: profile panel ── */

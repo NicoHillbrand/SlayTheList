@@ -11,6 +11,10 @@ import {
   sharedProfileSchema,
   socialSettingsSchema,
   socialSnapshotSchema,
+  vaultPullResponseSchema,
+  vaultPushRequestSchema,
+  vaultPushResponseSchema,
+  vaultVersionResponseSchema,
   type CloudConnectionStatus,
   type CloudIdentityUser,
   type FriendRequest,
@@ -19,6 +23,10 @@ import {
   type SharedProfile,
   type SocialSettings,
   type SocialSnapshot,
+  type VaultPullResponse,
+  type VaultPushRequest,
+  type VaultPushResponse,
+  type VaultVersionResponse,
 } from "@slaythelist/contracts";
 import { db } from "./db.js";
 import { getAccountabilityState, getGoldState } from "./store.js";
@@ -206,10 +214,11 @@ export function saveLocalSocialSettings(settings: SocialSettings) {
 
 export function buildLocalSocialSnapshot(): SocialSnapshot {
   const now = new Date().toISOString();
+  const state = getAccountabilityState();
   return socialSnapshotSchema.parse({
     settings: getLocalSocialSettings(),
-    habits: getAccountabilityState().habits,
-    predictions: getAccountabilityState().predictions,
+    habits: state.habits.filter((h) => h.visibility !== "private"),
+    predictions: state.predictions.filter((p) => p.visibility !== "private"),
     gold: getGoldState(),
     sourceUpdatedAt: now,
   });
@@ -418,6 +427,31 @@ export async function cancelCloudFriendRequest(requestId: string) {
   return friendRequestSchema.parse(await requestCloud(`/api/social/friend-requests/${requestId}`, { method: "DELETE" }));
 }
 
+export async function removeCloudFriend(friendUserId: string) {
+  return (await requestCloud(`/api/social/friends/${friendUserId}`, { method: "DELETE" })) as { success: boolean };
+}
+
 export async function getCloudSharedProfile(username: string) {
   return sharedProfileSchema.parse(await requestCloud<SharedProfile>(`/api/social/users/${encodeURIComponent(username)}`));
+}
+
+// ---------------------------------------------------------------------------
+// Vault (E2E encrypted full-data sync)
+// ---------------------------------------------------------------------------
+
+export async function getVaultVersion(): Promise<VaultVersionResponse> {
+  return vaultVersionResponseSchema.parse(await requestCloud<VaultVersionResponse>("/api/vault/version"));
+}
+
+export async function pullVault(): Promise<VaultPullResponse> {
+  return vaultPullResponseSchema.parse(await requestCloud<VaultPullResponse>("/api/vault/pull"));
+}
+
+export async function pushVault(request: VaultPushRequest): Promise<VaultPushResponse> {
+  return vaultPushResponseSchema.parse(
+    await requestCloud<VaultPushResponse>("/api/vault/push", {
+      method: "PUT",
+      body: JSON.stringify(request),
+    }),
+  );
 }
