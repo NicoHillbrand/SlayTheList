@@ -10,12 +10,17 @@ import {
   sharedProfileSchema,
   socialSettingsSchema,
   socialSnapshotSchema,
+  vaultPullResponseSchema,
+  vaultPushRequestSchema,
+  vaultPushResponseSchema,
+  vaultVersionResponseSchema,
 } from "@slaythelist/contracts";
 import { parseBearerToken } from "./auth.js";
 import { errorLogger, requestLogger } from "./logger.js";
 import {
   acceptFriendRequest,
   cancelFriendRequest,
+  removeFriend,
   completeGoogleAuthorization,
   createFriendRequest,
   declineFriendRequest,
@@ -32,6 +37,7 @@ import {
   startDeviceAuthorization,
   updateCloudUsername,
 } from "./store.js";
+import { getVaultVersion, pullVault, pushVault } from "./vault-store.js";
 
 const port = Number(process.env.PORT ?? 8790);
 const app = express();
@@ -259,6 +265,17 @@ app.post("/api/social/friend-requests/:id/decline", (req, res) => {
   }
 });
 
+app.delete("/api/social/friends/:friendUserId", (req, res) => {
+  const user = requireAuth(req as AuthedRequest, res);
+  if (!user) return;
+  try {
+    removeFriend(user.id, req.params.friendUserId);
+    ok(res, { success: true });
+  } catch (error) {
+    return badRequest(res, (error as Error).message);
+  }
+});
+
 app.delete("/api/social/friend-requests/:id", (req, res) => {
   const user = requireAuth(req as AuthedRequest, res);
   if (!user) return;
@@ -276,6 +293,41 @@ app.get("/api/social/users/:username", (req, res) => {
     ok(res, sharedProfileSchema.parse(getSharedProfile(user.id, req.params.username)));
   } catch (error) {
     return badRequest(res, (error as Error).message);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Vault (E2E encrypted full-data sync)
+// ---------------------------------------------------------------------------
+
+app.get("/api/vault/version", (req, res) => {
+  const user = requireAuth(req as AuthedRequest, res);
+  if (!user) return;
+  ok(res, vaultVersionResponseSchema.parse(getVaultVersion(user.id)));
+});
+
+app.get("/api/vault/pull", (req, res) => {
+  const user = requireAuth(req as AuthedRequest, res);
+  if (!user) return;
+  ok(res, vaultPullResponseSchema.parse(pullVault(user.id)));
+});
+
+app.put("/api/vault/push", (req, res) => {
+  const user = requireAuth(req as AuthedRequest, res);
+  if (!user) return;
+  const parsed = vaultPushRequestSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return badRequest(res, parsed.error.issues[0]?.message ?? "invalid vault push payload");
+  }
+  try {
+    ok(res, vaultPushResponseSchema.parse(pushVault(user.id, parsed.data)));
+  } catch (error) {
+    const err = error as Error & { statusCode?: number };
+    if (err.statusCode === 409) {
+      res.status(409).json({ error: err.message });
+    } else {
+      return badRequest(res, err.message);
+    }
   }
 });
 
