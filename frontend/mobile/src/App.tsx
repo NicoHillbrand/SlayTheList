@@ -10,6 +10,19 @@ import {
   startGoogleAuth,
 } from "./cloud-api";
 import { decryptVault, encryptVault } from "./vault-crypto";
+import AppleReminders, {
+  isAppleRemindersAvailable,
+  type ReminderList,
+} from "./apple-reminders";
+import {
+  clearRemindersSync,
+  loadLastSyncTime,
+  loadRemindersSettings,
+  saveRemindersSettings,
+  syncReminders,
+  type RemindersSyncSettings,
+  type SyncResult,
+} from "./reminders-sync";
 
 // ---------------------------------------------------------------------------
 // Types (mirrors contracts, but kept lightweight for the mobile bundle)
@@ -67,7 +80,7 @@ async function clearToken() {
 // App
 // ---------------------------------------------------------------------------
 
-type Screen = "login" | "unlock" | "main";
+type Screen = "login" | "unlock" | "main" | "settings";
 type Tab = "todos" | "habits" | "predictions";
 
 export function App() {
@@ -87,6 +100,19 @@ export function App() {
   const [vaultVersion, setVaultVersion] = useState(0);
   const [data, setData] = useState<VaultPayload | null>(null);
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
+
+  // Apple Reminders sync state
+  const [remindersSettings, setRemindersSettings] = useState<RemindersSyncSettings>({
+    enabled: false,
+    listId: null,
+    listName: null,
+    direction: "bidirectional",
+  });
+  const [reminderLists, setReminderLists] = useState<ReminderList[]>([]);
+  const [remindersSyncBusy, setRemindersSyncBusy] = useState(false);
+  const [remindersSyncResult, setRemindersSyncResult] = useState<SyncResult | null>(null);
+  const [remindersLastSync, setRemindersLastSync] = useState<string | null>(null);
+  const [remindersAvailable] = useState(() => isAppleRemindersAvailable());
 
   // Today's date for habit checks
   const today = new Date().toISOString().slice(0, 10);
@@ -110,6 +136,16 @@ export function App() {
         await clearToken();
         setAccessToken(null);
       }
+    })();
+  }, []);
+
+  // Load Apple Reminders settings on mount
+  useEffect(() => {
+    void (async () => {
+      const settings = await loadRemindersSettings();
+      setRemindersSettings(settings);
+      const lastSync = await loadLastSyncTime();
+      setRemindersLastSync(lastSync);
     })();
   }, []);
 
@@ -240,6 +276,81 @@ export function App() {
     setScreen("login");
   };
 
+  // ── Apple Reminders handlers ──
+
+  const handleConnectReminders = async () => {
+    setRemindersSyncBusy(true);
+    setRemindersSyncResult(null);
+    try {
+      const { granted } = await AppleReminders.requestAccess();
+      if (!granted) {
+        setRemindersSyncResult({
+          imported: 0, exported: 0, updated: 0, deleted: 0,
+          errors: ["Permission denied. Enable Reminders access in Settings."],
+        });
+        setRemindersSyncBusy(false);
+        return;
+      }
+      const { lists } = await AppleReminders.getLists();
+      setReminderLists(lists);
+    } catch (err) {
+      setRemindersSyncResult({
+        imported: 0, exported: 0, updated: 0, deleted: 0,
+        errors: [err instanceof Error ? err.message : "Failed to connect"],
+      });
+    } finally {
+      setRemindersSyncBusy(false);
+    }
+  };
+
+  const handleSelectReminderList = async (listId: string, listName: string) => {
+    const updated: RemindersSyncSettings = {
+      ...remindersSettings,
+      enabled: true,
+      listId,
+      listName,
+    };
+    setRemindersSettings(updated);
+    await saveRemindersSettings(updated);
+  };
+
+  const handleChangeDirection = async (direction: RemindersSyncSettings["direction"]) => {
+    const updated = { ...remindersSettings, direction };
+    setRemindersSettings(updated);
+    await saveRemindersSettings(updated);
+  };
+
+  const handleSyncReminders = async () => {
+    if (!data || !remindersSettings.enabled || !remindersSettings.listId) return;
+    setRemindersSyncBusy(true);
+    setRemindersSyncResult(null);
+    try {
+      const { todos: updatedTodos, result } = await syncReminders(
+        data.todos as any,
+        remindersSettings,
+      );
+      setData({ ...data, todos: updatedTodos as any, updatedAt: new Date().toISOString() });
+      setRemindersSyncResult(result);
+      const lastSync = await loadLastSyncTime();
+      setRemindersLastSync(lastSync);
+    } catch (err) {
+      setRemindersSyncResult({
+        imported: 0, exported: 0, updated: 0, deleted: 0,
+        errors: [err instanceof Error ? err.message : "Sync failed"],
+      });
+    } finally {
+      setRemindersSyncBusy(false);
+    }
+  };
+
+  const handleDisconnectReminders = async () => {
+    await clearRemindersSync();
+    setRemindersSettings({ enabled: false, listId: null, listName: null, direction: "bidirectional" });
+    setReminderLists([]);
+    setRemindersSyncResult(null);
+    setRemindersLastSync(null);
+  };
+
   const toggleTodo = (todoId: string) => {
     if (!data) return;
     setData({
@@ -329,6 +440,164 @@ export function App() {
     );
   }
 
+  // ── Settings screen ──
+  if (screen === "settings") {
+    return (
+      <div className="screen settings-screen">
+        <header className="app-header">
+          <div className="header-left">
+            <button className="btn-icon" onClick={() => setScreen("main")} title="Back">
+              &#x2190;
+            </button>
+            <h1>Settings</h1>
+          </div>
+        </header>
+
+        <div className="content settings-content">
+          {/* Apple Reminders Section */}
+          <section className="settings-section">
+            <h2>Apple Reminders</h2>
+            {!remindersAvailable && (
+              <p className="settings-note">
+                Apple Reminders sync is only available on iOS devices.
+              </p>
+            )}
+
+            {remindersAvailable && !remindersSettings.enabled && reminderLists.length === 0 && (
+              <div className="settings-card">
+                <p className="settings-desc">
+                  Connect Apple Reminders to sync your todos bidirectionally.
+                  Changes in either app will be mirrored to the other.
+                </p>
+                <button
+                  className="btn-primary"
+                  onClick={() => void handleConnectReminders()}
+                  disabled={remindersSyncBusy}
+                >
+                  {remindersSyncBusy ? "Connecting..." : "Connect Apple Reminders"}
+                </button>
+              </div>
+            )}
+
+            {remindersAvailable && !remindersSettings.enabled && reminderLists.length > 0 && (
+              <div className="settings-card">
+                <p className="settings-desc">Select a Reminders list to sync with:</p>
+                <div className="list-picker">
+                  {reminderLists.map((list) => (
+                    <button
+                      key={list.id}
+                      className="list-picker-item"
+                      onClick={() => void handleSelectReminderList(list.id, list.title)}
+                    >
+                      {list.title}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {remindersSettings.enabled && (
+              <div className="settings-card">
+                <div className="settings-row">
+                  <span className="settings-label">Connected list</span>
+                  <span className="settings-value">{remindersSettings.listName}</span>
+                </div>
+
+                <div className="settings-row">
+                  <span className="settings-label">Sync direction</span>
+                  <select
+                    className="settings-select"
+                    value={remindersSettings.direction}
+                    onChange={(e) =>
+                      void handleChangeDirection(e.target.value as RemindersSyncSettings["direction"])
+                    }
+                  >
+                    <option value="bidirectional">Bidirectional</option>
+                    <option value="import">Import only (Reminders → SlayTheList)</option>
+                    <option value="export">Export only (SlayTheList → Reminders)</option>
+                  </select>
+                </div>
+
+                {remindersLastSync && (
+                  <div className="settings-row">
+                    <span className="settings-label">Last synced</span>
+                    <span className="settings-value">
+                      {new Date(remindersLastSync).toLocaleString()}
+                    </span>
+                  </div>
+                )}
+
+                <button
+                  className="btn-primary"
+                  onClick={() => void handleSyncReminders()}
+                  disabled={remindersSyncBusy || !data}
+                  style={{ marginTop: "0.75rem" }}
+                >
+                  {remindersSyncBusy ? "Syncing..." : "Sync Now"}
+                </button>
+
+                {remindersSyncResult && (
+                  <div className="sync-result">
+                    {remindersSyncResult.imported > 0 && (
+                      <span className="sync-stat">+{remindersSyncResult.imported} imported</span>
+                    )}
+                    {remindersSyncResult.exported > 0 && (
+                      <span className="sync-stat">+{remindersSyncResult.exported} exported</span>
+                    )}
+                    {remindersSyncResult.updated > 0 && (
+                      <span className="sync-stat">{remindersSyncResult.updated} updated</span>
+                    )}
+                    {remindersSyncResult.deleted > 0 && (
+                      <span className="sync-stat">{remindersSyncResult.deleted} deleted</span>
+                    )}
+                    {remindersSyncResult.imported === 0 &&
+                      remindersSyncResult.exported === 0 &&
+                      remindersSyncResult.updated === 0 &&
+                      remindersSyncResult.deleted === 0 &&
+                      remindersSyncResult.errors.length === 0 && (
+                        <span className="sync-stat">Everything up to date</span>
+                      )}
+                    {remindersSyncResult.errors.map((err, i) => (
+                      <p key={i} className="error" style={{ marginTop: "0.5rem" }}>
+                        {err}
+                      </p>
+                    ))}
+                  </div>
+                )}
+
+                <button
+                  className="btn-link"
+                  onClick={() => void handleDisconnectReminders()}
+                  style={{ marginTop: "1rem" }}
+                >
+                  Disconnect Apple Reminders
+                </button>
+              </div>
+            )}
+          </section>
+
+          {/* Account Section */}
+          <section className="settings-section">
+            <h2>Account</h2>
+            <div className="settings-card">
+              <div className="settings-row">
+                <span className="settings-label">Signed in as</span>
+                <span className="settings-value">@{username}</span>
+              </div>
+              <button
+                className="btn-link"
+                onClick={() => void handleLogout()}
+                style={{ marginTop: "0.5rem" }}
+              >
+                Sign out
+              </button>
+            </div>
+          </section>
+        </div>
+      </div>
+    );
+  }
+
   // ── Main screen ──
   const activeTodos = data?.todos.filter((t) => t.status === "active") ?? [];
   const doneTodos = data?.todos.filter((t) => t.status === "done") ?? [];
@@ -350,6 +619,9 @@ export function App() {
           </button>
           <button className="btn-icon" onClick={() => void handleSync()} disabled={busy} title="Push to vault">
             &#x2191;
+          </button>
+          <button className="btn-icon" onClick={() => setScreen("settings")} title="Settings">
+            &#x2699;
           </button>
           <button className="btn-icon" onClick={() => void handleLogout()} title="Sign out">
             &#x2715;

@@ -1,0 +1,7 @@
+<!-- Add this key to ios/App/App/Info.plist to explain why the app needs Reminders access -->
+<key>NSRemindersUsageDescription</key>
+<string>SlayTheList syncs your todos with Apple Reminders so you can manage tasks from either app.</string>
+
+<!-- For full access on iOS 17+ -->
+<key>NSRemindersFullAccessUsageDescription</key>
+<string>SlayTheList syncs your todos with Apple Reminders so you can manage tasks from either app.</string>
