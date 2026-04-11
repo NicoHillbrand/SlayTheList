@@ -777,6 +777,7 @@ export default function Page() {
   const [resize, setResize] = useState<ResizeState | null>(null);
   const moveRef = useRef<MoveState | null>(null);
   const resizeRef = useRef<ResizeState | null>(null);
+  const pendingZoneUpdatesRef = useRef<Set<string>>(new Set());
   const [selectedZoneIds, setSelectedZoneIds] = useState<string[]>([]);
   const [editingNumeric, setEditingNumeric] = useState<{ zoneId: string; field: string; value: string } | null>(null);
   const [isCanvasFullscreen, setIsCanvasFullscreen] = useState(false);
@@ -1010,15 +1011,22 @@ export default function Page() {
       setRewardedTodoIds(fetchedGoldState.rewardedTodoIds);
       setZones((prev) => {
         const items = zoneData.items;
-        const activeId = moveRef.current?.zoneId ?? resizeRef.current?.zoneId;
-        if (!activeId) return items;
-        const localZone = prev.find((z) => z.id === activeId);
-        if (!localZone) return items;
-        return items.map((z) =>
-          z.id === activeId
-            ? { ...z, x: localZone.x, y: localZone.y, width: localZone.width, height: localZone.height }
-            : z,
-        );
+        const dragId = moveRef.current?.zoneId ?? resizeRef.current?.zoneId;
+        const pending = pendingZoneUpdatesRef.current;
+        if (!dragId && pending.size === 0) return items;
+        return items.map((z) => {
+          if (z.id === dragId) {
+            const localZone = prev.find((lz) => lz.id === dragId);
+            return localZone
+              ? { ...z, x: localZone.x, y: localZone.y, width: localZone.width, height: localZone.height }
+              : z;
+          }
+          if (pending.has(z.id)) {
+            const localZone = prev.find((lz) => lz.id === z.id);
+            return localZone ?? z;
+          }
+          return z;
+        });
       });
       setOverlayState(overlayData);
       if (showLoader) setGameStates(overlayData.gameStates ?? []);
@@ -2005,8 +2013,9 @@ export default function Page() {
 
   function patchZone(zoneId: string, patch: Partial<LockZone>) {
     setZones((prev) => prev.map((z) => z.id === zoneId ? { ...z, ...patch } : z));
+    pendingZoneUpdatesRef.current.add(zoneId);
     void runAction(async () => {
-      await updateZone(zoneId, patch);
+      try { await updateZone(zoneId, patch); } finally { pendingZoneUpdatesRef.current.delete(zoneId); }
     });
   }
 
@@ -2030,8 +2039,9 @@ export default function Page() {
     setZones((previous) =>
       previous.map((zone) => (zone.id === zoneId ? { ...zone, unlockMode } : zone)),
     );
+    pendingZoneUpdatesRef.current.add(zoneId);
     void runAction(async () => {
-      await updateZone(zoneId, { unlockMode });
+      try { await updateZone(zoneId, { unlockMode }); } finally { pendingZoneUpdatesRef.current.delete(zoneId); }
     });
   }
 
@@ -2039,8 +2049,9 @@ export default function Page() {
     setZones((previous) =>
       previous.map((zone) => (zone.id === zoneId ? { ...zone, cooldownEnabled, cooldownSeconds } : zone)),
     );
+    pendingZoneUpdatesRef.current.add(zoneId);
     void runAction(async () => {
-      await updateZone(zoneId, { cooldownEnabled, cooldownSeconds });
+      try { await updateZone(zoneId, { cooldownEnabled, cooldownSeconds }); } finally { pendingZoneUpdatesRef.current.delete(zoneId); }
     });
   }
 
@@ -5062,9 +5073,12 @@ export default function Page() {
                           e.stopPropagation();
                           const lock = e.target.value === "locked";
                           setZones((prev) => prev.map((z) => z.id === zone.id ? { ...z, locked: lock } : z));
+                          pendingZoneUpdatesRef.current.add(zone.id);
                           void runAction(async () => {
-                            await updateZone(zone.id, { locked: lock });
-                            await refresh();
+                            try {
+                              await updateZone(zone.id, { locked: lock });
+                              await refresh();
+                            } finally { pendingZoneUpdatesRef.current.delete(zone.id); }
                           });
                         }}
                         onClick={(e) => e.stopPropagation()}
