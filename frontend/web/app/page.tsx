@@ -775,7 +775,10 @@ export default function Page() {
   const [drag, setDrag] = useState<DragState | null>(null);
   const [move, setMove] = useState<MoveState | null>(null);
   const [resize, setResize] = useState<ResizeState | null>(null);
+  const moveRef = useRef<MoveState | null>(null);
+  const resizeRef = useRef<ResizeState | null>(null);
   const [selectedZoneIds, setSelectedZoneIds] = useState<string[]>([]);
+  const [editingNumeric, setEditingNumeric] = useState<{ zoneId: string; field: string; value: string } | null>(null);
   const [isCanvasFullscreen, setIsCanvasFullscreen] = useState(false);
   const [activeTab, setActiveTab] = useState<ViewTab>("goals");
   const [socialSettingsOpen, setSocialSettingsOpen] = useState(false);
@@ -1005,7 +1008,18 @@ export default function Page() {
       setBlocks(blockData.items);
       setGold(fetchedGoldState.gold);
       setRewardedTodoIds(fetchedGoldState.rewardedTodoIds);
-      setZones(zoneData.items);
+      setZones((prev) => {
+        const items = zoneData.items;
+        const activeId = moveRef.current?.zoneId ?? resizeRef.current?.zoneId;
+        if (!activeId) return items;
+        const localZone = prev.find((z) => z.id === activeId);
+        if (!localZone) return items;
+        return items.map((z) =>
+          z.id === activeId
+            ? { ...z, x: localZone.x, y: localZone.y, width: localZone.width, height: localZone.height }
+            : z,
+        );
+      });
       setOverlayState(overlayData);
       if (showLoader) setGameStates(overlayData.gameStates ?? []);
       setLoadState("idle");
@@ -2246,6 +2260,7 @@ export default function Page() {
 
   function onTemplatePointerMove(event: PointerEvent<HTMLDivElement>) {
     if (resize) {
+      event.stopPropagation();
       const point = getRelativePoint(event);
       const dx = point.x - resize.startPointerX;
       const dy = point.y - resize.startPointerY;
@@ -2279,6 +2294,7 @@ export default function Page() {
       return;
     }
     if (move) {
+      event.stopPropagation();
       const point = getRelativePoint(event);
       const dx = point.x - move.startPointerX;
       const dy = point.y - move.startPointerY;
@@ -2312,6 +2328,7 @@ export default function Page() {
     if (resize) {
       const resizedZone = zones.find((zone) => zone.id === resize.zoneId);
       setResize(null);
+      resizeRef.current = null;
       if (resizedZone) {
         patchZone(resizedZone.id, { x: resizedZone.x, y: resizedZone.y, width: resizedZone.width, height: resizedZone.height });
       }
@@ -2320,6 +2337,7 @@ export default function Page() {
     if (move) {
       const movedZone = zones.find((zone) => zone.id === move.zoneId);
       setMove(null);
+      moveRef.current = null;
       if (movedZone) {
         patchZone(movedZone.id, { x: movedZone.x, y: movedZone.y });
       }
@@ -2348,13 +2366,15 @@ export default function Page() {
     selectZone(zone.id, multiSelect);
     if (multiSelect) return;
     const point = getRelativePointFromClient(event.clientX, event.clientY);
-    setMove({
+    const moveState = {
       zoneId: zone.id,
       startPointerX: point.x,
       startPointerY: point.y,
       startZoneX: zone.x,
       startZoneY: zone.y,
-    });
+    };
+    setMove(moveState);
+    moveRef.current = moveState;
     event.currentTarget.setPointerCapture(event.pointerId);
   }
 
@@ -2381,7 +2401,7 @@ export default function Page() {
     event.stopPropagation();
     event.preventDefault();
     const point = getRelativePointFromClient(event.clientX, event.clientY);
-    setResize({
+    const resizeState = {
       zoneId: zone.id,
       edge,
       startPointerX: point.x,
@@ -2390,7 +2410,9 @@ export default function Page() {
       startY: zone.y,
       startWidth: zone.width,
       startHeight: zone.height,
-    });
+    };
+    setResize(resizeState);
+    resizeRef.current = resizeState;
     selectZone(zone.id, false);
     event.currentTarget.setPointerCapture(event.pointerId);
   }
@@ -4821,6 +4843,7 @@ export default function Page() {
                 "linear-gradient(180deg, rgba(17,24,39,0.7) 0%, rgba(11,18,32,0.9) 100%)",
               overflow: "hidden",
               marginBottom: isCanvasFullscreen ? 0 : "1rem",
+              touchAction: "none",
             }}
           >
             {canvasZones.map((zone) => {
@@ -5083,12 +5106,15 @@ export default function Page() {
                                 type="text"
                                 inputMode="numeric"
                                 pattern="[0-9]*"
-                                value={zone.cooldownSeconds / 60}
-                                onChange={(e) => {
-                                  const v = Number(e.target.value);
-                                  if (Number.isFinite(v) && v >= 0) setZones((prev) => prev.map((z) => z.id === zone.id ? { ...z, cooldownSeconds: v * 60 } : z));
+                                value={editingNumeric?.zoneId === zone.id && editingNumeric.field === "cooldown" ? editingNumeric.value : String(zone.cooldownSeconds / 60)}
+                                onFocus={() => setEditingNumeric({ zoneId: zone.id, field: "cooldown", value: String(zone.cooldownSeconds / 60) })}
+                                onChange={(e) => setEditingNumeric({ zoneId: zone.id, field: "cooldown", value: e.target.value })}
+                                onBlur={() => {
+                                  const v = Number(editingNumeric?.value);
+                                  const minutes = Number.isFinite(v) && v >= 1 ? v : zone.cooldownSeconds / 60;
+                                  setEditingNumeric(null);
+                                  setZoneCooldown(zone.id, zone.cooldownEnabled, Math.max(60, minutes * 60));
                                 }}
-                                onBlur={() => setZoneCooldown(zone.id, zone.cooldownEnabled, Math.max(60, zone.cooldownSeconds))}
                                 style={{ width: 50 }}
                               />
                             </label>
@@ -5099,12 +5125,15 @@ export default function Page() {
                               type="text"
                               inputMode="numeric"
                               pattern="[0-9]*"
-                              value={zone.goldCost}
-                              onChange={(e) => {
-                                const v = Number(e.target.value);
-                                if (Number.isFinite(v) && v >= 0) setZones((prev) => prev.map((z) => z.id === zone.id ? { ...z, goldCost: v } : z));
+                              value={editingNumeric?.zoneId === zone.id && editingNumeric.field === "goldCost" ? editingNumeric.value : String(zone.goldCost)}
+                              onFocus={() => setEditingNumeric({ zoneId: zone.id, field: "goldCost", value: String(zone.goldCost) })}
+                              onChange={(e) => setEditingNumeric({ zoneId: zone.id, field: "goldCost", value: e.target.value })}
+                              onBlur={() => {
+                                const v = Number(editingNumeric?.value);
+                                const cost = Number.isFinite(v) && v >= 1 ? v : zone.goldCost;
+                                setEditingNumeric(null);
+                                patchZone(zone.id, { goldCost: cost });
                               }}
-                              onBlur={() => patchZone(zone.id, { goldCost: Math.max(1, zone.goldCost) })}
                               style={{ width: 50 }}
                             />
                           </label>
