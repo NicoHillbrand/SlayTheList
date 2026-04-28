@@ -30,3 +30,37 @@ desktop/app/dist*/
 
 # Claude Code local settings (user-specific permissions)
 .claude/settings.local.json
+
+# Asset packs we have on disk but aren't using yet — keep them locally,
+# don't track in git. Re-include specific files via "!" rules below as we
+# start using them. To re-track a whole pack: drop its line here.
+frontend/web/public/assets/more kenney/
+frontend/web/public/assets/Kyrise's 16x16 RPG Icon Pack - V1.3/
+frontend/web/public/assets/Kyrises_16x16_RPG_Icon_Pack_V1.3.zip
+frontend/web/public/assets/kenney_nature-kit.zip
+frontend/web/public/assets/aigen/Pixel Crawler - Free Pack 2.0.4.zip
+frontend/web/public/assets/kenney/buildings/
+frontend/web/public/assets/kenney/farm/
+frontend/web/public/assets/kenney/landscape/Spritesheet/
+frontend/web/public/assets/kenney_nature-kit/Models/
+frontend/web/public/assets/kenney_nature-kit/Side/
+frontend/web/public/assets/kenney_nature-kit/Sample.png
+
+# Within partially-used packs, ignore the bulk and re-include only what
+# sprites.ts references. Add another "!" line when you reference a new file.
+frontend/web/public/assets/kenney/landscape/PNG/*
+!frontend/web/public/assets/kenney/landscape/PNG/landscapeTiles_022.png
+!frontend/web/public/assets/kenney/landscape/PNG/landscapeTiles_067.png
+
+frontend/web/public/assets/kenney_nature-kit/Isometric/*
+!frontend/web/public/assets/kenney_nature-kit/Isometric/tree_default_NE.png
+!frontend/web/public/assets/kenney_nature-kit/Isometric/tree_pineDefaultA_NE.png
+!frontend/web/public/assets/kenney_nature-kit/Isometric/tree_simple_NE.png
+!frontend/web/public/assets/kenney_nature-kit/Isometric/plant_bushDetailed_NE.png
+!frontend/web/public/assets/kenney_nature-kit/Isometric/flower_redA_NE.png
+!frontend/web/public/assets/kenney_nature-kit/Isometric/flower_yellowB_NE.png
+!frontend/web/public/assets/kenney_nature-kit/Isometric/flower_purpleC_NE.png
+!frontend/web/public/assets/kenney_nature-kit/Isometric/mushroom_red_NE.png
+!frontend/web/public/assets/kenney_nature-kit/Isometric/mushroom_tanGroup_NE.png
+!frontend/web/public/assets/kenney_nature-kit/Isometric/stone_largeA_NE.png
+!frontend/web/public/assets/kenney_nature-kit/Isometric/grass_large_NE.png
