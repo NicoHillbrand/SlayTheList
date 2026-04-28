@@ -58,6 +58,17 @@ export const predictionSchema = z.object({
 });
 export type Prediction = z.infer<typeof predictionSchema>;
 
+export const walkthroughSchema = z.object({
+  id: z.string(),
+  date: z.string(), // YYYY-MM-DD
+  plan: z.string(),
+  divergences: z.string(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+  visibility: itemVisibilitySchema.optional(),
+});
+export type Walkthrough = z.infer<typeof walkthroughSchema>;
+
 export const reflectionEntrySchema = z.object({
   id: z.string(),
   date: z.string(),
@@ -85,6 +96,7 @@ export const accountabilityStateSchema = z.object({
   habits: z.array(habitSchema),
   predictions: z.array(predictionSchema),
   reflections: z.array(reflectionEntrySchema),
+  walkthroughs: z.array(walkthroughSchema).optional(),
 });
 export type AccountabilityState = z.infer<typeof accountabilityStateSchema>;
 
@@ -122,6 +134,7 @@ export const socialSettingsSchema = z.object({
   habitsVisibility: socialVisibilitySchema.default("friends"),
   predictionsVisibility: socialVisibilitySchema.default("friends"),
   goldVisibility: socialVisibilitySchema.default("friends"),
+  walkthroughsVisibility: socialVisibilitySchema.default("private"),
 });
 export type SocialSettings = z.infer<typeof socialSettingsSchema>;
 
@@ -185,8 +198,35 @@ export const sharedProfileSchema = z.object({
     canView: z.boolean(),
     state: goldStateSchema.nullable(),
   }),
+  encouragedEntryIds: z.array(z.string()).optional(),
+  encouragementsRemainingToday: z.number().optional(),
 });
 export type SharedProfile = z.infer<typeof sharedProfileSchema>;
+
+export const encouragementKindSchema = z.enum(["encourage", "celebrate"]);
+export type EncouragementKind = z.infer<typeof encouragementKindSchema>;
+
+export const encouragementEntryTypeSchema = z.enum(["habit", "prediction"]);
+export type EncouragementEntryType = z.infer<typeof encouragementEntryTypeSchema>;
+
+export const encouragementSchema = z.object({
+  id: z.string(),
+  senderUserId: z.string(),
+  senderUsername: z.string(),
+  targetUserId: z.string(),
+  entryType: encouragementEntryTypeSchema,
+  entryId: z.string(),
+  kind: encouragementKindSchema,
+  createdAt: z.string(),
+});
+export type Encouragement = z.infer<typeof encouragementSchema>;
+
+export const encouragementResponseSchema = z.object({
+  encouragement: encouragementSchema,
+  senderGoldAwarded: z.number(),
+  remainingToday: z.number(),
+});
+export type EncouragementResponse = z.infer<typeof encouragementResponseSchema>;
 
 export const cloudAuthProviderSchema = z.string().min(1).max(64);
 export type CloudAuthProvider = z.infer<typeof cloudAuthProviderSchema>;
@@ -203,6 +243,7 @@ export const socialSnapshotSchema = z.object({
   settings: socialSettingsSchema,
   habits: z.array(habitSchema),
   predictions: z.array(predictionSchema),
+  walkthroughs: z.array(walkthroughSchema).optional(),
   gold: goldStateSchema,
   sourceUpdatedAt: z.string(),
   syncedAt: z.string().optional(),

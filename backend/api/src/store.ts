@@ -22,6 +22,7 @@ import type {
   Progression,
   ReflectionEntry,
   Todo,
+  Walkthrough,
 } from "@slaythelist/contracts";
 
 type TodoRow = {
@@ -74,6 +75,7 @@ type AccountabilityStateRow = {
   habits_json: string;
   predictions_json: string;
   reflections_json: string;
+  walkthroughs_json?: string;
   updated_at: string;
 };
 
@@ -458,14 +460,14 @@ export function getAccountabilityState(userId?: string): AccountabilityState {
   const row = userId
     ? (db
         .prepare(
-          `SELECT user_id, habits_json, predictions_json, reflections_json, updated_at
+          `SELECT user_id, habits_json, predictions_json, reflections_json, walkthroughs_json, updated_at
            FROM user_accountability_state
            WHERE user_id = ?`,
         )
         .get(userId) as AccountabilityStateRow | undefined)
     : (db
         .prepare(
-          "SELECT habits_json, predictions_json, reflections_json, updated_at FROM accountability_state WHERE id = 1",
+          "SELECT habits_json, predictions_json, reflections_json, walkthroughs_json, updated_at FROM accountability_state WHERE id = 1",
         )
         .get() as AccountabilityStateRow | undefined);
   if (!row) {
@@ -473,42 +475,48 @@ export function getAccountabilityState(userId?: string): AccountabilityState {
       habits: [],
       predictions: [],
       reflections: [],
+      walkthroughs: [],
     };
   }
   return {
     habits: safeParseJsonArray<Habit>(row.habits_json),
     predictions: safeParseJsonArray<Prediction>(row.predictions_json),
     reflections: safeParseJsonArray<ReflectionEntry>(row.reflections_json),
+    walkthroughs: safeParseJsonArray<Walkthrough>(row.walkthroughs_json ?? "[]"),
   };
 }
 
 export function saveAccountabilityState(state: AccountabilityState, userId?: string): AccountabilityState {
   const updatedAt = new Date().toISOString();
+  const walkthroughsJson = JSON.stringify(state.walkthroughs ?? []);
   if (userId) {
     db.prepare(
-      `INSERT INTO user_accountability_state (user_id, habits_json, predictions_json, reflections_json, updated_at)
-       VALUES (?, ?, ?, ?, ?)
+      `INSERT INTO user_accountability_state (user_id, habits_json, predictions_json, reflections_json, walkthroughs_json, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(user_id) DO UPDATE SET
          habits_json = excluded.habits_json,
          predictions_json = excluded.predictions_json,
          reflections_json = excluded.reflections_json,
+         walkthroughs_json = excluded.walkthroughs_json,
          updated_at = excluded.updated_at`,
     ).run(
       userId,
       JSON.stringify(state.habits),
       JSON.stringify(state.predictions),
       JSON.stringify(state.reflections),
+      walkthroughsJson,
       updatedAt,
     );
   } else {
     db.prepare(
       `UPDATE accountability_state
-       SET habits_json = ?, predictions_json = ?, reflections_json = ?, updated_at = ?
+       SET habits_json = ?, predictions_json = ?, reflections_json = ?, walkthroughs_json = ?, updated_at = ?
        WHERE id = 1`,
     ).run(
       JSON.stringify(state.habits),
       JSON.stringify(state.predictions),
       JSON.stringify(state.reflections),
+      walkthroughsJson,
       updatedAt,
     );
   }

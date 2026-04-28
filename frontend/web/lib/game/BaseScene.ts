@@ -12,7 +12,7 @@ import {
 } from "./iso";
 import { getCatalogItem, type CatalogItem } from "./catalog";
 import { renderBuilding } from "./renderers";
-import { SPRITE_ASSETS, spriteKey, hasSprite } from "./sprites";
+import { SPRITE_ASSETS, spriteKey, hasSprite, GROUND_TILES, groundTileKey } from "./sprites";
 import type { BaseCurrencyType, BaseInventory, BaseState, BuildingPlacement, Progression } from "@slaythelist/contracts";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8788";
@@ -65,6 +65,9 @@ export class BaseScene extends Phaser.Scene {
   preload() {
     for (const [itemId, asset] of Object.entries(SPRITE_ASSETS)) {
       this.load.image(spriteKey(itemId), `/assets/${asset.path}`);
+    }
+    for (const [name, path] of Object.entries(GROUND_TILES)) {
+      this.load.image(groundTileKey(name as keyof typeof GROUND_TILES), `/assets/${path}`);
     }
   }
 
@@ -193,86 +196,40 @@ export class BaseScene extends Phaser.Scene {
   }
 
   private drawGroundTiles() {
-    const groundLayer = this.add.graphics();
-    groundLayer.setDepth(-1);
-
-    // Base grass colors with natural variation
-    const grassColors = [0x5a8f47, 0x4d7f3a, 0x52873e, 0x478235, 0x3f7530];
-
-    for (let row = 0; row < GRID_ROWS; row++) {
-      for (let col = 0; col < GRID_COLS; col++) {
-        const { x, y } = gridToScreen(col, row);
-        const hw = TILE_WIDTH / 2;
-        const hh = TILE_HEIGHT / 2;
-
-        // Pick a base color with seeded randomness
-        const r = this.tileRand(col, row);
-        const baseColor = grassColors[Math.floor(r * grassColors.length)];
-
-        // Fill the diamond
-        groundLayer.fillStyle(baseColor, 1);
-        groundLayer.beginPath();
-        groundLayer.moveTo(x, y - hh);
-        groundLayer.lineTo(x + hw, y);
-        groundLayer.lineTo(x, y + hh);
-        groundLayer.lineTo(x - hw, y);
-        groundLayer.closePath();
-        groundLayer.fillPath();
-
-        // Add subtle lighter patches for texture
-        const patchCount = 2 + Math.floor(this.tileRand(col, row, 1) * 3);
-        for (let p = 0; p < patchCount; p++) {
-          const pr = this.tileRand(col, row, 10 + p);
-          const pr2 = this.tileRand(col, row, 20 + p);
-          // Random position within the diamond
-          const t1 = pr * 0.6 + 0.2;
-          const t2 = pr2 * 0.6 + 0.2;
-          const px = x + (t1 - 0.5) * hw * 1.2;
-          const py = y + (t2 - 0.5) * hh * 1.2;
-          const patchSize = 3 + pr * 5;
-          const lighter = this.tileRand(col, row, 30 + p) > 0.5;
-          groundLayer.fillStyle(lighter ? 0x6aa852 : 0x3d6b30, 0.3);
-          groundLayer.fillEllipse(px, py, patchSize, patchSize * 0.6);
-        }
-
-        // Grass blade details — small lines pointing up
-        const bladeCount = 3 + Math.floor(this.tileRand(col, row, 2) * 4);
-        groundLayer.lineStyle(1, 0x6aad52, 0.4);
-        for (let b = 0; b < bladeCount; b++) {
-          const br = this.tileRand(col, row, 40 + b);
-          const br2 = this.tileRand(col, row, 50 + b);
-          const bx = x + (br - 0.5) * hw * 0.8;
-          const by = y + (br2 - 0.5) * hh * 0.8;
-          const blen = 2 + br * 3;
-          const bangle = -0.3 + br2 * 0.6;
-          groundLayer.lineBetween(bx, by, bx + Math.sin(bangle) * blen, by - blen);
-        }
-
-        // Very subtle grid edge (barely visible)
-        groundLayer.lineStyle(1, 0x3a6028, 0.15);
-        groundLayer.beginPath();
-        groundLayer.moveTo(x, y - hh);
-        groundLayer.lineTo(x + hw, y);
-        groundLayer.lineTo(x, y + hh);
-        groundLayer.lineTo(x - hw, y);
-        groundLayer.closePath();
-        groundLayer.strokePath();
-      }
-    }
-
-    // Add some random edge grass tufts outside the grid for a more natural look
+    // Soft outer grass halo behind the grid (kept from old procedural look).
     const edgeGrass = this.add.graphics();
-    edgeGrass.setDepth(-2);
-
-    // Outer grass area (soft green surrounding the grid)
+    edgeGrass.setDepth(-2000);
+    const center = gridToScreen(GRID_COLS / 2, GRID_ROWS / 2);
     for (let i = 0; i < 40; i++) {
       const angle = (i / 40) * Math.PI * 2;
-      const center = gridToScreen(GRID_COLS / 2, GRID_ROWS / 2);
       const dist = 340 + Math.sin(i * 3.7) * 40;
       const ex = center.x + Math.cos(angle) * dist;
       const ey = center.y + Math.sin(angle) * dist * 0.5;
       edgeGrass.fillStyle(0x3d6b30, 0.15);
       edgeGrass.fillEllipse(ex, ey, 30 + Math.sin(i * 2.3) * 15, 12);
+    }
+
+    // Source tiles are 132x83 with the 132x66 diamond face on top and a
+    // ~17px depth strip below. Display width matches TILE_WIDTH (with a 1px
+    // overlap to hide seams); height is proportional. The diamond face center
+    // sits 8.5/83 of the source above the sprite center, which after scaling
+    // means the sprite must be drawn slightly below the tile center to align.
+    const displayW = TILE_WIDTH + 1;
+    const displayH = displayW * (83 / 132);
+    const offsetY = displayW * (8.5 / 132);
+
+    for (let row = 0; row < GRID_ROWS; row++) {
+      for (let col = 0; col < GRID_COLS; col++) {
+        const { x, y } = gridToScreen(col, row);
+        const r = this.tileRand(col, row);
+        const tileName: keyof typeof GROUND_TILES = r > 0.85 ? "grassLight" : "grass";
+
+        const img = this.add.image(x, y + offsetY, groundTileKey(tileName));
+        img.setDisplaySize(displayW, displayH);
+        // Ground tiles draw far below buildings; per-tile depth keeps the
+        // depth strip of back tiles occluded by the diamond face of front ones.
+        img.setDepth(-1000 + isoDepth(col, row));
+      }
     }
   }
 

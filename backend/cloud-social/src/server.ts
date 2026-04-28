@@ -5,6 +5,9 @@ import {
   cloudDeviceStartRequestSchema,
   cloudUsernameUpdateRequestSchema,
   cloudSyncResponseSchema,
+  encouragementEntryTypeSchema,
+  encouragementKindSchema,
+  encouragementResponseSchema,
   friendRequestSchema,
   friendSearchResultSchema,
   sharedProfileSchema,
@@ -36,6 +39,7 @@ import {
   searchUsers,
   startDeviceAuthorization,
   updateCloudUsername,
+  createEncouragement,
 } from "./store.js";
 import { getVaultVersion, pullVault, pushVault } from "./vault-store.js";
 
@@ -291,6 +295,29 @@ app.get("/api/social/users/:username", (req, res) => {
   if (!user) return;
   try {
     ok(res, sharedProfileSchema.parse(getSharedProfile(user.id, req.params.username)));
+  } catch (error) {
+    return badRequest(res, (error as Error).message);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Encouragements
+// ---------------------------------------------------------------------------
+
+app.post("/api/social/encourage", (req, res) => {
+  const user = requireAuth(req as AuthedRequest, res);
+  if (!user) return;
+  const targetUserId = typeof req.body?.targetUserId === "string" ? req.body.targetUserId : "";
+  const entryType = encouragementEntryTypeSchema.safeParse(req.body?.entryType);
+  const entryId = typeof req.body?.entryId === "string" ? req.body.entryId : "";
+  const kind = encouragementKindSchema.safeParse(req.body?.kind);
+  if (!targetUserId || !entryType.success || !entryId || !kind.success) {
+    return badRequest(res, "targetUserId, entryType, entryId, and kind are required");
+  }
+  try {
+    ok(res, encouragementResponseSchema.parse(
+      createEncouragement(user.id, targetUserId, entryType.data, entryId, kind.data),
+    ));
   } catch (error) {
     return badRequest(res, (error as Error).message);
   }

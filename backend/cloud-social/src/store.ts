@@ -3,6 +3,10 @@ import type {
   CloudDevicePollResponse,
   CloudDeviceStartResponse,
   CloudIdentityUser,
+  Encouragement,
+  EncouragementEntryType,
+  EncouragementKind,
+  EncouragementResponse,
   FriendRelationship,
   FriendRequest,
   FriendRequestStatus,
@@ -58,6 +62,7 @@ type SocialSettingsRow = {
   habits_visibility: SocialSettings["habitsVisibility"];
   predictions_visibility: SocialSettings["predictionsVisibility"];
   gold_visibility: SocialSettings["goldVisibility"];
+  walkthroughs_visibility?: SocialSettings["walkthroughsVisibility"];
 };
 
 type SnapshotRow = {
@@ -81,6 +86,7 @@ const DEFAULT_SOCIAL_SETTINGS: SocialSettings = {
   habitsVisibility: "friends",
   predictionsVisibility: "friends",
   goldVisibility: "friends",
+  walkthroughsVisibility: "private",
 };
 
 function toCloudUser(row: UserRow): CloudIdentityUser {
@@ -364,7 +370,7 @@ export function getSocialSettings(userId: string): SocialSettings {
   ensureUserSocialRows(userId);
   const row = db
     .prepare(
-      `SELECT habits_visibility, predictions_visibility, gold_visibility
+      `SELECT habits_visibility, predictions_visibility, gold_visibility, walkthroughs_visibility
        FROM user_social_settings
        WHERE user_id = ?`,
     )
@@ -374,6 +380,7 @@ export function getSocialSettings(userId: string): SocialSettings {
     habitsVisibility: row.habits_visibility,
     predictionsVisibility: row.predictions_visibility,
     goldVisibility: row.gold_visibility,
+    walkthroughsVisibility: row.walkthroughs_visibility ?? "private",
   };
 }
 
@@ -384,12 +391,14 @@ export function saveSocialSettings(userId: string, settings: SocialSettings) {
      SET habits_visibility = ?,
          predictions_visibility = ?,
          gold_visibility = ?,
+         walkthroughs_visibility = ?,
          updated_at = ?
      WHERE user_id = ?`,
   ).run(
     settings.habitsVisibility,
     settings.predictionsVisibility,
     settings.goldVisibility,
+    settings.walkthroughsVisibility,
     new Date().toISOString(),
     userId,
   );
@@ -640,6 +649,8 @@ export function getSharedProfile(viewerUserId: string, targetUsername: string): 
   const canViewHabits = canViewerSeeSection(settings.habitsVisibility, relationship, viewerUserId);
   const canViewPredictions = canViewerSeeSection(settings.predictionsVisibility, relationship, viewerUserId);
   const canViewGold = canViewerSeeSection(settings.goldVisibility, relationship, viewerUserId);
+  const encouragedEntryIds = getEncouragementEntryIdsByViewer(viewerUserId, target.id);
+  const remainingToday = getEncourementsRemainingToday(viewerUserId);
   return {
     user: toFriendSummary(target),
     relationship,
@@ -659,5 +670,114 @@ export function getSharedProfile(viewerUserId: string, targetUsername: string): 
       canView: canViewGold,
       state: canViewGold ? snapshot.gold : null,
     },
+    encouragedEntryIds,
+    encouragementsRemainingToday: remainingToday,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Encouragements
+// ---------------------------------------------------------------------------
+
+const ENCOURAGEMENTS_PER_DAY = 3;
+const ENCOURAGEMENT_GOLD_REWARD = 2;
+
+type EncouragementRow = {
+  id: string;
+  sender_user_id: string;
+  target_user_id: string;
+  entry_type: string;
+  entry_id: string;
+  kind: string;
+  created_at: string;
+};
+
+function todayDateString(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function getEncouragementCountToday(senderUserId: string): number {
+  const today = todayDateString();
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) as cnt FROM encouragements
+       WHERE sender_user_id = ? AND created_at >= ? || 'T00:00:00.000Z'`,
+    )
+    .get(senderUserId, today) as { cnt: number };
+  return row.cnt;
+}
+
+function getEncourementsRemainingToday(senderUserId: string): number {
+  return Math.max(0, ENCOURAGEMENTS_PER_DAY - getEncouragementCountToday(senderUserId));
+}
+
+function getEncouragementEntryIdsByViewer(viewerUserId: string, targetUserId: string): string[] {
+  const rows = db
+    .prepare(
+      `SELECT entry_id FROM encouragements
+       WHERE sender_user_id = ? AND target_user_id = ?`,
+    )
+    .all(viewerUserId, targetUserId) as Array<{ entry_id: string }>;
+  return rows.map((r) => r.entry_id);
+}
+
+export function createEncouragement(
+  senderUserId: string,
+  targetUserId: string,
+  entryType: EncouragementEntryType,
+  entryId: string,
+  kind: EncouragementKind,
+): EncouragementResponse {
+  if (senderUserId === targetUserId) {
+    throw new Error("cannot encourage your own entries");
+  }
+
+  // Check friendship
+  const relationship = getFriendRelationship(senderUserId, targetUserId);
+  if (relationship !== "friend") {
+    throw new Error("you can only encourage friends");
+  }
+
+  // Check daily cap
+  const remaining = getEncourementsRemainingToday(senderUserId);
+  if (remaining <= 0) {
+    throw new Error("you have used all your encouragements for today");
+  }
+
+  // Check duplicate
+  const existing = db
+    .prepare(
+      `SELECT 1 FROM encouragements
+       WHERE sender_user_id = ? AND target_user_id = ? AND entry_id = ?
+       LIMIT 1`,
+    )
+    .get(senderUserId, targetUserId, entryId) as { 1: number } | undefined;
+  if (existing) {
+    throw new Error("you have already encouraged this entry");
+  }
+
+  const id = randomUUID();
+  const createdAt = new Date().toISOString();
+  const senderUser = getUserRowById(senderUserId);
+  if (!senderUser) throw new Error("sender user not found");
+
+  db.prepare(
+    `INSERT INTO encouragements (id, sender_user_id, target_user_id, entry_type, entry_id, kind, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(id, senderUserId, targetUserId, entryType, entryId, kind, createdAt);
+
+  return {
+    encouragement: {
+      id,
+      senderUserId,
+      senderUsername: senderUser.username,
+      targetUserId,
+      entryType,
+      entryId,
+      kind,
+      createdAt,
+    },
+    senderGoldAwarded: ENCOURAGEMENT_GOLD_REWARD,
+    remainingToday: remaining - 1,
   };
 }

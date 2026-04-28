@@ -1,14 +1,10 @@
-import { app, BrowserWindow, dialog } from "electron";
-import { spawn } from "node:child_process";
-import { createWriteStream } from "node:fs";
-import { mkdir } from "node:fs/promises";
-import net from "node:net";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { setTimeout as delay } from "node:timers/promises";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const { app, BrowserWindow, dialog } = require("electron");
+const { spawn } = require("node:child_process");
+const { createWriteStream } = require("node:fs");
+const { mkdir } = require("node:fs/promises");
+const net = require("node:net");
+const path = require("node:path");
+const { setTimeout: delay } = require("node:timers/promises");
 
 const LOCAL_HOST = "localhost";
 const API_PORT = 8788;

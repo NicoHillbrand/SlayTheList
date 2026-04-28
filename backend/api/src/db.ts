@@ -97,6 +97,7 @@ CREATE TABLE IF NOT EXISTS accountability_state (
   habits_json TEXT NOT NULL DEFAULT '[]',
   predictions_json TEXT NOT NULL DEFAULT '[]',
   reflections_json TEXT NOT NULL DEFAULT '[]',
+  walkthroughs_json TEXT NOT NULL DEFAULT '[]',
   updated_at TEXT NOT NULL
 );
 
@@ -132,6 +133,7 @@ CREATE TABLE IF NOT EXISTS user_accountability_state (
   habits_json TEXT NOT NULL DEFAULT '[]',
   predictions_json TEXT NOT NULL DEFAULT '[]',
   reflections_json TEXT NOT NULL DEFAULT '[]',
+  walkthroughs_json TEXT NOT NULL DEFAULT '[]',
   updated_at TEXT NOT NULL,
   FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 );
@@ -149,6 +151,7 @@ CREATE TABLE IF NOT EXISTS user_social_settings (
   habits_visibility TEXT NOT NULL DEFAULT 'friends' CHECK(habits_visibility IN ('private', 'friends', 'public')),
   predictions_visibility TEXT NOT NULL DEFAULT 'friends' CHECK(predictions_visibility IN ('private', 'friends', 'public')),
   gold_visibility TEXT NOT NULL DEFAULT 'friends' CHECK(gold_visibility IN ('private', 'friends', 'public')),
+  walkthroughs_visibility TEXT NOT NULL DEFAULT 'private' CHECK(walkthroughs_visibility IN ('private', 'friends', 'public')),
   updated_at TEXT NOT NULL,
   FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 );
@@ -234,6 +237,7 @@ CREATE TABLE IF NOT EXISTS local_social_settings (
   habits_visibility TEXT NOT NULL DEFAULT 'friends' CHECK(habits_visibility IN ('private', 'friends', 'public')),
   predictions_visibility TEXT NOT NULL DEFAULT 'friends' CHECK(predictions_visibility IN ('private', 'friends', 'public')),
   gold_visibility TEXT NOT NULL DEFAULT 'friends' CHECK(gold_visibility IN ('private', 'friends', 'public')),
+  walkthroughs_visibility TEXT NOT NULL DEFAULT 'private' CHECK(walkthroughs_visibility IN ('private', 'friends', 'public')),
   updated_at TEXT NOT NULL
 );
 
@@ -483,6 +487,28 @@ function ensureBaseStateColumn(name: string, definition: string) {
   if (existing) return;
   db.exec(`ALTER TABLE base_state ADD COLUMN ${name} ${definition};`);
 }
+// Migrate accountability_state: add walkthroughs_json if missing
+function ensureAccountabilityColumn(table: string, name: string, definition: string) {
+  const existing = db
+    .prepare(`SELECT 1 FROM pragma_table_info('${table}') WHERE name = ? LIMIT 1`)
+    .get(name) as { 1: number } | undefined;
+  if (existing) return;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition};`);
+}
+ensureAccountabilityColumn("accountability_state", "walkthroughs_json", "TEXT NOT NULL DEFAULT '[]'");
+ensureAccountabilityColumn("user_accountability_state", "walkthroughs_json", "TEXT NOT NULL DEFAULT '[]'");
+
+// Migrate social settings: add walkthroughs_visibility if missing
+function ensureSocialSettingsColumn(table: string, name: string, definition: string) {
+  const existing = db
+    .prepare(`SELECT 1 FROM pragma_table_info('${table}') WHERE name = ? LIMIT 1`)
+    .get(name) as { 1: number } | undefined;
+  if (existing) return;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition};`);
+}
+ensureSocialSettingsColumn("local_social_settings", "walkthroughs_visibility", "TEXT NOT NULL DEFAULT 'private'");
+ensureSocialSettingsColumn("user_social_settings", "walkthroughs_visibility", "TEXT NOT NULL DEFAULT 'private'");
+
 ensureBaseStateColumn("diamonds", "INTEGER NOT NULL DEFAULT 0");
 ensureBaseStateColumn("emeralds", "INTEGER NOT NULL DEFAULT 0");
 ensureBaseStateColumn("diamond_milestones_json", "TEXT NOT NULL DEFAULT '[]'");

@@ -190,6 +190,19 @@ export const CATALOG: CatalogItem[] = [
     color: "#ccf2ff",
     unlockRequirement: { stat: "longestDayStreak", value: 7 },
   },
+
+  // Nature Kit (Kenney) — cheap experimental decor for trying out the new sprites.
+  { id: "oak_tree",        name: "Oak Tree",        category: "decoration", cost: 1, currency: "gold", footprint: [1, 1], color: "#3a8a3a" },
+  { id: "pine_tree",       name: "Pine Tree",       category: "decoration", cost: 1, currency: "gold", footprint: [1, 1], color: "#2d6a2d" },
+  { id: "sapling",         name: "Sapling",         category: "decoration", cost: 0, currency: "gold", footprint: [1, 1], color: "#5fa85f" },
+  { id: "leafy_bush",      name: "Leafy Bush",      category: "decoration", cost: 0, currency: "gold", footprint: [1, 1], color: "#3a8a3a" },
+  { id: "red_flowers",     name: "Red Flowers",     category: "decoration", cost: 0, currency: "gold", footprint: [1, 1], color: "#d23838" },
+  { id: "yellow_flowers",  name: "Yellow Flowers",  category: "decoration", cost: 0, currency: "gold", footprint: [1, 1], color: "#e8c838" },
+  { id: "purple_flowers",  name: "Purple Flowers",  category: "decoration", cost: 0, currency: "gold", footprint: [1, 1], color: "#a04dc8" },
+  { id: "red_mushroom",    name: "Red Mushroom",    category: "decoration", cost: 0, currency: "gold", footprint: [1, 1], color: "#cc4040" },
+  { id: "mushroom_cluster",name: "Mushroom Cluster",category: "decoration", cost: 1, currency: "gold", footprint: [1, 1], color: "#cc8060" },
+  { id: "boulder",         name: "Boulder",         category: "decoration", cost: 1, currency: "gold", footprint: [1, 1], color: "#a8a8a8" },
+  { id: "grass_tuft",      name: "Grass Tuft",      category: "decoration", cost: 0, currency: "gold", footprint: [1, 1], color: "#6aa852" },
 ];
 
 export function getCatalogItem(id: string): CatalogItem | undefined {

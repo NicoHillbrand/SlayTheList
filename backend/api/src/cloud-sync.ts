@@ -35,6 +35,7 @@ type LocalSocialSettingsRow = {
   habits_visibility: SocialSettings["habitsVisibility"];
   predictions_visibility: SocialSettings["predictionsVisibility"];
   gold_visibility: SocialSettings["goldVisibility"];
+  walkthroughs_visibility?: SocialSettings["walkthroughsVisibility"];
 };
 
 type CloudConnectionRow = {
@@ -58,6 +59,7 @@ const DEFAULT_SOCIAL_SETTINGS: SocialSettings = {
   habitsVisibility: "friends",
   predictionsVisibility: "friends",
   goldVisibility: "friends",
+  walkthroughsVisibility: "private",
 };
 
 const DEFAULT_CLOUD_BASE_URL = "https://slaythelist.nicohillbrand.com";
@@ -119,7 +121,7 @@ function updateConnectionRow(patch: Partial<CloudConnectionRow>) {
 function getLocalSocialSettingsRow(): LocalSocialSettingsRow | undefined {
   return db
     .prepare(
-      `SELECT habits_visibility, predictions_visibility, gold_visibility
+      `SELECT habits_visibility, predictions_visibility, gold_visibility, walkthroughs_visibility
        FROM local_social_settings
        WHERE id = 1`,
     )
@@ -199,6 +201,7 @@ export function getLocalSocialSettings(): SocialSettings {
     habitsVisibility: row.habits_visibility,
     predictionsVisibility: row.predictions_visibility,
     goldVisibility: row.gold_visibility,
+    walkthroughsVisibility: row.walkthroughs_visibility ?? "private",
   };
 }
 
@@ -206,9 +209,9 @@ export function saveLocalSocialSettings(settings: SocialSettings) {
   const parsed = socialSettingsSchema.parse(settings);
   db.prepare(
     `UPDATE local_social_settings
-     SET habits_visibility = ?, predictions_visibility = ?, gold_visibility = ?, updated_at = ?
+     SET habits_visibility = ?, predictions_visibility = ?, gold_visibility = ?, walkthroughs_visibility = ?, updated_at = ?
      WHERE id = 1`,
-  ).run(parsed.habitsVisibility, parsed.predictionsVisibility, parsed.goldVisibility, new Date().toISOString());
+  ).run(parsed.habitsVisibility, parsed.predictionsVisibility, parsed.goldVisibility, parsed.walkthroughsVisibility, new Date().toISOString());
   return parsed;
 }
 
@@ -219,6 +222,7 @@ export function buildLocalSocialSnapshot(): SocialSnapshot {
     settings: getLocalSocialSettings(),
     habits: state.habits.filter((h) => h.visibility !== "private"),
     predictions: state.predictions.filter((p) => p.visibility !== "private"),
+    walkthroughs: (state.walkthroughs ?? []).filter((w) => w.visibility !== "private"),
     gold: getGoldState(),
     sourceUpdatedAt: now,
   });
@@ -433,6 +437,13 @@ export async function removeCloudFriend(friendUserId: string) {
 
 export async function getCloudSharedProfile(username: string) {
   return sharedProfileSchema.parse(await requestCloud<SharedProfile>(`/api/social/users/${encodeURIComponent(username)}`));
+}
+
+export async function sendCloudEncouragement(body: unknown) {
+  return await requestCloud("/api/social/encourage", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }
 
 // ---------------------------------------------------------------------------

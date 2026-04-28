@@ -16,6 +16,7 @@ import {
   itemVisibilitySchema,
   predictionOutcomeSchema,
   reflectionEntrySchema,
+  encouragementResponseSchema,
   sharedProfileSchema,
   socialSettingsSchema,
   vaultPushRequestSchema,
@@ -87,6 +88,7 @@ import {
   pollCloudConnection,
   saveAndSyncLocalSocialSettings,
   searchCloudUsers,
+  sendCloudEncouragement,
   sendCloudFriendRequest,
   startCloudConnection,
   syncCloudSnapshot,
@@ -356,6 +358,15 @@ app.delete("/api/cloud-social/friend-requests/:id", async (req, res) => {
 app.get("/api/cloud-social/users/:username", async (req, res) => {
   try {
     ok(res, sharedProfileSchema.parse(await getCloudSharedProfile(req.params.username)));
+  } catch (error) {
+    return badRequest(res, (error as Error).message);
+  }
+});
+
+app.post("/api/cloud-social/encourage", async (req, res) => {
+  try {
+    const result = await sendCloudEncouragement(req.body);
+    ok(res, encouragementResponseSchema.parse(result));
   } catch (error) {
     return badRequest(res, (error as Error).message);
   }

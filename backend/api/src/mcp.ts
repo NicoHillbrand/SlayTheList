@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { habitSchema, predictionSchema, reflectionEntrySchema } from "@slaythelist/contracts";
+import { habitSchema, predictionSchema, reflectionEntrySchema, walkthroughSchema } from "@slaythelist/contracts";
 import {
   listTodos,
   createTodo,
@@ -189,6 +189,41 @@ server.tool(
     const state = getAccountabilityState();
     saveAccountabilityState({ ...state, reflections });
     return { content: [{ type: "text" as const, text: JSON.stringify({ saved: true, count: reflections.length }) }] };
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Walkthroughs
+// ---------------------------------------------------------------------------
+
+server.tool(
+  "list_walkthroughs",
+  "List day walkthrough entries, most recent first.",
+  {
+    limit: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe("Maximum number of entries to return. Defaults to 30."),
+  },
+  async ({ limit = 30 }) => {
+    const { walkthroughs } = getAccountabilityState();
+    const sorted = [...(walkthroughs ?? [])].sort((a, b) => b.createdAt - a.createdAt).slice(0, limit);
+    return { content: [{ type: "text" as const, text: JSON.stringify(sorted, null, 2) }] };
+  },
+);
+
+server.tool(
+  "set_walkthroughs",
+  "Replace the full walkthroughs array. Read the current state with list_walkthroughs first, modify the array, then call this to save.",
+  {
+    walkthroughs: z.array(walkthroughSchema).describe("The complete replacement walkthroughs array."),
+  },
+  async ({ walkthroughs }) => {
+    const state = getAccountabilityState();
+    saveAccountabilityState({ ...state, walkthroughs });
+    return { content: [{ type: "text" as const, text: JSON.stringify({ saved: true, count: walkthroughs.length }) }] };
   },
 );
 

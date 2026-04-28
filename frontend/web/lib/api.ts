@@ -25,6 +25,9 @@ import type {
   PredictionOutcome,
   Progression,
   ReflectionEntry,
+  EncouragementEntryType,
+  EncouragementKind,
+  EncouragementResponse,
   SharedProfile,
   SocialSettings,
   Todo,
@@ -145,6 +148,18 @@ export async function removeCloudFriend(friendUserId: string) {
 
 export async function getCloudSharedProfile(username: string) {
   return request<SharedProfile>(`/api/cloud-social/users/${encodeURIComponent(username)}`);
+}
+
+export async function sendEncouragement(
+  targetUserId: string,
+  entryType: EncouragementEntryType,
+  entryId: string,
+  kind: EncouragementKind,
+) {
+  return request<EncouragementResponse>("/api/cloud-social/encourage", {
+    method: "POST",
+    body: JSON.stringify({ targetUserId, entryType, entryId, kind }),
+  });
 }
 
 // ---------------------------------------------------------------------------

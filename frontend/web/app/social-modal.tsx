@@ -3,6 +3,8 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import type {
   CloudConnectionStatus,
+  EncouragementEntryType,
+  EncouragementKind,
   FriendRelationship,
   FriendRequest,
   FriendSearchResult,
@@ -27,6 +29,7 @@ import {
   searchCloudSocialUsers,
   removeCloudFriend,
   sendCloudFriendRequest,
+  sendEncouragement,
   startCloudConnect,
   syncCloudSnapshot,
   updateCloudUsername,
@@ -44,6 +47,7 @@ const DEFAULT_SETTINGS: SocialSettings = {
   habitsVisibility: "friends",
   predictionsVisibility: "friends",
   goldVisibility: "friends",
+  walkthroughsVisibility: "private",
 };
 
 
@@ -122,6 +126,8 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [encouragedIds, setEncouragedIds] = useState<Set<string>>(new Set());
+  const [encouragementsRemaining, setEncouragementsRemaining] = useState<number | null>(null);
   const closeSettings = onCloseSettings ?? (() => {});
 
   const refreshConnectedData = useCallback(async (currentStatus?: CloudConnectionStatus | null) => {
@@ -200,7 +206,11 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
     setBusyAction(`profile:${selectedUsername}`);
     void getCloudSharedProfile(selectedUsername)
       .then((profile) => {
-        if (!cancelled) setSelectedProfile(profile);
+        if (!cancelled) {
+          setSelectedProfile(profile);
+          setEncouragedIds(new Set(profile.encouragedEntryIds ?? []));
+          setEncouragementsRemaining(profile.encouragementsRemainingToday ?? null);
+        }
       })
       .catch((nextError) => {
         if (!cancelled) setError(toErrorMessage(nextError));
@@ -354,6 +364,27 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
     }).catch((nextError) => setError(toErrorMessage(nextError)));
   }
 
+  async function onEncourage(entryType: EncouragementEntryType, entryId: string, kind: EncouragementKind) {
+    if (!selectedProfile || encouragedIds.has(entryId)) return;
+    if (encouragementsRemaining !== null && encouragementsRemaining <= 0) return;
+    // Optimistic update
+    setEncouragedIds((prev) => new Set(prev).add(entryId));
+    setEncouragementsRemaining((prev) => (prev !== null ? Math.max(0, prev - 1) : prev));
+    try {
+      const result = await sendEncouragement(selectedProfile.user.id, entryType, entryId, kind);
+      setEncouragementsRemaining(result.remainingToday);
+    } catch (nextError) {
+      // Revert optimistic update
+      setEncouragedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(entryId);
+        return next;
+      });
+      setEncouragementsRemaining((prev) => (prev !== null ? prev + 1 : prev));
+      setError(toErrorMessage(nextError));
+    }
+  }
+
   if (!embedded && !open) return null;
 
   /* ── Not configured ── */
@@ -433,6 +464,14 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
               )}
             </div>
 
+            {selectedProfile.relationship === "friend" && encouragementsRemaining !== null && (
+              <p className="encouragements-remaining">
+                {encouragementsRemaining > 0
+                  ? `${encouragementsRemaining} encouragement${encouragementsRemaining === 1 ? "" : "s"} left today`
+                  : "No encouragements left today"}
+              </p>
+            )}
+
             <section className="social-profile-section">
               <h5>Habits</h5>
               {!selectedProfile.habits.canView ? (
@@ -442,8 +481,19 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
               ) : (
                 <ul className="social-profile-list">
                   {selectedProfile.habits.items.map((habit) => (
-                    <li key={habit.id}>
-                      {habit.name} <span className="settings-hint">({habit.status})</span>
+                    <li key={habit.id} className="social-entry-row">
+                      <span>{habit.name} <span className="settings-hint">({habit.status})</span></span>
+                      {selectedProfile.relationship === "friend" && (
+                        <button
+                          type="button"
+                          className={`encourage-btn ${encouragedIds.has(habit.id) ? "encouraged" : ""}`}
+                          disabled={encouragedIds.has(habit.id) || (encouragementsRemaining !== null && encouragementsRemaining <= 0)}
+                          onClick={() => onEncourage("habit", habit.id, "encourage")}
+                          title={encouragedIds.has(habit.id) ? "Encouraged!" : "Encourage"}
+                        >
+                          {encouragedIds.has(habit.id) ? "Encouraged" : "Encourage"}
+                        </button>
+                      )}
                     </li>
                   ))}
                 </ul>
@@ -469,13 +519,31 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
                   <div key={day.label} className="social-predictions-day">
                     <p className="social-day-label">{day.label}</p>
                     <div className="social-predictions-day-items">
-                      {day.items.map((prediction) => (
-                        <div key={prediction.id} className="social-prediction-row">
-                          <span className={outcomeClass(prediction.outcome)}>{outcomeIcon(prediction.outcome)}</span>
-                          <span className="social-prediction-title">{prediction.title}</span>
-                          <span className="social-prediction-confidence">{prediction.confidence}%</span>
-                        </div>
-                      ))}
+                      {day.items.map((prediction) => {
+                        const isResolved = prediction.outcome !== "pending";
+                        const btnKind: EncouragementKind = isResolved ? "celebrate" : "encourage";
+                        const btnLabel = encouragedIds.has(prediction.id)
+                          ? (isResolved ? "Celebrated" : "Encouraged")
+                          : (isResolved ? "Celebrate" : "Encourage");
+                        return (
+                          <div key={prediction.id} className="social-prediction-row">
+                            <span className={outcomeClass(prediction.outcome)}>{outcomeIcon(prediction.outcome)}</span>
+                            <span className="social-prediction-title">{prediction.title}</span>
+                            <span className="social-prediction-confidence">{prediction.confidence}%</span>
+                            {selectedProfile!.relationship === "friend" && (
+                              <button
+                                type="button"
+                                className={`encourage-btn ${encouragedIds.has(prediction.id) ? "encouraged" : ""}`}
+                                disabled={encouragedIds.has(prediction.id) || (encouragementsRemaining !== null && encouragementsRemaining <= 0)}
+                                onClick={() => onEncourage("prediction", prediction.id, btnKind)}
+                                title={btnLabel}
+                              >
+                                {btnLabel}
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 );
@@ -713,6 +781,22 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
                 setSettings((current) => ({
                   ...current,
                   goldVisibility: event.target.value as SocialVisibility,
+                }))
+              }
+            >
+              <option value="private">Private</option>
+              <option value="friends">Friends</option>
+              <option value="public">Public</option>
+            </select>
+          </label>
+          <label className="social-visibility-row">
+            <span>Walkthroughs</span>
+            <select
+              value={settings.walkthroughsVisibility}
+              onChange={(event) =>
+                setSettings((current) => ({
+                  ...current,
+                  walkthroughsVisibility: event.target.value as SocialVisibility,
                 }))
               }
             >

@@ -7,6 +7,7 @@ import {
   KeyboardEvent as ReactKeyboardEvent,
   MutableRefObject,
   PointerEvent,
+  ReactNode,
   SetStateAction,
   useEffect,
   useMemo,
@@ -40,6 +41,7 @@ import type {
   PredictionOutcome,
   ReflectionEntry,
   Todo,
+  Walkthrough,
 } from "@slaythelist/contracts";
 import {
   createGameState as createGameStateApi,
@@ -765,6 +767,138 @@ function SortableGoalRow({
   );
 }
 
+function SortableHabitRow({
+  habit,
+  isEditing,
+  setEditingHabitId,
+  setHabits,
+  toggleHabitVisibility,
+  toggleHabitDay,
+  toggleHabitWeek,
+  habitsView,
+  habitDays,
+  habitWeeks,
+  todayKey,
+  autoResizeTextarea,
+  actions,
+}: {
+  habit: Habit;
+  isEditing: boolean;
+  setEditingHabitId: Dispatch<SetStateAction<string | null>>;
+  setHabits: Dispatch<SetStateAction<Habit[]>>;
+  toggleHabitVisibility: (id: string) => void;
+  toggleHabitDay: (id: string, key: string, el: HTMLElement | null) => void;
+  toggleHabitWeek: (id: string, start: Date, end: Date, el: HTMLElement | null) => void;
+  habitsView: "week" | "month";
+  habitDays: ReturnType<typeof getLastNDays>;
+  habitWeeks: ReturnType<typeof getLastNWeeks>;
+  todayKey: string;
+  autoResizeTextarea: (el: HTMLTextAreaElement) => void;
+  actions: ReactNode;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: habit.id });
+  const style: CSSProperties = {
+    transform: DndCSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.4 : 1,
+  };
+  return (
+    <tr
+      ref={setNodeRef}
+      style={style}
+      className={`habit-row ${isEditing ? "editing" : ""}`}
+      onBlur={(event) => {
+        const nextTarget = event.relatedTarget as Node | null;
+        if (!event.currentTarget.contains(nextTarget)) {
+          setEditingHabitId((current) => (current === habit.id ? null : current));
+        }
+      }}
+    >
+      <td>
+        <div className="habit-name-cell">
+          <button
+            type="button"
+            className="habit-drag-handle"
+            aria-label="Drag to reorder"
+            {...attributes}
+            {...listeners}
+          >
+            ⋮⋮
+          </button>
+          <textarea
+            ref={(node) => { if (node) autoResizeTextarea(node); }}
+            id={`habit-name-${habit.id}`}
+            className="habit-name-input"
+            value={habit.name}
+            rows={1}
+            spellCheck={false}
+            onFocus={() => setEditingHabitId(habit.id)}
+            onChange={(event) => {
+              setHabits((prev) =>
+                prev.map((h) => (h.id === habit.id ? { ...h, name: event.target.value } : h)),
+              );
+              const el = event.target;
+              el.style.height = "auto";
+              el.style.height = `${el.scrollHeight}px`;
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); }
+            }}
+          />
+          <div className="habit-row-actions">
+            <button
+              type="button"
+              className={`visibility-toggle ${habit.visibility === "private" ? "is-private" : ""}`}
+              onClick={() => toggleHabitVisibility(habit.id)}
+              title={habit.visibility === "private" ? "Private (hidden from friends)" : "Visible to friends"}
+            >
+              {habit.visibility === "private" ? "🔒" : "👁"}
+            </button>
+            {actions}
+          </div>
+        </div>
+      </td>
+      {habitsView === "week"
+        ? habitDays.map((day) => {
+            const done = habit.checks.some((check) => check.date === day.key && check.done);
+            return (
+              <td key={`${habit.id}:${day.key}`} className={day.key === todayKey ? "is-today" : ""}>
+                <button
+                  type="button"
+                  className={`habit-check ${done ? "done" : ""}`}
+                  onClick={(event) => toggleHabitDay(habit.id, day.key, event.currentTarget)}
+                  aria-label={`Mark ${habit.name} for ${day.label}`}
+                >
+                  {done ? "✓" : ""}
+                </button>
+              </td>
+            );
+          })
+        : habitWeeks.map((week) => {
+            const done = habit.checks.some((check) => {
+              if (!check.done) return false;
+              const checkDate = new Date(`${check.date}T00:00:00`);
+              return checkDate >= week.start && checkDate <= week.end;
+            });
+            return (
+              <td
+                key={`${habit.id}:${week.start.toISOString()}`}
+                className={getDateKey(week.end) >= todayKey && getDateKey(week.start) <= todayKey ? "is-today" : ""}
+              >
+                <button
+                  type="button"
+                  className={`habit-check ${done ? "done" : ""}`}
+                  onClick={(event) => toggleHabitWeek(habit.id, week.start, week.end, event.currentTarget)}
+                >
+                  {done ? "✓" : ""}
+                </button>
+              </td>
+            );
+          })}
+    </tr>
+  );
+}
+
 export default function Page() {
   const [todos, setTodos] = useState<Todo[]>([]);
   const [zones, setZones] = useState<LockZone[]>([]);
@@ -798,6 +932,7 @@ export default function Page() {
   const [murphyOpen, setMurphyOpen] = useState(false);
   const [selectedMurphyTodoId, setSelectedMurphyTodoId] = useState<string | null>(null);
   const [predictionCalibrationResetAt, setPredictionCalibrationResetAt] = useState<number | null>(null);
+  const [walkthroughs, setWalkthroughs] = useState<Walkthrough[]>([]);
   const [reflections, setReflections] = useState<ReflectionEntry[]>([]);
   const [selectedReflectionDate, setSelectedReflectionDate] = useState(getDateKey(new Date()));
   const [reflectionView, setReflectionView] = useState<ReflectionView>("today");
@@ -1251,6 +1386,7 @@ export default function Page() {
       setHabits(state.habits.map((habit) => ({ ...habit, status: habit.status ?? "active" })));
       setPredictions(state.predictions);
       setReflections(state.reflections);
+      setWalkthroughs(state.walkthroughs ?? []);
       accountabilityLoadedRef.current = true;
     });
   }, []);
@@ -1262,7 +1398,7 @@ export default function Page() {
     }
     accountabilitySaveTimerRef.current = window.setTimeout(() => {
       void runAction(async () => {
-        await saveAccountabilityState({ habits, predictions, reflections });
+        await saveAccountabilityState({ habits, predictions, reflections, walkthroughs });
       });
     }, 450);
     return () => {
@@ -1270,7 +1406,7 @@ export default function Page() {
         window.clearTimeout(accountabilitySaveTimerRef.current);
       }
     };
-  }, [habits, predictions, reflections]);
+  }, [habits, predictions, reflections, walkthroughs]);
 
   useEffect(() => {
     if (!selectedGameStateId) return;
@@ -1418,6 +1554,26 @@ export default function Page() {
     const [moved] = reordered.splice(fromIndex, 1);
     reordered.splice(toIndex, 0, moved);
     applyVisibleReorder(reordered);
+  }
+
+  const habitSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+
+  function handleHabitDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    setHabits((prev) => {
+      const fromIdx = prev.findIndex((h) => h.id === active.id);
+      const toIdx = prev.findIndex((h) => h.id === over.id);
+      if (fromIdx < 0 || toIdx < 0) return prev;
+      // Only allow reorder within same group (core/bonus/idea/archived)
+      const fromKey = `${prev[fromIdx].status ?? "active"}:${prev[fromIdx].bonus ? "bonus" : "core"}`;
+      const toKey = `${prev[toIdx].status ?? "active"}:${prev[toIdx].bonus ? "bonus" : "core"}`;
+      if (fromKey !== toKey) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(fromIdx, 1);
+      next.splice(toIdx, 0, moved);
+      return next;
+    });
   }
 
   function copyVisibleGoalsToClipboard() {
@@ -3090,6 +3246,41 @@ export default function Page() {
     [pendingMurphyPredictions],
   );
 
+  const todayWalkthrough = useMemo(
+    () => walkthroughs.find((w) => w.date === todayKey),
+    [walkthroughs, todayKey],
+  );
+  const pastWalkthroughs = useMemo(
+    () =>
+      [...walkthroughs]
+        .filter((w) => w.date !== todayKey)
+        .sort((a, b) => b.createdAt - a.createdAt),
+    [walkthroughs, todayKey],
+  );
+
+  function updateTodayWalkthrough(field: "plan" | "divergences", value: string) {
+    setWalkthroughs((prev) => {
+      const existing = prev.find((w) => w.date === todayKey);
+      if (existing) {
+        return prev.map((w) =>
+          w.date === todayKey ? { ...w, [field]: value, updatedAt: Date.now() } : w,
+        );
+      }
+      return [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          date: todayKey,
+          plan: field === "plan" ? value : "",
+          divergences: field === "divergences" ? value : "",
+          visibility: "private" as const,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      ];
+    });
+  }
+
   const coreReflectionQuestions = DEFAULT_CORE_REFLECTION_QUESTIONS;
   const optionalReflectionQuestions = DEFAULT_OPTIONAL_REFLECTION_QUESTIONS;
   const visibleReflectionQuestions = useMemo(
@@ -3744,104 +3935,41 @@ export default function Page() {
                     </tr>
                   </thead>
                   <tbody>
-                    {coreHabits.map((habit) => (
-                      <tr
-                        key={habit.id}
-                        className={`habit-row ${editingHabitId === habit.id ? "editing" : ""}`}
-                        onBlur={(event) => {
-                          const nextTarget = event.relatedTarget as Node | null;
-                          if (!event.currentTarget.contains(nextTarget)) {
-                            setEditingHabitId((current) => (current === habit.id ? null : current));
-                          }
-                        }}
-                      >
-                        <td>
-                          <div className="habit-name-cell">
-                            <textarea
-                              ref={(node) => { if (node) autoResizeTextarea(node); }}
-                              id={`habit-name-${habit.id}`}
-                              className="habit-name-input"
-                              value={habit.name}
-                              rows={1}
-                              spellCheck={false}
-                              onFocus={() => setEditingHabitId(habit.id)}
-                              onChange={(event) => {
-                                setHabits((prev) =>
-                                  prev.map((h) => (h.id === habit.id ? { ...h, name: event.target.value } : h)),
-                                );
-                                const el = event.target;
-                                el.style.height = "auto";
-                                el.style.height = `${el.scrollHeight}px`;
-                              }}
-                              onKeyDown={(event) => {
-                                if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); }
-                              }}
-                            />
-                            <div className="habit-row-actions">
-                              <button
-                                type="button"
-                                className={`visibility-toggle ${habit.visibility === "private" ? "is-private" : ""}`}
-                                onClick={() => toggleHabitVisibility(habit.id)}
-                                title={habit.visibility === "private" ? "Private (hidden from friends)" : "Visible to friends"}
-                              >
-                                {habit.visibility === "private" ? "🔒" : "👁"}
-                              </button>
-                              <button type="button" onClick={() => setHabitBonus(habit.id, true)}>
-                                Bonus
-                              </button>
-                              <button type="button" onClick={() => setHabitStatus(habit.id, "idea")}>
-                                Idea
-                              </button>
-                              <button type="button" onClick={() => setHabitStatus(habit.id, "archived")}>
-                                Archive
-                              </button>
-                              <button type="button" onClick={() => deleteHabit(habit.id)}>Delete</button>
-                            </div>
-                          </div>
-                        </td>
-                        {habitsView === "week"
-                          ? habitDays.map((day) => {
-                              const done = habit.checks.some((check) => check.date === day.key && check.done);
-                              return (
-                                <td key={`${habit.id}:${day.key}`} className={day.key === todayKey ? "is-today" : ""}>
-                                  <button
-                                    type="button"
-                                    className={`habit-check ${done ? "done" : ""}`}
-                                    onClick={(event) => toggleHabitDay(habit.id, day.key, event.currentTarget)}
-                                    aria-label={`Mark ${habit.name} for ${day.label}`}
-                                  >
-                                    {done ? "✓" : ""}
-                                  </button>
-                                </td>
-                              );
-                            })
-                          : habitWeeks.map((week) => {
-                              const done = habit.checks.some((check) => {
-                                if (!check.done) return false;
-                                const checkDate = new Date(`${check.date}T00:00:00`);
-                                return checkDate >= week.start && checkDate <= week.end;
-                              });
-                              return (
-                                <td
-                                  key={`${habit.id}:${week.start.toISOString()}`}
-                                  className={getDateKey(week.end) >= todayKey && getDateKey(week.start) <= todayKey
-                                    ? "is-today"
-                                    : ""}
-                                >
-                                  <button
-                                    type="button"
-                                    className={`habit-check ${done ? "done" : ""}`}
-                                    onClick={(event) =>
-                                      toggleHabitWeek(habit.id, week.start, week.end, event.currentTarget)
-                                    }
-                                  >
-                                    {done ? "✓" : ""}
-                                  </button>
-                                </td>
-                              );
-                            })}
-                      </tr>
-                    ))}
+                    <DndContext sensors={habitSensors} onDragEnd={handleHabitDragEnd}>
+                      <SortableContext items={coreHabits.map((h) => h.id)} strategy={verticalListSortingStrategy}>
+                        {coreHabits.map((habit) => (
+                          <SortableHabitRow
+                            key={habit.id}
+                            habit={habit}
+                            isEditing={editingHabitId === habit.id}
+                            setEditingHabitId={setEditingHabitId}
+                            setHabits={setHabits}
+                            toggleHabitVisibility={toggleHabitVisibility}
+                            toggleHabitDay={toggleHabitDay}
+                            toggleHabitWeek={toggleHabitWeek}
+                            habitsView={habitsView}
+                            habitDays={habitDays}
+                            habitWeeks={habitWeeks}
+                            todayKey={todayKey}
+                            autoResizeTextarea={autoResizeTextarea}
+                            actions={
+                              <>
+                                <button type="button" onClick={() => setHabitBonus(habit.id, true)}>
+                                  Bonus
+                                </button>
+                                <button type="button" onClick={() => setHabitStatus(habit.id, "idea")}>
+                                  Idea
+                                </button>
+                                <button type="button" onClick={() => setHabitStatus(habit.id, "archived")}>
+                                  Archive
+                                </button>
+                                <button type="button" onClick={() => deleteHabit(habit.id)}>Delete</button>
+                              </>
+                            }
+                          />
+                        ))}
+                      </SortableContext>
+                    </DndContext>
                     <tr className="habits-add-row">
                       <td colSpan={habitsTableColSpan}>
                         <div className="habits-add-inline">
@@ -3902,100 +4030,41 @@ export default function Page() {
                             </tr>
                           </thead>
                           <tbody>
-                            {bonusHabits.map((habit) => (
-                              <tr
-                                key={habit.id}
-                                className={`habit-row ${editingHabitId === habit.id ? "editing" : ""}`}
-                                onBlur={(event) => {
-                                  const nextTarget = event.relatedTarget as Node | null;
-                                  if (!event.currentTarget.contains(nextTarget)) {
-                                    setEditingHabitId((current) => (current === habit.id ? null : current));
-                                  }
-                                }}
-                              >
-                                <td>
-                                  <div className="habit-name-cell">
-                                    <textarea
-                                      ref={(node) => { if (node) autoResizeTextarea(node); }}
-                                      id={`habit-name-${habit.id}`}
-                                      className="habit-name-input"
-                                      value={habit.name}
-                                      rows={1}
-                                      spellCheck={false}
-                                      onFocus={() => setEditingHabitId(habit.id)}
-                                      onChange={(event) => {
-                                        setHabits((prev) =>
-                                          prev.map((h) => (h.id === habit.id ? { ...h, name: event.target.value } : h)),
-                                        );
-                                        const el = event.target;
-                                        el.style.height = "auto";
-                                        el.style.height = `${el.scrollHeight}px`;
-                                      }}
-                                      onKeyDown={(event) => {
-                                        if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); }
-                                      }}
-                                    />
-                                    <div className="habit-row-actions">
-                                      <button
-                                        type="button"
-                                        className={`visibility-toggle ${habit.visibility === "private" ? "is-private" : ""}`}
-                                        onClick={() => toggleHabitVisibility(habit.id)}
-                                        title={habit.visibility === "private" ? "Private (hidden from friends)" : "Visible to friends"}
-                                      >
-                                        {habit.visibility === "private" ? "🔒" : "👁"}
-                                      </button>
-                                      <button type="button" onClick={() => setHabitBonus(habit.id, false)}>
-                                        Core
-                                      </button>
-                                      <button type="button" onClick={() => setHabitStatus(habit.id, "idea")}>
-                                        Idea
-                                      </button>
-                                      <button type="button" onClick={() => setHabitStatus(habit.id, "archived")}>
-                                        Archive
-                                      </button>
-                                      <button type="button" onClick={() => deleteHabit(habit.id)}>Delete</button>
-                                    </div>
-                                  </div>
-                                </td>
-                                {habitsView === "week"
-                                  ? habitDays.map((day) => {
-                                      const done = habit.checks.some((check) => check.date === day.key && check.done);
-                                      return (
-                                        <td key={`${habit.id}:${day.key}`} className={day.key === todayKey ? "is-today" : ""}>
-                                          <button
-                                            type="button"
-                                            className={`habit-check ${done ? "done" : ""}`}
-                                            onClick={(event) => toggleHabitDay(habit.id, day.key, event.currentTarget)}
-                                            aria-label={`Mark ${habit.name} for ${day.label}`}
-                                          >
-                                            {done ? "✓" : ""}
-                                          </button>
-                                        </td>
-                                      );
-                                    })
-                                  : habitWeeks.map((week) => {
-                                      const done = habit.checks.some((check) => {
-                                        if (!check.done) return false;
-                                        const checkDate = new Date(`${check.date}T00:00:00`);
-                                        return checkDate >= week.start && checkDate <= week.end;
-                                      });
-                                      return (
-                                        <td
-                                          key={`${habit.id}:${week.start.toISOString()}`}
-                                          className={getDateKey(week.end) >= todayKey && getDateKey(week.start) <= todayKey ? "is-today" : ""}
-                                        >
-                                          <button
-                                            type="button"
-                                            className={`habit-check ${done ? "done" : ""}`}
-                                            onClick={(event) => toggleHabitWeek(habit.id, week.start, week.end, event.currentTarget)}
-                                          >
-                                            {done ? "✓" : ""}
-                                          </button>
-                                        </td>
-                                      );
-                                    })}
-                              </tr>
-                            ))}
+                            <DndContext sensors={habitSensors} onDragEnd={handleHabitDragEnd}>
+                              <SortableContext items={bonusHabits.map((h) => h.id)} strategy={verticalListSortingStrategy}>
+                                {bonusHabits.map((habit) => (
+                                  <SortableHabitRow
+                                    key={habit.id}
+                                    habit={habit}
+                                    isEditing={editingHabitId === habit.id}
+                                    setEditingHabitId={setEditingHabitId}
+                                    setHabits={setHabits}
+                                    toggleHabitVisibility={toggleHabitVisibility}
+                                    toggleHabitDay={toggleHabitDay}
+                                    toggleHabitWeek={toggleHabitWeek}
+                                    habitsView={habitsView}
+                                    habitDays={habitDays}
+                                    habitWeeks={habitWeeks}
+                                    todayKey={todayKey}
+                                    autoResizeTextarea={autoResizeTextarea}
+                                    actions={
+                                      <>
+                                        <button type="button" onClick={() => setHabitBonus(habit.id, false)}>
+                                          Core
+                                        </button>
+                                        <button type="button" onClick={() => setHabitStatus(habit.id, "idea")}>
+                                          Idea
+                                        </button>
+                                        <button type="button" onClick={() => setHabitStatus(habit.id, "archived")}>
+                                          Archive
+                                        </button>
+                                        <button type="button" onClick={() => deleteHabit(habit.id)}>Delete</button>
+                                      </>
+                                    }
+                                  />
+                                ))}
+                              </SortableContext>
+                            </DndContext>
                             <tr className="habits-add-row">
                               <td colSpan={habitsTableColSpan}>
                                 <div className="habits-add-inline">
@@ -4230,6 +4299,57 @@ export default function Page() {
                       );
                     })()}
                   </div>
+                )}
+              </div>
+            </details>
+            <details className="prediction-goals-panel">
+              <summary>Day walkthrough</summary>
+              <div className="prediction-goals-content">
+                <div className="walkthrough-section">
+                  <label className="walkthrough-label">How do you expect today to go?</label>
+                  <textarea
+                    className="walkthrough-textarea"
+                    placeholder={"Predict events, locations, activities...\nYou can start by predicting the next hour"}
+                    value={todayWalkthrough?.plan ?? ""}
+                    onChange={(e) => updateTodayWalkthrough("plan", e.target.value)}
+                    rows={4}
+                  />
+                </div>
+                <div className="walkthrough-section">
+                  <label className="walkthrough-label">Divergences</label>
+                  <textarea
+                    className="walkthrough-textarea"
+                    placeholder="What went differently than expected?"
+                    value={todayWalkthrough?.divergences ?? ""}
+                    onChange={(e) => updateTodayWalkthrough("divergences", e.target.value)}
+                    rows={3}
+                  />
+                </div>
+                {pastWalkthroughs.length > 0 && (
+                  <details className="walkthrough-past">
+                    <summary>Past walkthroughs ({pastWalkthroughs.length})</summary>
+                    <ul className="walkthrough-past-list">
+                      {pastWalkthroughs.map((w) => (
+                        <li key={w.id} className="walkthrough-past-item">
+                          <div className="walkthrough-past-date">
+                            {new Date(w.date + "T00:00:00").toLocaleDateString(undefined, {
+                              weekday: "short",
+                              month: "short",
+                              day: "numeric",
+                            })}
+                          </div>
+                          <div className="walkthrough-past-plan">
+                            <strong>Plan:</strong> {w.plan || <em>No plan recorded</em>}
+                          </div>
+                          {w.divergences && (
+                            <div className="walkthrough-past-divergences">
+                              <strong>Divergences:</strong> {w.divergences}
+                            </div>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
                 )}
               </div>
             </details>

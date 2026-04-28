@@ -17,6 +17,10 @@ Collect feature ideas and improvements here. Add freely, prioritize later.
 - Chrome tab / video blocking: block specific Chrome tabs or video playback based on productivity state. Should be achievable via screenshot detection (already in the app) or by defining processes and using a Chrome extension API to control tab access
 - Social value alignment: explore whether SlayTheList's social features (accountability partners, shared predictions, collaborative goals) can meaningfully contribute to coordination problems — could well-calibrated prediction markets among friends surface better collective decisions?
 - Proper double-clickable installer that bundles/downloads Node.js and all dependencies — zero-setup install experience for non-technical users
+- Encouragement / celebration feature: positive feedback and celebration moments when completing tasks, hitting streaks, or reaching milestones — make finishing things feel good
+- Android app: native or hybrid mobile app so SlayTheList is accessible on the go
+- Friend encouragement / celebrations: friends can encourage (on active entries) or celebrate (on completed entries) each other's goals/habits/predictions. Both parties earn a small gold reward. Limited to ~3 interactions per day to keep it meaningful and prevent spam
+- API endpoint to add gold directly (with sound playback). Use case: pair Claude Code ultimate driver mode with SlayTheList. Driver mode runs steppified small actions and computes gold rewards per step (e.g. 1 gold for tiny step, 2 for slightly larger), then calls the API to grant gold + play the sound. User gets the dopamine loop without having to manually log every micro-step as a todo. Could also be done by logging fine-grained steps to SlayTheList itself, but that may need a separate fine-grained view. Recommend pairing this with a shareable cleaned-up version of driver mode for other users.
 
 ## In Progress
 
