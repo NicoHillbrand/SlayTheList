@@ -165,8 +165,10 @@ async function requestCloud<T>(path: string, init?: RequestInit) {
   if (!headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
+  let attachedBearer = false;
   if (!headers.has("Authorization") && row.access_token) {
     headers.set("Authorization", `Bearer ${row.access_token}`);
+    attachedBearer = true;
   }
   const response = await fetch(`${baseUrl}${path}`, {
     ...init,
@@ -174,6 +176,16 @@ async function requestCloud<T>(path: string, init?: RequestInit) {
   });
   if (!response.ok) {
     const text = await response.text();
+    if (response.status === 401 && attachedBearer) {
+      updateConnectionRow({
+        cloud_user_id: null,
+        cloud_username: null,
+        cloud_email: null,
+        access_token: null,
+        connected_at: null,
+      });
+      throw new Error("cloud session expired - please reconnect");
+    }
     throw new Error(text || `${response.status} ${response.statusText}`);
   }
   return (await response.json()) as T;

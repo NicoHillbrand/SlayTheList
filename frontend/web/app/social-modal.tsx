@@ -163,8 +163,15 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
         if (cancelled) return;
         await refreshConnectedData(nextStatus);
       })
-      .catch((nextError) => {
-        if (!cancelled) setError(toErrorMessage(nextError));
+      .catch(async (nextError) => {
+        if (cancelled) return;
+        setError(toErrorMessage(nextError));
+        try {
+          const recheck = await getCloudConnectionStatus();
+          if (!cancelled) setStatus(recheck);
+        } catch {
+          // status endpoint is local-only and shouldn't fail; ignore
+        }
       })
       .finally(() => {
         if (!cancelled) setIsLoading(false);
