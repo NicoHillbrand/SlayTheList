@@ -289,6 +289,42 @@ body.desktop-app main {
   gap: 0.55rem;
 }
 
+.goals-section-heading {
+  list-style: none;
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  padding: 0.55rem 0.2rem 0.2rem;
+  border-bottom: 1px solid rgba(173, 142, 84, 0.35);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.72rem;
+  color: #d4c8a8;
+}
+
+.goals-section-heading-label {
+  font-weight: 600;
+}
+
+.goals-section-heading-hint {
+  font-weight: 400;
+  font-size: 0.66rem;
+  color: #8c8773;
+  text-transform: none;
+  letter-spacing: 0.02em;
+}
+
+.goals-section-empty {
+  list-style: none;
+  padding: 0.45rem 0.6rem;
+  border: 1px dashed rgba(173, 142, 84, 0.25);
+  border-radius: 8px;
+  background: rgba(12, 18, 30, 0.4);
+  color: #8c8773;
+  font-size: 0.78rem;
+  font-style: italic;
+}
+
 .goal-row {
   display: grid;
   gap: 0.35rem;
@@ -414,29 +450,44 @@ body.desktop-app main {
   display: grid;
   gap: 0.5rem;
 }
-.settings-radio-label {
+.todo-edit-modal .settings-radio-label {
   display: flex;
-  align-items: flex-start;
+  flex-direction: row;
+  align-items: center;
   gap: 0.6rem;
   cursor: pointer;
-  padding: 0.55rem 0.65rem;
+  padding: 0.55rem 0.75rem;
   border-radius: 8px;
   border: 1px solid rgba(173, 142, 84, 0.18);
   background: rgba(255, 255, 255, 0.02);
   transition: border-color 0.15s, background 0.15s;
+  position: relative;
 }
 .settings-radio-label:hover {
   border-color: rgba(173, 142, 84, 0.35);
   background: rgba(255, 255, 255, 0.04);
 }
 .settings-radio-label:has(input:checked) {
-  border-color: rgba(173, 142, 84, 0.5);
-  background: rgba(173, 142, 84, 0.08);
+  border-color: rgba(173, 142, 84, 0.55);
+  background: rgba(173, 142, 84, 0.1);
 }
-.settings-radio-label input[type="radio"] {
-  margin-top: 0.2rem;
-  accent-color: #9a7d4e;
-  flex-shrink: 0;
+.settings-radio-label:focus-within {
+  outline: 2px solid rgba(173, 142, 84, 0.55);
+  outline-offset: 1px;
+}
+.settings-radio-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+.settings-radio-content {
+  display: block;
+  flex: 1;
+  min-width: 0;
 }
 .settings-radio-title {
   display: block;
@@ -450,6 +501,18 @@ body.desktop-app main {
   line-height: 1.35;
   color: #a09882;
   margin-top: 0.15rem;
+}
+.settings-radio-check {
+  flex-shrink: 0;
+  width: 1.1rem;
+  text-align: center;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: transparent;
+  transition: color 0.15s;
+}
+.settings-radio-label:has(input:checked) .settings-radio-check {
+  color: #d4b773;
 }
 .settings-vault-setup,
 .settings-vault-status {
@@ -1423,7 +1486,59 @@ body.desktop-app main {
 }
 
 .settings-modal {
-  width: min(560px, calc(100vw - 2rem));
+  width: min(440px, calc(100vw - 2rem));
+  max-height: min(86vh, 50rem);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(173, 142, 84, 0.4) transparent;
+}
+.settings-modal::-webkit-scrollbar {
+  width: 12px;
+}
+.settings-modal::-webkit-scrollbar-track {
+  background: transparent;
+  margin: 14px 0;
+}
+.settings-modal::-webkit-scrollbar-thumb {
+  background: rgba(173, 142, 84, 0.35);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+.settings-modal::-webkit-scrollbar-thumb:hover {
+  background: rgba(173, 142, 84, 0.6);
+  background-clip: padding-box;
+}
+
+.settings-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.settings-modal-header h3 {
+  margin: 0;
+}
+
+.settings-modal-close {
+  background: transparent;
+  border: 1px solid transparent;
+  color: #cec6b5;
+  font-size: 1.5rem;
+  line-height: 1;
+  padding: 0.05rem 0.5rem 0.2rem;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.settings-modal-close:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+  color: #f3ede0;
+  border-color: rgba(173, 142, 84, 0.3);
+}
+.settings-modal-close:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* ── Social: shell ── */

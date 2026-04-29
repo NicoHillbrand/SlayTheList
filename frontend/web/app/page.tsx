@@ -118,7 +118,8 @@ type ResizeState = {
 };
 type ViewTab = "goals" | "habits" | "predictions" | "reflection" | "blocks" | "social";
 type TodoFilter = "active" | "completed" | "all" | "unrefined";
-type TodoRange = "daily" | "daily_plus" | "weekly" | "monthly" | "all" | "top";
+type TodoRange = "daily" | "daily_core" | "weekly" | "monthly" | "all" | "top";
+type TodoPriority = "core" | "additional";
 type HabitsView = "week" | "month";
 type HabitsSubtab = "ideas" | "week" | "month";
 type ReflectionView = "today" | "history";
@@ -199,8 +200,12 @@ const AI_OPENAI_API_KEY_STORAGE_KEY = "slaythelist.ai.openAiApiKey";
 const AI_EXPAND_CONTEXT_STORAGE_KEY = "slaythelist.ai.expandContextByTodoId";
 const PREDICTION_CALIBRATION_RESET_AT_STORAGE_KEY = "slaythelist.predictions.calibrationResetAt";
 const SHOW_TODO_DURATION_STORAGE_KEY = "slaythelist.showTodoDuration";
+const SHOW_COMPLETION_PROGRESS_STORAGE_KEY = "slaythelist.showCompletionProgress";
 const TODO_DURATIONS_STORAGE_KEY = "slaythelist.todoDurations";
 const DAILY_PROGRESS_BASELINE_STORAGE_KEY = "slaythelist.dailyProgressBaseline.v2";
+const TODO_PRIORITIES_STORAGE_KEY = "slaythelist.todoPriorities";
+const SPLIT_DAILY_BY_PRIORITY_STORAGE_KEY = "slaythelist.splitDailyByPriority";
+const PRIORITY_DIVIDER_ID = "__priority_divider__";
 const DEFAULT_TODO_DURATION_MINUTES = 5;
 const DEFAULT_PREDICTION_CONFIDENCE = 95;
 const CALIBRATION_CHART_WIDTH = 320;
@@ -387,7 +392,7 @@ function ScheduleEditor({ schedules, onChange }: { schedules: LockScheduleEntry[
 
 function getDefaultDeadline(range: TodoRange): string {
   const now = new Date();
-  if (range === "daily" || range === "daily_plus" || range === "top") {
+  if (range === "daily" || range === "daily_core" || range === "top") {
     return new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59).toISOString();
   }
   if (range === "weekly") {
@@ -767,6 +772,20 @@ function SortableGoalRow({
   );
 }
 
+function PrioritySectionHeading({ id, label, hint }: { id: string; label: string; hint?: string }) {
+  const { setNodeRef, transform, transition } = useSortable({ id, disabled: true });
+  const style: CSSProperties = {
+    transform: DndCSS.Transform.toString(transform),
+    transition,
+  };
+  return (
+    <li ref={setNodeRef} style={style} className="goals-section-heading">
+      <span className="goals-section-heading-label">{label}</span>
+      {hint && <span className="goals-section-heading-hint">{hint}</span>}
+    </li>
+  );
+}
+
 function SortableHabitRow({
   habit,
   isEditing,
@@ -940,12 +959,12 @@ export default function Page() {
   const [expandedReflectionId, setExpandedReflectionId] = useState<string | null>(null);
   const [draggingTodoId, setDraggingTodoId] = useState<string | null>(null);
   const [justCopied, setJustCopied] = useState(false);
+  const [justCopiedPredictions, setJustCopiedPredictions] = useState(false);
   const [editingTodoId, setEditingTodoId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
   const [editDeadline, setEditDeadline] = useState("");
   const [expandingTodoId, setExpandingTodoId] = useState<string | null>(null);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
-  const [isResettingGold, setIsResettingGold] = useState(false);
   const [expandProvider, setExpandProvider] = useState<ExpandProvider>("gemini-flash");
   const [geminiApiKey, setGeminiApiKey] = useState("");
   const [openAiApiKey, setOpenAiApiKey] = useState("");
@@ -955,6 +974,9 @@ export default function Page() {
   const [todoDrafts, setTodoDrafts] = useState<Record<string, string>>({});
   const [showDetectionIndicator, setShowDetectionIndicatorState] = useState(true);
   const [showTodoDuration, setShowTodoDuration] = useState(true);
+  const [showCompletionProgress, setShowCompletionProgress] = useState(true);
+  const [splitDailyByPriority, setSplitDailyByPriority] = useState(false);
+  const [todoPriorities, setTodoPriorities] = useState<Record<string, TodoPriority>>({});
   const [storageMode, setStorageMode] = useState<"local" | "cloud-vault">("local");
   const [vaultPassphrase, setVaultPassphrase] = useState("");
   const [vaultPassphraseConfirm, setVaultPassphraseConfirm] = useState("");
@@ -1546,8 +1568,46 @@ export default function Page() {
     setDraggingTodoId(null);
     const { active, over } = event;
     if (!over || active.id === over.id) return;
+    const activeId = active.id as string;
+    if (activeId === PRIORITY_DIVIDER_ID) return;
+
+    if (splitDayActive) {
+      const visibleWithDivider = splitVisibleIds;
+      const fromIndex = visibleWithDivider.indexOf(activeId);
+      const toIndex = visibleWithDivider.indexOf(over.id as string);
+      if (fromIndex < 0 || toIndex < 0) return;
+      const reordered = [...visibleWithDivider];
+      const [moved] = reordered.splice(fromIndex, 1);
+      reordered.splice(toIndex, 0, moved);
+      const dividerIdx = reordered.indexOf(PRIORITY_DIVIDER_ID);
+      const movedIdx = reordered.indexOf(moved);
+      const movedTodo = todos.find((t) => t.id === moved);
+      // Determine priority based on which side of the divider this item ended up.
+      // Sub-todos (indent > 0) inherit their top-level parent's priority — find it.
+      let priorityTargetId = moved;
+      if (movedTodo && movedTodo.indent > 0) {
+        const parent = getParentTodo(movedTodo, todos);
+        let topLevel: Todo | null = movedTodo;
+        let cursor: Todo | null = parent;
+        while (cursor && cursor.indent > 0) {
+          topLevel = cursor;
+          cursor = getParentTodo(cursor, todos);
+        }
+        if (cursor) topLevel = cursor;
+        if (topLevel) priorityTargetId = topLevel.id;
+      }
+      const newPriority: TodoPriority = movedIdx < dividerIdx ? "core" : "additional";
+      setTodoPriority(priorityTargetId, newPriority);
+
+      // Build the reorder list excluding the divider, but ensure sub-todos that
+      // belong to the moved top-level group stay grouped with their parent.
+      const orderedTodoIds = reordered.filter((id) => id !== PRIORITY_DIVIDER_ID);
+      applyVisibleReorder(orderedTodoIds);
+      return;
+    }
+
     const visibleIds = filteredTodos.map((t) => t.id);
-    const fromIndex = visibleIds.indexOf(active.id as string);
+    const fromIndex = visibleIds.indexOf(activeId);
     const toIndex = visibleIds.indexOf(over.id as string);
     if (fromIndex < 0 || toIndex < 0) return;
     const reordered = [...visibleIds];
@@ -1583,6 +1643,15 @@ export default function Page() {
     void navigator.clipboard.writeText(lines);
     setJustCopied(true);
     window.setTimeout(() => setJustCopied(false), 1400);
+  }
+
+  function copyPredictionsToClipboard() {
+    if (activePredictions.length === 0) return;
+    const lines = activePredictions.map((p) => `- ${p.title} (${p.confidence}%)`).join("\n");
+    const text = `I predict that today:\n${lines}`;
+    void navigator.clipboard.writeText(text);
+    setJustCopiedPredictions(true);
+    window.setTimeout(() => setJustCopiedPredictions(false), 1400);
   }
 
   function openEditModal(todo: Todo) {
@@ -1636,6 +1705,27 @@ export default function Page() {
       } catch { /* ignore */ }
       return next;
     });
+  }
+
+  useEffect(() => {
+    if (!splitDailyByPriority && todoRange === "daily_core") {
+      setTodoRange("daily");
+    }
+  }, [splitDailyByPriority, todoRange]);
+
+  function setTodoPriority(todoId: string, priority: TodoPriority) {
+    setTodoPriorities((prev) => {
+      if (prev[todoId] === priority) return prev;
+      const next = { ...prev, [todoId]: priority };
+      try {
+        window.localStorage.setItem(TODO_PRIORITIES_STORAGE_KEY, JSON.stringify(next));
+      } catch { /* ignore */ }
+      return next;
+    });
+  }
+
+  function getTodoPriority(todoId: string): TodoPriority {
+    return todoPriorities[todoId] ?? "additional";
   }
 
   function logTimeAndCopy(todo: Todo) {
@@ -1755,30 +1845,12 @@ export default function Page() {
       window.localStorage.setItem(AI_GEMINI_API_KEY_STORAGE_KEY, geminiApiKey.trim());
       window.localStorage.setItem(AI_OPENAI_API_KEY_STORAGE_KEY, openAiApiKey.trim());
       window.localStorage.setItem(SHOW_TODO_DURATION_STORAGE_KEY, String(showTodoDuration));
+      window.localStorage.setItem(SHOW_COMPLETION_PROGRESS_STORAGE_KEY, String(showCompletionProgress));
+      window.localStorage.setItem(SPLIT_DAILY_BY_PRIORITY_STORAGE_KEY, String(splitDailyByPriority));
       setError(null);
       setShowSettingsModal(false);
     } catch {
       setError("Failed to save settings.");
-    }
-  }
-
-  async function resetGoldProgress() {
-    const confirmed = window.confirm(
-      "Reset gold for testing? This clears your gold total and completed gold rewards, but keeps the rest of your app data.",
-    );
-    if (!confirmed) return;
-
-    setIsResettingGold(true);
-    setError(null);
-    try {
-      const nextGoldState = await saveGoldState({ gold: 0, rewardedTodoIds: [] });
-      setGold(nextGoldState.gold);
-      setRewardedTodoIds(nextGoldState.rewardedTodoIds);
-      setShowSettingsModal(false);
-    } catch (err) {
-      setError(toErrorMessage(err));
-    } finally {
-      setIsResettingGold(false);
     }
   }
 
@@ -2082,6 +2154,9 @@ export default function Page() {
   function addItemBelowList() {
     void runAction(async () => {
       const created = await createTodo("", { deadlineAt: todoFilter === "unrefined" ? null : getDefaultDeadline(todoRange) });
+      if (todoRange === "daily_core") {
+        setTodoPriority(created.id, "core");
+      }
       const orderedIds = todos.map((item) => item.id).filter((id) => id !== created.id);
       const lastVisibleId = filteredTodos[filteredTodos.length - 1]?.id;
       const insertAfterIndex = lastVisibleId ? orderedIds.indexOf(lastVisibleId) : orderedIds.length - 1;
@@ -2131,6 +2206,9 @@ export default function Page() {
         const newIndent = todoRange === "top" ? todo.indent + 1 : todo.indent;
         if (newIndent > 0) {
           await updateTodo(created.id, { indent: newIndent });
+        }
+        if (newIndent === 0 && todoRange === "daily_core") {
+          setTodoPriority(created.id, "core");
         }
         const orderedIds = todos.map((item) => item.id).filter((id) => id !== created.id);
         const todoIndex = orderedIds.indexOf(todo.id);
@@ -2619,7 +2697,7 @@ export default function Page() {
   }, [blockZones, selectedZoneIds]);
   const progress = useMemo(() => {
     const nonArchived = todos.filter((todo) => !todo.archivedAt);
-    const rangeForProgress = (todoRange === "top" || todoRange === "daily_plus") ? "daily" : todoRange;
+    const rangeForProgress = (todoRange === "top" || todoRange === "daily_core") ? "daily" : todoRange;
     const inView = rangeForProgress === "all"
       ? nonArchived
       : nonArchived.filter((todo) => {
@@ -2670,7 +2748,7 @@ export default function Page() {
         if (!Number.isFinite(completedDate.getTime())) return false;
         const now = new Date();
         const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        if (todoRange === "daily" || todoRange === "daily_plus") return completedDate >= startOfToday;
+        if (todoRange === "daily" || todoRange === "daily_core") return completedDate >= startOfToday;
         const ago7Days = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7);
         if (todoRange === "weekly") return completedDate >= ago7Days;
         const ago30Days = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 30);
@@ -2680,7 +2758,7 @@ export default function Page() {
       const view = getViewForDeadline(todo.deadlineAt);
       if (todoRange === "monthly") return view === "daily" || view === "weekly" || view === "monthly";
       if (todoRange === "weekly") return view === "daily" || view === "weekly";
-      if (todoRange === "daily" || todoRange === "daily_plus") return view === "daily";
+      if (todoRange === "daily" || todoRange === "daily_core") return view === "daily";
       return true;
     });
     if (todoRange === "top" && (todoFilter === "active" || todoFilter === "all") && rangeFiltered.length > 0) {
@@ -2697,23 +2775,47 @@ export default function Page() {
         return topSlice;
       }
     }
-    if (todoRange === "daily_plus" && (todoFilter === "active" || todoFilter === "all")) {
-      // Find the first top-level non-daily active item (+ its children) as a bonus item
-      const nonDailyActive = todos.filter(
-        (t) => !t.archivedAt && t.status === "active" && getViewForDeadline(t.deadlineAt) !== "daily",
-      );
-      const bonusIdx = nonDailyActive.findIndex((t) => t.indent === 0);
-      if (bonusIdx >= 0) {
-        const bonusSlice: Todo[] = [nonDailyActive[bonusIdx]];
-        for (let i = bonusIdx + 1; i < nonDailyActive.length; i += 1) {
-          if (nonDailyActive[i].indent === 0) break;
-          bonusSlice.push(nonDailyActive[i]);
+    if (todoRange === "daily_core") {
+      // Keep only items whose top-level ancestor is marked as core (sub-todos inherit).
+      const visible: Todo[] = [];
+      let coreActiveAncestor = false;
+      for (const todo of rangeFiltered) {
+        if (todo.indent === 0) {
+          coreActiveAncestor = (todoPriorities[todo.id] ?? "additional") === "core";
         }
-        return [...rangeFiltered, ...bonusSlice];
+        if (coreActiveAncestor) visible.push(todo);
       }
+      return visible;
     }
     return rangeFiltered;
-  }, [todoFilter, todoRange, todos]);
+  }, [todoFilter, todoRange, todos, todoPriorities]);
+
+  const splitDayActive = splitDailyByPriority && todoRange === "daily";
+
+  type GroupedTodos = { core: Todo[]; additional: Todo[] };
+  const groupedDayTodos = useMemo<GroupedTodos>(() => {
+    if (!splitDayActive) return { core: [], additional: [] };
+    const core: Todo[] = [];
+    const additional: Todo[] = [];
+    let bucket: "core" | "additional" = "additional";
+    for (const todo of filteredTodos) {
+      if (todo.indent === 0) {
+        bucket = (todoPriorities[todo.id] ?? "additional") === "core" ? "core" : "additional";
+      }
+      (bucket === "core" ? core : additional).push(todo);
+    }
+    return { core, additional };
+  }, [splitDayActive, filteredTodos, todoPriorities]);
+
+  // For the split view: an ordered list of sortable IDs interleaved with a divider sentinel.
+  const splitVisibleIds = useMemo<string[]>(() => {
+    if (!splitDayActive) return [];
+    return [
+      ...groupedDayTodos.core.map((t) => t.id),
+      PRIORITY_DIVIDER_ID,
+      ...groupedDayTodos.additional.map((t) => t.id),
+    ];
+  }, [splitDayActive, groupedDayTodos]);
 
   useEffect(() => {
     setTodoDrafts((previous) => {
@@ -2734,6 +2836,21 @@ export default function Page() {
       const storedPredictionCalibrationResetAt = window.localStorage.getItem(PREDICTION_CALIBRATION_RESET_AT_STORAGE_KEY);
       const storedShowTodoDuration = window.localStorage.getItem(SHOW_TODO_DURATION_STORAGE_KEY);
       if (storedShowTodoDuration === "false") setShowTodoDuration(false);
+      const storedShowCompletionProgress = window.localStorage.getItem(SHOW_COMPLETION_PROGRESS_STORAGE_KEY);
+      if (storedShowCompletionProgress === "false") setShowCompletionProgress(false);
+      const storedSplitDailyByPriority = window.localStorage.getItem(SPLIT_DAILY_BY_PRIORITY_STORAGE_KEY);
+      if (storedSplitDailyByPriority === "true") setSplitDailyByPriority(true);
+      const storedPriorities = window.localStorage.getItem(TODO_PRIORITIES_STORAGE_KEY);
+      if (storedPriorities) {
+        try {
+          const parsed = JSON.parse(storedPriorities) as Record<string, unknown>;
+          const next: Record<string, TodoPriority> = {};
+          for (const [id, val] of Object.entries(parsed)) {
+            if (val === "core" || val === "additional") next[id] = val;
+          }
+          setTodoPriorities(next);
+        } catch { /* ignore */ }
+      }
       const storedTodoDurations = window.localStorage.getItem(TODO_DURATIONS_STORAGE_KEY);
       if (storedTodoDurations) {
         try {
@@ -3549,7 +3666,7 @@ export default function Page() {
                 <select value={todoRange} onChange={(event) => setTodoRange(event.target.value as TodoRange)}>
                   <option value="top">Top</option>
                   <option value="daily">Day</option>
-                  <option value="daily_plus">Day+</option>
+                  {splitDailyByPriority && <option value="daily_core">Day · Core</option>}
                   <option value="weekly">Week</option>
                   <option value="monthly">Month</option>
                   <option value="all">All time</option>
@@ -3557,11 +3674,13 @@ export default function Page() {
               </div>
             </div>
 
-            <p className="goals-progress">Progress: {progress}% complete</p>
+            {showCompletionProgress && (
+              <p className="goals-progress">Progress: {progress}% complete</p>
+            )}
             {loadState === "loading" && <p>Loading…</p>}
             {error && <p style={{ color: "#fda4af" }}>{error}</p>}
 
-            {filteredTodos.length === 0 ? (
+            {filteredTodos.length === 0 && !splitDayActive ? (
               <p className="goals-empty">No goals yet.</p>
             ) : (
               <DndContext
@@ -3569,34 +3688,108 @@ export default function Page() {
                 onDragStart={handleTodoDragStart}
                 onDragEnd={handleTodoDragEnd}
               >
-                <SortableContext items={filteredTodos.map((t) => t.id)} strategy={verticalListSortingStrategy}>
+                <SortableContext
+                  items={splitDayActive ? splitVisibleIds : filteredTodos.map((t) => t.id)}
+                  strategy={verticalListSortingStrategy}
+                >
                   <ul className="goals-list">
-                    {filteredTodos.map((todo) => (
-                      <SortableGoalRow
-                        key={todo.id}
-                        todo={todo}
-                        todoRange={todoRange}
-                        todoFilter={todoFilter}
-                        todoDrafts={todoDrafts}
-                        expandingTodoId={expandingTodoId}
-                        expandContextByTodoId={expandContextByTodoId}
-                        todoInputRefs={todoInputRefs}
-                        toggleTodo={toggleTodo}
-                        autoResizeTextarea={autoResizeTextarea}
-                        onTodoTitleKeyDown={onTodoTitleKeyDown}
-                        commitTodoTitle={commitTodoTitle}
-                        handleExpandTodo={handleExpandTodo}
-                        openExpansionContextModal={openExpansionContextModal}
-                        openEditModal={openEditModal}
-                        removeTodo={removeTodo}
-                        pushToNextDay={pushToNextDay}
-                        setTodoDrafts={setTodoDrafts}
-                        showTodoDuration={showTodoDuration}
-                        todoDuration={todoDurations[todo.id] ?? DEFAULT_TODO_DURATION_MINUTES}
-                        setTodoDuration={setTodoDuration}
-                        logTimeAndCopy={logTimeAndCopy}
-                      />
-                    ))}
+                    {splitDayActive ? (
+                      <>
+                        <PrioritySectionHeading
+                          id="__priority_heading_core__"
+                          label="Core"
+                        />
+                        {groupedDayTodos.core.length === 0 && (
+                          <li className="goals-section-empty">Drag items here for your core day.</li>
+                        )}
+                        {groupedDayTodos.core.map((todo) => (
+                          <SortableGoalRow
+                            key={todo.id}
+                            todo={todo}
+                            todoRange={todoRange}
+                            todoFilter={todoFilter}
+                            todoDrafts={todoDrafts}
+                            expandingTodoId={expandingTodoId}
+                            expandContextByTodoId={expandContextByTodoId}
+                            todoInputRefs={todoInputRefs}
+                            toggleTodo={toggleTodo}
+                            autoResizeTextarea={autoResizeTextarea}
+                            onTodoTitleKeyDown={onTodoTitleKeyDown}
+                            commitTodoTitle={commitTodoTitle}
+                            handleExpandTodo={handleExpandTodo}
+                            openExpansionContextModal={openExpansionContextModal}
+                            openEditModal={openEditModal}
+                            removeTodo={removeTodo}
+                            pushToNextDay={pushToNextDay}
+                            setTodoDrafts={setTodoDrafts}
+                            showTodoDuration={showTodoDuration}
+                            todoDuration={todoDurations[todo.id] ?? DEFAULT_TODO_DURATION_MINUTES}
+                            setTodoDuration={setTodoDuration}
+                            logTimeAndCopy={logTimeAndCopy}
+                          />
+                        ))}
+                        <PrioritySectionHeading
+                          id={PRIORITY_DIVIDER_ID}
+                          label="Additional"
+                        />
+                        {groupedDayTodos.additional.length === 0 && (
+                          <li className="goals-section-empty">Drag items here for additional tasks.</li>
+                        )}
+                        {groupedDayTodos.additional.map((todo) => (
+                          <SortableGoalRow
+                            key={todo.id}
+                            todo={todo}
+                            todoRange={todoRange}
+                            todoFilter={todoFilter}
+                            todoDrafts={todoDrafts}
+                            expandingTodoId={expandingTodoId}
+                            expandContextByTodoId={expandContextByTodoId}
+                            todoInputRefs={todoInputRefs}
+                            toggleTodo={toggleTodo}
+                            autoResizeTextarea={autoResizeTextarea}
+                            onTodoTitleKeyDown={onTodoTitleKeyDown}
+                            commitTodoTitle={commitTodoTitle}
+                            handleExpandTodo={handleExpandTodo}
+                            openExpansionContextModal={openExpansionContextModal}
+                            openEditModal={openEditModal}
+                            removeTodo={removeTodo}
+                            pushToNextDay={pushToNextDay}
+                            setTodoDrafts={setTodoDrafts}
+                            showTodoDuration={showTodoDuration}
+                            todoDuration={todoDurations[todo.id] ?? DEFAULT_TODO_DURATION_MINUTES}
+                            setTodoDuration={setTodoDuration}
+                            logTimeAndCopy={logTimeAndCopy}
+                          />
+                        ))}
+                      </>
+                    ) : (
+                      filteredTodos.map((todo) => (
+                        <SortableGoalRow
+                          key={todo.id}
+                          todo={todo}
+                          todoRange={todoRange}
+                          todoFilter={todoFilter}
+                          todoDrafts={todoDrafts}
+                          expandingTodoId={expandingTodoId}
+                          expandContextByTodoId={expandContextByTodoId}
+                          todoInputRefs={todoInputRefs}
+                          toggleTodo={toggleTodo}
+                          autoResizeTextarea={autoResizeTextarea}
+                          onTodoTitleKeyDown={onTodoTitleKeyDown}
+                          commitTodoTitle={commitTodoTitle}
+                          handleExpandTodo={handleExpandTodo}
+                          openExpansionContextModal={openExpansionContextModal}
+                          openEditModal={openEditModal}
+                          removeTodo={removeTodo}
+                          pushToNextDay={pushToNextDay}
+                          setTodoDrafts={setTodoDrafts}
+                          showTodoDuration={showTodoDuration}
+                          todoDuration={todoDurations[todo.id] ?? DEFAULT_TODO_DURATION_MINUTES}
+                          setTodoDuration={setTodoDuration}
+                          logTimeAndCopy={logTimeAndCopy}
+                        />
+                      ))
+                    )}
                   </ul>
                 </SortableContext>
                 <DragOverlay>
@@ -3911,6 +4104,7 @@ export default function Page() {
               ) : (
                 <div className="habits-panel">
                   <div className="habits-table-wrap">
+                    <DndContext sensors={habitSensors} onDragEnd={handleHabitDragEnd}>
                     <table className="habits-table">
                   <thead>
                     <tr>
@@ -3935,7 +4129,6 @@ export default function Page() {
                     </tr>
                   </thead>
                   <tbody>
-                    <DndContext sensors={habitSensors} onDragEnd={handleHabitDragEnd}>
                       <SortableContext items={coreHabits.map((h) => h.id)} strategy={verticalListSortingStrategy}>
                         {coreHabits.map((habit) => (
                           <SortableHabitRow
@@ -3969,7 +4162,6 @@ export default function Page() {
                           />
                         ))}
                       </SortableContext>
-                    </DndContext>
                     <tr className="habits-add-row">
                       <td colSpan={habitsTableColSpan}>
                         <div className="habits-add-inline">
@@ -3995,6 +4187,7 @@ export default function Page() {
                     </tr>
                   </tbody>
                     </table>
+                    </DndContext>
                   </div>
                   <div className="bonus-habits-section">
                     <button
@@ -4008,6 +4201,7 @@ export default function Page() {
                     </button>
                     {bonusHabitsOpen && (
                       <div className="habits-table-wrap">
+                        <DndContext sensors={habitSensors} onDragEnd={handleHabitDragEnd}>
                         <table className="habits-table">
                           <thead>
                             <tr>
@@ -4030,7 +4224,6 @@ export default function Page() {
                             </tr>
                           </thead>
                           <tbody>
-                            <DndContext sensors={habitSensors} onDragEnd={handleHabitDragEnd}>
                               <SortableContext items={bonusHabits.map((h) => h.id)} strategy={verticalListSortingStrategy}>
                                 {bonusHabits.map((habit) => (
                                   <SortableHabitRow
@@ -4064,7 +4257,6 @@ export default function Page() {
                                   />
                                 ))}
                               </SortableContext>
-                            </DndContext>
                             <tr className="habits-add-row">
                               <td colSpan={habitsTableColSpan}>
                                 <div className="habits-add-inline">
@@ -4088,6 +4280,7 @@ export default function Page() {
                             </tr>
                           </tbody>
                         </table>
+                        </DndContext>
                       </div>
                     )}
                   </div>
@@ -4119,6 +4312,24 @@ export default function Page() {
                   Base
                 </button>
               </nav>
+              <div className="goals-filters">
+                <button
+                  type="button"
+                  className={`goals-copy-btn ${justCopiedPredictions ? "copied" : ""}`}
+                  onClick={copyPredictionsToClipboard}
+                  disabled={activePredictions.length === 0}
+                  title={
+                    activePredictions.length === 0
+                      ? "No active predictions to copy"
+                      : justCopiedPredictions
+                        ? "Copied"
+                        : "Copy active predictions"
+                  }
+                  aria-label="Copy active predictions"
+                >
+                  {justCopiedPredictions ? "✓" : "📋"}
+                </button>
+              </div>
             </div>
             <div className="predictions-top">
               <div className="prediction-header">
@@ -5696,11 +5907,7 @@ export default function Page() {
         <div
           className="todo-edit-modal-backdrop"
           role="presentation"
-          onClick={() => {
-            if (!isResettingGold) {
-              setShowSettingsModal(false);
-            }
-          }}
+          onClick={() => setShowSettingsModal(false)}
         >
           <div
             className="todo-edit-modal settings-modal"
@@ -5708,13 +5915,24 @@ export default function Page() {
             aria-modal="true"
             onClick={(event) => event.stopPropagation()}
           >
-            <h3>Settings</h3>
+            <div className="settings-modal-header">
+              <h3>Settings</h3>
+              <button
+                type="button"
+                className="settings-modal-close"
+                aria-label="Close settings"
+                onClick={() => setShowSettingsModal(false)}
+              >
+                ×
+              </button>
+            </div>
             <section className="settings-section">
               <p className="settings-section-title">Data storage</p>
               <div className="settings-radio-group">
                 <label className="settings-radio-label">
                   <input
                     type="radio"
+                    className="settings-radio-input"
                     name="storageMode"
                     value="local"
                     checked={storageMode === "local"}
@@ -5723,14 +5941,16 @@ export default function Page() {
                       await setAppSetting("storageMode", "local");
                     }}
                   />
-                  <div>
+                  <div className="settings-radio-content">
                     <span className="settings-radio-title">Local only</span>
                     <span className="settings-radio-desc">Data stays on this device. Social features push a copy of visible items to the cloud.</span>
                   </div>
+                  <span className="settings-radio-check" aria-hidden="true">✓</span>
                 </label>
                 <label className="settings-radio-label">
                   <input
                     type="radio"
+                    className="settings-radio-input"
                     name="storageMode"
                     value="cloud-vault"
                     checked={storageMode === "cloud-vault"}
@@ -5739,16 +5959,17 @@ export default function Page() {
                       await setAppSetting("storageMode", "cloud-vault");
                     }}
                   />
-                  <div>
+                  <div className="settings-radio-content">
                     <span className="settings-radio-title">Cloud Vault</span>
-                    <span className="settings-radio-desc">End-to-end encrypted cloud sync. The cloud is the source of truth — access from any device including Android.</span>
+                    <span className="settings-radio-desc">End-to-end encrypted cloud sync. The cloud is the source of truth. Access from any device including Android.</span>
                   </div>
+                  <span className="settings-radio-check" aria-hidden="true">✓</span>
                 </label>
               </div>
               {storageMode === "cloud-vault" && !vaultPassphraseSet && (
                 <div className="settings-vault-setup">
                   <p className="settings-section-copy">
-                    Set a vault passphrase to encrypt your data. This passphrase never leaves your device — if you forget it, your cloud data cannot be recovered.
+                    Set a vault passphrase to encrypt your data. This passphrase never leaves your device. If you forget it, your cloud data cannot be recovered.
                   </p>
                   <label>
                     Vault passphrase
@@ -5828,6 +6049,7 @@ export default function Page() {
               )}
             </section>
             <section className="settings-section">
+              <p className="settings-section-title">Customization</p>
               <label className="settings-checkbox-label">
                 <input
                   type="checkbox"
@@ -5840,8 +6062,6 @@ export default function Page() {
                 />
                 Show detection status overlay
               </label>
-            </section>
-            <section className="settings-section">
               <label className="settings-checkbox-label">
                 <input
                   type="checkbox"
@@ -5850,6 +6070,27 @@ export default function Page() {
                 />
                 Show time block controls on todos
               </label>
+              <label className="settings-checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={showCompletionProgress}
+                  onChange={(event) => setShowCompletionProgress(event.target.checked)}
+                />
+                Show completion progress
+              </label>
+              <label className="settings-checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={splitDailyByPriority}
+                  onChange={(event) => setSplitDailyByPriority(event.target.checked)}
+                />
+                Split day list into Core and Additional
+              </label>
+              {splitDailyByPriority && (
+                <p className="settings-section-copy" style={{ marginLeft: "1.6rem" }}>
+                  Two headings on the day view. Drag items between them to mark what is core for today versus nice-to-do. Adds a Day · Core view with only core items.
+                </p>
+              )}
             </section>
             <section className="settings-section">
               <p className="settings-section-title">AI expansion</p>
@@ -5882,20 +6123,9 @@ export default function Page() {
                 />
               </label>
             </section>
-            <section className="settings-section" style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-              <button
-                type="button"
-                className="settings-reset-button"
-                onClick={() => void resetGoldProgress()}
-                disabled={isResettingGold}
-              >
-                {isResettingGold ? "Resetting..." : "Reset gold"}
-              </button>
-              <small style={{ opacity: 0.6 }}>Resets gold count only</small>
-            </section>
             <div className="todo-edit-modal-actions">
-              <button type="button" onClick={() => setShowSettingsModal(false)} disabled={isResettingGold}>Cancel</button>
-              <button type="button" onClick={saveSettings} disabled={isResettingGold}>Save</button>
+              <button type="button" onClick={() => setShowSettingsModal(false)}>Cancel</button>
+              <button type="button" onClick={saveSettings}>Save</button>
             </div>
           </div>
         </div>
