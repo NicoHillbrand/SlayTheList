@@ -32,6 +32,7 @@ export class BaseScene extends Phaser.Scene {
   // Placement mode
   private placingItem: CatalogItem | null = null;
   private placementGhost: Phaser.GameObjects.Graphics | null = null;
+  private placementGhostSprite: Phaser.GameObjects.Image | null = null;
   private ghostCol = 0;
   private ghostRow = 0;
   private placingRotation = 0;
@@ -113,6 +114,8 @@ export class BaseScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(10000);
 
+    this.setupUiCamera();
+
     // Input
     this.input.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
       if (pointer.rightButtonDown() || pointer.middleButtonDown()) {
@@ -188,47 +191,151 @@ export class BaseScene extends Phaser.Scene {
     this.onReady?.();
   }
 
-  /** Simple seeded random for consistent per-tile variation. */
-  private tileRand(col: number, row: number, seed = 0): number {
-    let h = (col * 374761393 + row * 668265263 + seed * 1013904223) | 0;
-    h = ((h ^ (h >> 13)) * 1274126177) | 0;
-    return ((h ^ (h >> 16)) >>> 0) / 4294967296;
+  /** A second camera at zoom=1 renders only the HUD; the main camera ignores
+   *  HUD elements. This way scroll/zoom on the main camera never affects HUD
+   *  position or size. New world objects added later are auto-ignored by the
+   *  UI camera via the ADDED_TO_SCENE event. */
+  private setupUiCamera() {
+    const uiObjects = new Set<Phaser.GameObjects.GameObject>([
+      this.goldText, this.diamondText, this.statusText,
+    ]);
+
+    this.cameras.main.ignore(Array.from(uiObjects));
+
+    const uiCam = this.cameras.add(0, 0, this.scale.width, this.scale.height);
+    uiCam.setName("ui");
+
+    // UI camera ignores everything currently in the scene that isn't UI.
+    for (const child of this.children.list) {
+      if (!uiObjects.has(child)) uiCam.ignore(child);
+    }
+
+    // ...and auto-ignores anything added later (buildings, ghosts, etc.).
+    this.events.on(Phaser.Scenes.Events.ADDED_TO_SCENE, (obj: Phaser.GameObjects.GameObject) => {
+      if (!uiObjects.has(obj)) uiCam.ignore(obj);
+    });
+
+    // Keep UI camera sized to the canvas if the window resizes.
+    this.scale.on("resize", (size: Phaser.Structs.Size) => {
+      uiCam.setSize(size.width, size.height);
+    });
   }
 
   private drawGroundTiles() {
-    // Soft outer grass halo behind the grid (kept from old procedural look).
-    const edgeGrass = this.add.graphics();
-    edgeGrass.setDepth(-2000);
-    const center = gridToScreen(GRID_COLS / 2, GRID_ROWS / 2);
-    for (let i = 0; i < 40; i++) {
-      const angle = (i / 40) * Math.PI * 2;
-      const dist = 340 + Math.sin(i * 3.7) * 40;
-      const ex = center.x + Math.cos(angle) * dist;
-      const ey = center.y + Math.sin(angle) * dist * 0.5;
-      edgeGrass.fillStyle(0x3d6b30, 0.15);
-      edgeGrass.fillEllipse(ex, ey, 30 + Math.sin(i * 2.3) * 15, 12);
-    }
+    // Render the field as a real arrangement of 3D block tiles where each
+    // tile shows only the faces that wouldn't be occluded by neighbors:
+    //   - interior tile          → diamond face only ("face")
+    //   - col=COLS-1 edge        → diamond + right side face ("rightEdge")
+    //   - row=ROWS-1 edge        → diamond + left side face  ("leftEdge")
+    //   - (COLS-1, ROWS-1) corner → full asset, both side faces ("frontCorner")
+    //
+    // The 132×83 source PNG is a 3D block whose rectangular bbox includes
+    // side-face content in its bottom corners (below the diamond). Rendering
+    // the raw PNG would let that side-face content peek through neighboring
+    // tiles' transparent corners. We avoid that by pre-processing the source
+    // into 4 polygon-clipped CanvasTexture variants, each containing only
+    // the faces that variant should show.
+    this.prepareGroundVariants();
 
-    // Source tiles are 132x83 with the 132x66 diamond face on top and a
-    // ~17px depth strip below. Display width matches TILE_WIDTH (with a 1px
-    // overlap to hide seams); height is proportional. The diamond face center
-    // sits 8.5/83 of the source above the sprite center, which after scaling
-    // means the sprite must be drawn slightly below the tile center to align.
-    const displayW = TILE_WIDTH + 1;
-    const displayH = displayW * (83 / 132);
-    const offsetY = displayW * (8.5 / 132);
+    const SRC_W = 132;
+    const SRC_H = 99;
+    const displayW = TILE_WIDTH;                     // 64
+    const displayH = displayW * (SRC_H / SRC_W);     // 48
+    // Diamond face center is at source (66, 33). The sprite's vertical
+    // center is at source y = 49.5, so the face sits 16.5 source-pixels
+    // above the sprite center. Scaling by displayW/132 gives the offset
+    // needed to put the face center exactly on the grid (x, y).
+    const offsetY = displayW * (16.5 / 132);         // 8
+
+    const sourceKey = groundTileKey("grass");
 
     for (let row = 0; row < GRID_ROWS; row++) {
       for (let col = 0; col < GRID_COLS; col++) {
         const { x, y } = gridToScreen(col, row);
-        const r = this.tileRand(col, row);
-        const tileName: keyof typeof GROUND_TILES = r > 0.85 ? "grassLight" : "grass";
+        const onRightEdge = col === GRID_COLS - 1;
+        const onLeftEdge = row === GRID_ROWS - 1;
 
-        const img = this.add.image(x, y + offsetY, groundTileKey(tileName));
+        let variant: "face" | "rightEdge" | "leftEdge" | "frontCorner";
+        if (onRightEdge && onLeftEdge) variant = "frontCorner";
+        else if (onRightEdge) variant = "rightEdge";
+        else if (onLeftEdge) variant = "leftEdge";
+        else variant = "face";
+
+        const img = this.add.image(x, y + offsetY, `${sourceKey}_${variant}`);
         img.setDisplaySize(displayW, displayH);
-        // Ground tiles draw far below buildings; per-tile depth keeps the
-        // depth strip of back tiles occluded by the diamond face of front ones.
         img.setDepth(-1000 + isoDepth(col, row));
+      }
+    }
+  }
+
+  /** Pre-process each ground texture into 4 polygon-clipped variants so
+   *  per-tile rendering can show only the faces that aren't occluded by
+   *  neighbors. Runs once; subsequent calls are no-ops. */
+  private prepareGroundVariants() {
+    const SRC_W = 132;
+    const SRC_H = 99;
+    const halfSrc = SRC_W / 2;     // 66 — diamond top/bottom corner x
+    const SIDE_TOP = 33;            // y of diamond left/right corners (= side face top-back)
+    const FACE_BOTTOM = 66;         // y of diamond bottom corner (= side face top-front)
+    const SIDE_BOTTOM = 66;         // y where side faces end at left/right edges (back-bottom)
+
+    // Each polygon is the outline of the visible region (clockwise from top).
+    const variants: Record<string, [number, number][]> = {
+      face: [
+        [halfSrc, 0],
+        [SRC_W, SIDE_TOP],
+        [halfSrc, FACE_BOTTOM],
+        [0, SIDE_TOP],
+      ],
+      rightEdge: [
+        [halfSrc, 0],
+        [SRC_W, SIDE_TOP],
+        [SRC_W, SIDE_BOTTOM],
+        [halfSrc, SRC_H],
+        [halfSrc, FACE_BOTTOM],
+        [0, SIDE_TOP],
+      ],
+      leftEdge: [
+        [halfSrc, 0],
+        [SRC_W, SIDE_TOP],
+        [halfSrc, FACE_BOTTOM],
+        [halfSrc, SRC_H],
+        [0, SIDE_BOTTOM],
+        [0, SIDE_TOP],
+      ],
+      frontCorner: [
+        [halfSrc, 0],
+        [SRC_W, SIDE_TOP],
+        [SRC_W, SIDE_BOTTOM],
+        [halfSrc, SRC_H],
+        [0, SIDE_BOTTOM],
+        [0, SIDE_TOP],
+      ],
+    };
+
+    for (const sourceName of Object.keys(GROUND_TILES) as (keyof typeof GROUND_TILES)[]) {
+      const sourceKey = groundTileKey(sourceName);
+      const sourceImg = this.textures.get(sourceKey).getSourceImage(0) as CanvasImageSource;
+
+      for (const [variantName, polygon] of Object.entries(variants)) {
+        const dstKey = `${sourceKey}_${variantName}`;
+        if (this.textures.exists(dstKey)) continue;
+
+        const tex = this.textures.createCanvas(dstKey, SRC_W, SRC_H);
+        if (!tex) continue;
+
+        const ctx = tex.context;
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(polygon[0][0], polygon[0][1]);
+        for (let i = 1; i < polygon.length; i++) {
+          ctx.lineTo(polygon[i][0], polygon[i][1]);
+        }
+        ctx.closePath();
+        ctx.clip();
+        ctx.drawImage(sourceImg, 0, 0);
+        ctx.restore();
+        tex.refresh();
       }
     }
   }
@@ -534,12 +641,24 @@ export class BaseScene extends Phaser.Scene {
     this.placementGhost = this.add.graphics();
     this.placementGhost.setDepth(9999);
     this.placementGhost.setVisible(false);
+
+    if (hasSprite(itemId)) {
+      const asset = SPRITE_ASSETS[itemId];
+      const ghostSprite = this.add.image(0, 0, spriteKey(itemId));
+      ghostSprite.setDisplaySize(asset.width, asset.height);
+      ghostSprite.setAlpha(0.7);
+      ghostSprite.setDepth(9999);
+      ghostSprite.setVisible(false);
+      this.placementGhostSprite = ghostSprite;
+    }
   }
 
   cancelPlacement() {
     this.placingItem = null;
     this.placementGhost?.destroy();
     this.placementGhost = null;
+    this.placementGhostSprite?.destroy();
+    this.placementGhostSprite = null;
     this.statusText.setText("");
   }
 
@@ -573,10 +692,17 @@ export class BaseScene extends Phaser.Scene {
     }
 
     // Draw building preview
-    if (canPlace) {
-      const centerCol = this.ghostCol + (fw - 1) / 2;
-      const centerRow = this.ghostRow + (fh - 1) / 2;
-      const { x, y } = gridToScreen(centerCol, centerRow);
+    const centerCol = this.ghostCol + (fw - 1) / 2;
+    const centerRow = this.ghostRow + (fh - 1) / 2;
+    const { x, y } = gridToScreen(centerCol, centerRow);
+
+    if (this.placementGhostSprite) {
+      const asset = SPRITE_ASSETS[this.placingItem.id];
+      this.placementGhostSprite.setPosition(x, y + asset.offsetY);
+      this.placementGhostSprite.setVisible(true);
+      this.placementGhostSprite.setTint(canPlace ? 0xffffff : 0xff8888);
+      this.placementGhostSprite.setFlipX(this.placingRotation === 1 || this.placingRotation === 2);
+    } else if (canPlace) {
       const color = Phaser.Display.Color.HexStringToColor(this.placingItem.color).color;
       this.placementGhost.setAlpha(0.6);
       renderBuilding(this.placementGhost, x, y, this.placingItem.id, color, this.placingRotation);

@@ -2,7 +2,8 @@
 
 import { useState, useCallback } from "react";
 import dynamic from "next/dynamic";
-import { CATALOG, type CatalogItem } from "../../lib/game/catalog";
+import { CATALOG, effectiveCost, type CatalogItem } from "../../lib/game/catalog";
+import { SPRITE_ASSETS, hasSprite } from "../../lib/game/sprites";
 import type { BaseScene } from "../../lib/game/BaseScene";
 
 const PhaserGame = dynamic(() => import("../../lib/game/PhaserGame"), {
@@ -52,7 +53,7 @@ export default function BasePage() {
     const balance = item.currency === "diamonds" ? progression.diamonds
       : item.currency === "emeralds" ? progression.emeralds
       : progression.gold;
-    return balance >= item.cost;
+    return balance >= effectiveCost(item);
   }
 
   function meetsRequirement(item: CatalogItem): boolean {
@@ -63,7 +64,7 @@ export default function BasePage() {
 
   async function handleBuy(item: CatalogItem) {
     if (!scene) return;
-    await scene.buyItem(item.id, item.cost, item.currency);
+    await scene.buyItem(item.id, effectiveCost(item), item.currency);
   }
 
   function handlePlace(item: CatalogItem) {
@@ -143,6 +144,7 @@ export default function BasePage() {
               const meetsReq = meetsRequirement(item);
               const affordable = canAfford(item);
               const stock = inventory[item.id] ?? 0;
+              const cost = effectiveCost(item);
 
               return (
                 <div
@@ -153,20 +155,33 @@ export default function BasePage() {
                     opacity: meetsReq ? 1 : 0.5,
                   }}
                 >
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                    <div style={{
-                      width: 24, height: 24, borderRadius: 4,
-                      background: item.color, flexShrink: 0,
-                    }} />
-                    <div style={{ flex: 1 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+                    {hasSprite(item.id) ? (
+                      <div style={{
+                        width: 56, height: 56, borderRadius: 4, flexShrink: 0,
+                        background: "#0e0e1a",
+                        backgroundImage: `url(/assets/${SPRITE_ASSETS[item.id].path})`,
+                        backgroundSize: "contain",
+                        backgroundRepeat: "no-repeat",
+                        backgroundPosition: "center",
+                        border: "1px solid #2a2a4a",
+                      }} />
+                    ) : (
+                      <div style={{
+                        width: 56, height: 56, borderRadius: 4, flexShrink: 0,
+                        background: item.color,
+                        border: "1px solid #2a2a4a",
+                      }} />
+                    )}
+                    <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 13, fontWeight: 600 }}>
                         {item.name}
                         {stock > 0 && <span style={{ color: "#88ff88", fontWeight: 400, marginLeft: 6 }}>x{stock}</span>}
                       </div>
                       <div style={{ fontSize: 11, color: "#888" }}>
                         {item.footprint[0]}x{item.footprint[1]}
-                        {item.cost > 0 && (
-                          <> {"\u2022"} <span style={{ color: CURRENCY_COLORS[item.currency] ?? "#888" }}>{item.cost} {item.currency}</span></>
+                        {cost > 0 && (
+                          <> {"\u2022"} <span style={{ color: CURRENCY_COLORS[item.currency] ?? "#888" }}>{cost} {item.currency}</span></>
                         )}
                       </div>
                     </div>
@@ -191,7 +206,7 @@ export default function BasePage() {
                         borderRadius: 4, cursor: affordable ? "pointer" : "not-allowed", fontSize: 12,
                       }}
                     >
-                      {item.cost === 0 ? "Get (free)" : `Buy (${item.cost} ${item.currency})`}
+                      {cost === 0 ? "Get (free)" : `Buy (${cost} ${item.currency})`}
                     </button>
                     {stock > 0 && (
                       <button

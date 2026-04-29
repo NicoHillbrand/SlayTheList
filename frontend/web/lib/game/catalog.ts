@@ -2,6 +2,15 @@
 
 import type { BaseCurrencyType } from "@slaythelist/contracts";
 
+/** Temporary: while we're seeding the shop with new Kenney assets, treat
+ *  every item as free. Flip back to `false` to restore the original prices. */
+export const FREE_MODE = true;
+
+/** Use this everywhere instead of `item.cost` so FREE_MODE flips a single switch. */
+export function effectiveCost(item: CatalogItem): number {
+  return FREE_MODE ? 0 : item.cost;
+}
+
 export interface CatalogItem {
   id: string;
   name: string;
@@ -195,6 +204,24 @@ export const CATALOG: CatalogItem[] = [
   { id: "oak_tree",        name: "Oak Tree",        category: "decoration", cost: 1, currency: "gold", footprint: [1, 1], color: "#3a8a3a" },
   { id: "pine_tree",       name: "Pine Tree",       category: "decoration", cost: 1, currency: "gold", footprint: [1, 1], color: "#2d6a2d" },
   { id: "sapling",         name: "Sapling",         category: "decoration", cost: 0, currency: "gold", footprint: [1, 1], color: "#5fa85f" },
+  { id: "maple_tree",      name: "Maple Tree",      category: "decoration", cost: 2, currency: "gold", footprint: [1, 1], color: "#7ab84a" },
+  { id: "blocks_tree",     name: "Voxel Tree",      category: "decoration", cost: 2, currency: "gold", footprint: [1, 1], color: "#4a8a4a" },
+  { id: "cone_tree",       name: "Cone Tree",       category: "decoration", cost: 2, currency: "gold", footprint: [1, 1], color: "#3a7a4a" },
+  { id: "detailed_tree",   name: "Detailed Tree",   category: "decoration", cost: 3, currency: "gold", footprint: [1, 1], color: "#3a8a3a" },
+  { id: "fat_tree",        name: "Fat Tree",        category: "decoration", cost: 3, currency: "gold", footprint: [1, 1], color: "#5a9a4a" },
+  { id: "palm_tree",       name: "Palm Tree",       category: "decoration", cost: 2, currency: "gold", footprint: [1, 1], color: "#6aaa4a" },
+  { id: "bent_palm",       name: "Bent Palm",       category: "decoration", cost: 2, currency: "gold", footprint: [1, 1], color: "#6aaa4a" },
+  { id: "tall_palm",       name: "Tall Palm",       category: "decoration", cost: 3, currency: "gold", footprint: [1, 1], color: "#5a9a3a" },
+  { id: "round_pine",      name: "Round Pine",      category: "decoration", cost: 2, currency: "gold", footprint: [1, 1], color: "#2d6a3d" },
+  { id: "small_pine",      name: "Small Pine",      category: "decoration", cost: 1, currency: "gold", footprint: [1, 1], color: "#2d6a3d" },
+  { id: "tall_pine",       name: "Tall Pine",       category: "decoration", cost: 3, currency: "gold", footprint: [1, 1], color: "#1d5a2d" },
+  { id: "plateau_tree",    name: "Plateau Tree",    category: "decoration", cost: 3, currency: "gold", footprint: [1, 1], color: "#4a8a3a" },
+  { id: "small_tree",      name: "Small Tree",      category: "decoration", cost: 1, currency: "gold", footprint: [1, 1], color: "#5aa84a" },
+  { id: "tall_tree",       name: "Tall Tree",       category: "decoration", cost: 3, currency: "gold", footprint: [1, 1], color: "#3a8a3a" },
+  { id: "thin_tree",       name: "Thin Tree",       category: "decoration", cost: 2, currency: "gold", footprint: [1, 1], color: "#3a8a3a" },
+  { id: "fall_oak",        name: "Autumn Oak",      category: "decoration", cost: 2, currency: "gold", footprint: [1, 1], color: "#d28a3a" },
+  { id: "fall_maple",      name: "Autumn Maple",    category: "decoration", cost: 2, currency: "gold", footprint: [1, 1], color: "#c87a3a" },
+  { id: "dark_oak",        name: "Dark Oak",        category: "decoration", cost: 2, currency: "gold", footprint: [1, 1], color: "#1a4a2a" },
   { id: "leafy_bush",      name: "Leafy Bush",      category: "decoration", cost: 0, currency: "gold", footprint: [1, 1], color: "#3a8a3a" },
   { id: "red_flowers",     name: "Red Flowers",     category: "decoration", cost: 0, currency: "gold", footprint: [1, 1], color: "#d23838" },
   { id: "yellow_flowers",  name: "Yellow Flowers",  category: "decoration", cost: 0, currency: "gold", footprint: [1, 1], color: "#e8c838" },

@@ -33,15 +33,87 @@ export const SPRITE_ASSETS: Record<string, SpriteAsset> = {
   // tile center — tweak per-item if alignment looks off.
   oak_tree: {
     path: "kenney_nature-kit/Isometric/tree_default_NE.png",
-    width: 200, height: 200, offsetY: -45,
+    width: 230, height: 230, offsetY: -28,
   },
   pine_tree: {
     path: "kenney_nature-kit/Isometric/tree_pineDefaultA_NE.png",
-    width: 220, height: 220, offsetY: -54,
+    width: 250, height: 250, offsetY: -36,
   },
   sapling: {
     path: "kenney_nature-kit/Isometric/tree_simple_NE.png",
-    width: 180, height: 180, offsetY: -32,
+    width: 210, height: 210, offsetY: -16,
+  },
+  maple_tree: {
+    path: "kenney_nature-kit/Isometric/tree_oak_NE.png",
+    width: 240, height: 240, offsetY: -30,
+  },
+  blocks_tree: {
+    path: "kenney_nature-kit/Isometric/tree_blocks_NE.png",
+    width: 230, height: 230, offsetY: -26,
+  },
+  cone_tree: {
+    path: "kenney_nature-kit/Isometric/tree_cone_NE.png",
+    width: 230, height: 250, offsetY: -36,
+  },
+  detailed_tree: {
+    path: "kenney_nature-kit/Isometric/tree_detailed_NE.png",
+    width: 250, height: 250, offsetY: -34,
+  },
+  fat_tree: {
+    path: "kenney_nature-kit/Isometric/tree_fat_NE.png",
+    width: 260, height: 250, offsetY: -32,
+  },
+  palm_tree: {
+    path: "kenney_nature-kit/Isometric/tree_palm_NE.png",
+    width: 240, height: 250, offsetY: -34,
+  },
+  bent_palm: {
+    path: "kenney_nature-kit/Isometric/tree_palmBend_NE.png",
+    width: 250, height: 240, offsetY: -30,
+  },
+  tall_palm: {
+    path: "kenney_nature-kit/Isometric/tree_palmTall_NE.png",
+    width: 250, height: 300, offsetY: -52,
+  },
+  round_pine: {
+    path: "kenney_nature-kit/Isometric/tree_pineRoundA_NE.png",
+    width: 230, height: 250, offsetY: -36,
+  },
+  small_pine: {
+    path: "kenney_nature-kit/Isometric/tree_pineSmallA_NE.png",
+    width: 200, height: 210, offsetY: -18,
+  },
+  tall_pine: {
+    path: "kenney_nature-kit/Isometric/tree_pineTallA_NE.png",
+    width: 250, height: 300, offsetY: -52,
+  },
+  plateau_tree: {
+    path: "kenney_nature-kit/Isometric/tree_plateau_NE.png",
+    width: 275, height: 250, offsetY: -32,
+  },
+  small_tree: {
+    path: "kenney_nature-kit/Isometric/tree_small_NE.png",
+    width: 200, height: 210, offsetY: -16,
+  },
+  tall_tree: {
+    path: "kenney_nature-kit/Isometric/tree_tall_NE.png",
+    width: 230, height: 300, offsetY: -52,
+  },
+  thin_tree: {
+    path: "kenney_nature-kit/Isometric/tree_thin_NE.png",
+    width: 200, height: 250, offsetY: -36,
+  },
+  fall_oak: {
+    path: "kenney_nature-kit/Isometric/tree_default_fall_NE.png",
+    width: 230, height: 230, offsetY: -28,
+  },
+  fall_maple: {
+    path: "kenney_nature-kit/Isometric/tree_oak_fall_NE.png",
+    width: 240, height: 240, offsetY: -30,
+  },
+  dark_oak: {
+    path: "kenney_nature-kit/Isometric/tree_default_dark_NE.png",
+    width: 230, height: 230, offsetY: -28,
   },
   leafy_bush: {
     path: "kenney_nature-kit/Isometric/plant_bushDetailed_NE.png",
