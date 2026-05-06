@@ -160,7 +160,9 @@ export default function BasePage() {
                       <div style={{
                         width: 56, height: 56, borderRadius: 4, flexShrink: 0,
                         background: "#0e0e1a",
-                        backgroundImage: `url(/assets/${SPRITE_ASSETS[item.id].path})`,
+                        // Quote the URL — some pack folders contain spaces ("more kenney/...")
+                        // and unquoted CSS url() doesn't accept literal whitespace.
+                        backgroundImage: `url("/assets/${encodeURI(SPRITE_ASSETS[item.id].path)}")`,
                         backgroundSize: "contain",
                         backgroundRepeat: "no-repeat",
                         backgroundPosition: "center",

@@ -13,7 +13,7 @@ import {
 import { getCatalogItem, type CatalogItem } from "./catalog";
 import { renderBuilding } from "./renderers";
 import { SPRITE_ASSETS, spriteKey, hasSprite, GROUND_TILES, groundTileKey } from "./sprites";
-import type { BaseCurrencyType, BaseInventory, BaseState, BuildingPlacement, Progression } from "@slaythelist/contracts";
+import type { BaseCurrencyType, BaseInventory, BaseState, BuildingPlacement, Progression, Cell } from "@slaythelist/contracts";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8788";
 
@@ -24,7 +24,7 @@ interface PlacedBuilding {
 }
 
 export class BaseScene extends Phaser.Scene {
-  private grid: (string | null)[][] = [];
+  private cells: Cell[][] = [];
   private placedBuildings: PlacedBuilding[] = [];
   private baseState: BaseState | null = null;
   private progression: Progression | null = null;
@@ -36,6 +36,7 @@ export class BaseScene extends Phaser.Scene {
   private ghostCol = 0;
   private ghostRow = 0;
   private placingRotation = 0;
+
 
   // Selection
   private selectedBuilding: PlacedBuilding | null = null;
@@ -70,11 +71,12 @@ export class BaseScene extends Phaser.Scene {
     for (const [name, path] of Object.entries(GROUND_TILES)) {
       this.load.image(groundTileKey(name as keyof typeof GROUND_TILES), `/assets/${path}`);
     }
+
   }
 
   async create() {
-    this.grid = Array.from({ length: GRID_ROWS }, () =>
-      Array.from({ length: GRID_COLS }, () => null),
+    this.cells = Array.from({ length: GRID_ROWS }, () =>
+      Array.from({ length: GRID_COLS }, () => ({ terrain: [], object: null })),
     );
 
     this.drawGroundTiles();
@@ -359,6 +361,17 @@ export class BaseScene extends Phaser.Scene {
         }
       } catch { /* non-critical */ }
 
+      if (this.baseState?.cells && this.baseState.cells.length > 0) {
+        this.cells = this.baseState.cells.map(row => row.map(cell => ({
+           terrain: [...(cell.terrain || [])],
+           object: null
+        })));
+      } else {
+        this.cells = Array.from({ length: GRID_ROWS }, () =>
+          Array.from({ length: GRID_COLS }, () => ({ terrain: [], object: null }))
+        );
+      }
+
       for (const placement of this.baseState?.placements ?? []) {
         this.renderPlacedBuilding(placement);
       }
@@ -384,7 +397,7 @@ export class BaseScene extends Phaser.Scene {
         const col = placement.x + dc;
         const row = placement.y + dr;
         if (isInBounds(col, row)) {
-          this.grid[row][col] = placement.itemId;
+          this.cells[row][col].object = placement;
         }
       }
     }
@@ -434,7 +447,7 @@ export class BaseScene extends Phaser.Scene {
         const col = building.placement.x + dc;
         const row = building.placement.y + dr;
         if (isInBounds(col, row)) {
-          this.grid[row][col] = null;
+          this.cells[row][col].object = null;
         }
       }
     }
@@ -457,7 +470,8 @@ export class BaseScene extends Phaser.Scene {
       return;
     }
 
-    const itemId = this.grid[snapped.row]?.[snapped.col];
+    const cell = this.cells[snapped.row]?.[snapped.col];
+    const itemId = cell?.object?.itemId;
     if (!itemId) {
       this.clearSelection();
       return;
@@ -716,7 +730,7 @@ export class BaseScene extends Phaser.Scene {
         const c = col + dc;
         const r = row + dr;
         if (!isInBounds(c, r)) return false;
-        if (this.grid[r][c] !== null) return false;
+        if (this.cells[r][c].object !== null) return false;
       }
     }
     return true;
@@ -763,7 +777,7 @@ export class BaseScene extends Phaser.Scene {
       const res = await fetch(`${API_BASE}/api/base-state`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ placements, inventory, currencies: this.baseState?.currencies ?? { gold: 0, diamonds: 0, emeralds: 0 }, diamondMilestones: this.baseState?.diamondMilestones ?? [] }),
+        body: JSON.stringify({ version: 2, cells: this.cells, placements, inventory, currencies: this.baseState?.currencies ?? { gold: 0, diamonds: 0, emeralds: 0 }, diamondMilestones: this.baseState?.diamondMilestones ?? [] }),
       });
       this.baseState = await res.json();
     } catch (err) {

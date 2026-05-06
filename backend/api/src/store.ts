@@ -23,6 +23,7 @@ import type {
   ReflectionEntry,
   Todo,
   Walkthrough,
+  Cell,
 } from "@slaythelist/contracts";
 
 type TodoRow = {
@@ -1028,11 +1029,45 @@ type BaseInventory = Record<string, number>;
 export function getBaseState(): BaseState {
   const row = db.prepare("SELECT placements_json, inventory_json, diamonds, emeralds, diamond_milestones_json, updated_at FROM base_state WHERE id = 1").get() as BaseStateRow | undefined;
   if (!row) {
-    return { placements: [], inventory: {}, currencies: { gold: 0, diamonds: 0, emeralds: 0 }, diamondMilestones: [], updatedAt: new Date().toISOString() };
+    return { version: 2, cells: [], placements: [], inventory: {}, currencies: { gold: 0, diamonds: 0, emeralds: 0 }, diamondMilestones: [], updatedAt: new Date().toISOString() };
   }
   const goldState = getGoldState();
+  let parsedPlacements = [];
+  let parsedCells = [];
+  let version = 1;
+
+  try {
+    const raw = JSON.parse(row.placements_json);
+    if (Array.isArray(raw)) {
+      parsedPlacements = raw as BuildingPlacement[];
+      
+      // Perform migration to cells
+      const GRID_ROWS = 20;
+      const GRID_COLS = 20;
+      parsedCells = Array.from({ length: GRID_ROWS }, () =>
+        Array.from({ length: GRID_COLS }, () => ({ terrain: [], object: null as BuildingPlacement | null }))
+      );
+      
+      for (const p of parsedPlacements) {
+        // Just store the placement at its root (x,y)
+        if (p.y >= 0 && p.y < GRID_ROWS && p.x >= 0 && p.x < GRID_COLS) {
+           parsedCells[p.y][p.x].object = p;
+        }
+      }
+      version = 2;
+    } else if (raw && raw.version === 2) {
+      version = 2;
+      parsedCells = raw.cells ?? [];
+      parsedPlacements = raw.placements ?? [];
+    }
+  } catch (e) {
+    console.error("Failed to parse base_state placements_json", e);
+  }
+
   return {
-    placements: JSON.parse(row.placements_json) as BuildingPlacement[],
+    version,
+    placements: parsedPlacements,
+    cells: parsedCells,
     inventory: JSON.parse(row.inventory_json) as BaseInventory,
     currencies: { gold: goldState.gold, diamonds: row.diamonds, emeralds: row.emeralds },
     diamondMilestones: JSON.parse(row.diamond_milestones_json) as number[],
@@ -1040,11 +1075,16 @@ export function getBaseState(): BaseState {
   };
 }
 
-export function saveBaseState(state: { placements: BuildingPlacement[]; inventory: BaseInventory }): BaseState {
+export function saveBaseState(state: { version?: number; cells?: Cell[][]; placements?: BuildingPlacement[]; inventory: BaseInventory }): BaseState {
   const now = new Date().toISOString();
+  const placementsData = {
+    version: 2,
+    cells: state.cells ?? [],
+    placements: state.placements ?? [],
+  };
   db.prepare(
     `UPDATE base_state SET placements_json = ?, inventory_json = ?, updated_at = ? WHERE id = 1`,
-  ).run(JSON.stringify(state.placements), JSON.stringify(state.inventory), now);
+  ).run(JSON.stringify(placementsData), JSON.stringify(state.inventory), now);
   return getBaseState();
 }
 

@@ -440,10 +440,15 @@ export const overlayStateSchema = z.object({
 export type OverlayState = z.infer<typeof overlayStateSchema>;
 
 export const eventEnvelopeSchema = z.object({
-  type: z.enum(["overlay_state", "health"]),
+  type: z.enum(["overlay_state", "health", "play_sound"]),
   payload: z.unknown(),
 });
 export type EventEnvelope = z.infer<typeof eventEnvelopeSchema>;
+
+export const playSoundPayloadSchema = z.object({
+  sound: z.string().min(1),
+});
+export type PlaySoundPayload = z.infer<typeof playSoundPayloadSchema>;
 
 // ---------------------------------------------------------------------------
 // Base Builder
@@ -468,8 +473,22 @@ export type BaseCurrencies = z.infer<typeof baseCurrenciesSchema>;
 export const baseInventorySchema = z.record(z.string(), z.number().int().nonnegative());
 export type BaseInventory = z.infer<typeof baseInventorySchema>;
 
+export const terrainStackSchema = z.object({
+  tileId: z.string(),
+  height: z.union([z.literal(0), z.literal(1), z.literal(2)]),
+});
+export type TerrainStack = z.infer<typeof terrainStackSchema>;
+
+export const cellSchema = z.object({
+  terrain: z.array(terrainStackSchema),
+  object: buildingPlacementSchema.nullable(),
+});
+export type Cell = z.infer<typeof cellSchema>;
+
 export const baseStateSchema = z.object({
-  placements: z.array(buildingPlacementSchema),
+  version: z.number().int().optional(),
+  placements: z.array(buildingPlacementSchema).optional(),
+  cells: z.array(z.array(cellSchema)).optional(),
   inventory: baseInventorySchema,
   currencies: baseCurrenciesSchema,
   /** Tracks which streak milestones have already been rewarded */

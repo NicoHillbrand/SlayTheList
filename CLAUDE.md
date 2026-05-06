@@ -14,6 +14,14 @@ Individual rows with full CRUD:
 | `update_todo` | Patch a todo by `id`. Optional: `title`, `context`, `status`, `deadline_at` (null to clear). |
 | `delete_todo` | Permanently delete a todo by `id`. |
 
+### Gold
+
+| Tool | Purpose |
+|------|---------|
+| `get_gold` | Returns the current `GoldState` (`gold` balance + `rewardedTodoIds`). |
+| `award_gold` | Add gold. Requires `amount` (non-negative integer). Optional `with_sound: true` plays the gold coin sound in the overlay (best-effort — needs the API server running). Defaults to silent. |
+| `spend_gold` | Deduct gold (clamps at zero, never negative). Requires `amount`. Optional `with_sound` like above. |
+
 ### Habits, Predictions, Reflections
 These are stored as JSON arrays. The pattern for any modification is **read → modify → write**:
 1. Call `list_habits` / `list_predictions` / `list_reflections` to get the current array.

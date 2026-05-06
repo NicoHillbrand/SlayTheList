@@ -1261,9 +1261,14 @@ export default function Page() {
       ws = new WebSocket(overlayWebSocketUrl());
       ws.onmessage = (event) => {
         try {
-          const parsed = JSON.parse(event.data) as { type?: string };
+          const parsed = JSON.parse(event.data) as { type?: string; payload?: { sound?: string } };
           if (parsed.type === "overlay_state") {
             void refresh(false);
+          } else if (parsed.type === "play_sound") {
+            const sound = parsed.payload?.sound ?? "gold";
+            if (sound === "gold") {
+              playGoldSound();
+            }
           }
         } catch {
           // ignore non-json payloads
@@ -4365,7 +4370,12 @@ export default function Page() {
                 {activePredictions.map((prediction) => (
                   <li key={prediction.id} className="goal-row">
                     <div className="prediction-row">
-                      <span className="prediction-title">{prediction.title}</span>
+                      <input
+                        className="prediction-title prediction-title-input"
+                        value={prediction.title}
+                        onChange={(e) => updatePredictionTitle(prediction.id, e.target.value)}
+                        aria-label="Prediction title"
+                      />
                       <div className="goal-actions prediction-actions">
                         <button
                           type="button"
@@ -4379,7 +4389,22 @@ export default function Page() {
                         <button type="button" onClick={() => setPredictionOutcome(prediction.id, "miss")}>Didn't happen</button>
                         <button type="button" onClick={() => deletePrediction(prediction.id)}>Delete</button>
                       </div>
-                      <small className="prediction-confidence">{prediction.confidence}%</small>
+                      <input
+                        type="number"
+                        className="prediction-confidence prediction-confidence-input"
+                        min={1}
+                        max={99}
+                        value={prediction.confidence}
+                        onChange={(e) =>
+                          updatePredictionConfidence(
+                            prediction.id,
+                            Math.max(1, Math.min(99, Number(e.target.value))),
+                          )
+                        }
+                        title="Probability %"
+                        aria-label="Prediction confidence"
+                      />
+                      <span className="prediction-confidence-label">%</span>
                     </div>
                   </li>
                 ))}

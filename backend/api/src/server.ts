@@ -545,20 +545,31 @@ app.put("/api/gold-state", (req, res) => {
 
 app.post("/api/gold/award", (req, res) => {
   const amount = req.body?.amount;
+  const withSound = req.body?.withSound === true;
   if (typeof amount !== "number" || !Number.isInteger(amount) || amount < 0) {
     return badRequest(res, "amount must be a non-negative integer");
   }
   ok(res, awardGold(amount));
+  if (withSound) broadcastPlaySound("gold");
   triggerCloudSnapshotSync();
 });
 
 app.post("/api/gold/deduct", (req, res) => {
   const amount = req.body?.amount;
+  const withSound = req.body?.withSound === true;
   if (typeof amount !== "number" || !Number.isInteger(amount) || amount < 0) {
     return badRequest(res, "amount must be a non-negative integer");
   }
   ok(res, deductGold(amount));
+  if (withSound) broadcastPlaySound("gold");
   triggerCloudSnapshotSync();
+});
+
+app.post("/api/sound/play", (req, res) => {
+  const raw = typeof req.body?.sound === "string" ? req.body.sound.trim() : "";
+  const sound = raw.length > 0 ? raw : "gold";
+  broadcastPlaySound(sound);
+  ok(res, { played: true, sound });
 });
 
 app.post("/api/gold/award-todo", (req, res) => {
@@ -1348,6 +1359,10 @@ function sendEvent(type: EventEnvelope["type"], payload: unknown) {
 
 function broadcastOverlayState() {
   sendEvent("overlay_state", buildOverlayState());
+}
+
+function broadcastPlaySound(sound: string = "gold") {
+  sendEvent("play_sound", { sound });
 }
 
 wss.on("connection", (socket) => {

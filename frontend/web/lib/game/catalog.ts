@@ -33,71 +33,22 @@ export interface CatalogItem {
 export const CATALOG: CatalogItem[] = [
   // Starter buildings — always available
   {
-    id: "campfire",
-    name: "Campfire",
+    id: "tower_square",
+    name: "Square Tower",
     category: "building",
-    cost: 0,
-    currency: "gold",
-    footprint: [1, 1],
-    color: "#e8671c",
-  },
-  {
-    id: "tent",
-    name: "Tent",
-    category: "building",
-    cost: 5,
-    currency: "gold",
-    footprint: [2, 2],
-    color: "#8b6914",
-  },
-  {
-    id: "fence",
-    name: "Fence",
-    category: "decoration",
-    cost: 2,
+    cost: 15,
     currency: "gold",
     footprint: [1, 1],
     color: "#a0522d",
   },
   {
-    id: "bush",
-    name: "Bush",
-    category: "decoration",
-    cost: 1,
+    id: "tower_round",
+    name: "Round Tower",
+    category: "building",
+    cost: 15,
     currency: "gold",
     footprint: [1, 1],
     color: "#228b22",
-  },
-  {
-    id: "tree",
-    name: "Tree",
-    category: "decoration",
-    cost: 3,
-    currency: "gold",
-    footprint: [1, 1],
-    color: "#006400",
-  },
-
-  // Unlockable through progression
-  {
-    id: "cottage",
-    name: "Cottage",
-    category: "building",
-    cost: 25,
-    currency: "gold",
-    footprint: [2, 2],
-    color: "#cd853f",
-    unlockRequirement: { stat: "totalTodosCompleted", value: 10 },
-  },
-  {
-    id: "workshop",
-    name: "Workshop",
-    category: "building",
-    cost: 50,
-    currency: "gold",
-    footprint: [3, 2],
-    color: "#b8860b",
-    unlockRequirement: { stat: "totalTodosCompleted", value: 50 },
   },
   {
     id: "garden",
@@ -119,16 +70,7 @@ export const CATALOG: CatalogItem[] = [
     color: "#daa520",
     unlockRequirement: { stat: "totalHabitChecks", value: 100 },
   },
-  {
-    id: "observatory",
-    name: "Observatory",
-    category: "building",
-    cost: 60,
-    currency: "gold",
-    footprint: [2, 3],
-    color: "#4169e1",
-    unlockRequirement: { stat: "totalPredictions", value: 1 },
-  },
+
   {
     id: "stone_path",
     name: "Stone Path",
@@ -200,6 +142,37 @@ export const CATALOG: CatalogItem[] = [
     unlockRequirement: { stat: "longestDayStreak", value: 7 },
   },
 
+  // ---- Modular buildings (full pre-assembled houses & apartment towers) ----
+  { id: "house_small",   name: "Small House",   category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#c08060" },
+  { id: "house_medium",  name: "Medium House",  category: "building", cost: 3, currency: "gold", footprint: [1, 1], color: "#a87050" },
+  { id: "house_large",   name: "Large House",   category: "building", cost: 5, currency: "gold", footprint: [2, 2], color: "#806040" },
+  { id: "apartment_a",   name: "Apartment A",   category: "building", cost: 4, currency: "gold", footprint: [1, 1], color: "#b88a4a" },
+  { id: "apartment_b",   name: "Apartment B",   category: "building", cost: 4, currency: "gold", footprint: [1, 1], color: "#a87a3a" },
+  { id: "apartment_c",   name: "Apartment C",   category: "building", cost: 5, currency: "gold", footprint: [1, 1], color: "#9a6a2a" },
+
+  // ---- Sketch-desert extras ----
+  { id: "desert_walls_corner",name: "Desert Wall",      category: "building", cost: 1, currency: "gold", footprint: [1, 1], color: "#aa8030" },
+
+  // ---- Tower defense extras ----
+  { id: "tower_square_short", name: "Short Square Tower", category: "building", cost: 6, currency: "gold", footprint: [1, 1], color: "#a05bd8" },
+  { id: "tower_round_short",  name: "Short Round Tower",  category: "building", cost: 6, currency: "gold", footprint: [1, 1], color: "#d8665b" },
+  { id: "td_catapult",        name: "Catapult",           category: "building", cost: 8, currency: "gold", footprint: [1, 1], color: "#8a6a3a" },
+
+  // ---- Fantasy town: market + props ----
+  { id: "market_stall",  name: "Market Stall",     category: "building", cost: 3, currency: "gold", footprint: [1, 1], color: "#a86a4a" },
+  { id: "stall_green",   name: "Green Stall",      category: "building", cost: 3, currency: "gold", footprint: [1, 1], color: "#3aa86a" },
+  { id: "stall_red",     name: "Red Stall",        category: "building", cost: 3, currency: "gold", footprint: [1, 1], color: "#a83a3a" },
+  { id: "fountain_round",   name: "Round Fountain",   category: "decoration", cost: 4, currency: "gold", footprint: [1, 1], color: "#88aacc" },
+  { id: "fountain_square",  name: "Square Fountain",  category: "decoration", cost: 4, currency: "gold", footprint: [1, 1], color: "#88aacc" },
+  { id: "cart",          name: "Cart",             category: "decoration", cost: 2, currency: "gold", footprint: [1, 1], color: "#a87040" },
+  { id: "cart_high",     name: "Tall Cart",        category: "decoration", cost: 2, currency: "gold", footprint: [1, 1], color: "#a87040" },
+  { id: "lantern",       name: "Lantern",          category: "decoration", cost: 1, currency: "gold", footprint: [1, 1], color: "#ffd060" },
+  { id: "hedge",         name: "Hedge",            category: "decoration", cost: 1, currency: "gold", footprint: [1, 1], color: "#3a8a3a" },
+  { id: "hedge_large",   name: "Tall Hedge",       category: "decoration", cost: 1, currency: "gold", footprint: [1, 1], color: "#2a7a2a" },
+  { id: "banner_red",    name: "Red Banner",       category: "decoration", cost: 1, currency: "gold", footprint: [1, 1], color: "#c83838" },
+  { id: "banner_green",  name: "Green Banner",     category: "decoration", cost: 1, currency: "gold", footprint: [1, 1], color: "#38c838" },
+  { id: "rock_large",    name: "Stone Block",      category: "decoration", cost: 1, currency: "gold", footprint: [1, 1], color: "#8a8a8a" },
+
   // Nature Kit (Kenney) — cheap experimental decor for trying out the new sprites.
   { id: "oak_tree",        name: "Oak Tree",        category: "decoration", cost: 1, currency: "gold", footprint: [1, 1], color: "#3a8a3a" },
   { id: "pine_tree",       name: "Pine Tree",       category: "decoration", cost: 1, currency: "gold", footprint: [1, 1], color: "#2d6a2d" },
@@ -223,11 +196,7 @@ export const CATALOG: CatalogItem[] = [
   { id: "fall_maple",      name: "Autumn Maple",    category: "decoration", cost: 2, currency: "gold", footprint: [1, 1], color: "#c87a3a" },
   { id: "dark_oak",        name: "Dark Oak",        category: "decoration", cost: 2, currency: "gold", footprint: [1, 1], color: "#1a4a2a" },
   { id: "leafy_bush",      name: "Leafy Bush",      category: "decoration", cost: 0, currency: "gold", footprint: [1, 1], color: "#3a8a3a" },
-  { id: "red_flowers",     name: "Red Flowers",     category: "decoration", cost: 0, currency: "gold", footprint: [1, 1], color: "#d23838" },
   { id: "yellow_flowers",  name: "Yellow Flowers",  category: "decoration", cost: 0, currency: "gold", footprint: [1, 1], color: "#e8c838" },
-  { id: "purple_flowers",  name: "Purple Flowers",  category: "decoration", cost: 0, currency: "gold", footprint: [1, 1], color: "#a04dc8" },
-  { id: "red_mushroom",    name: "Red Mushroom",    category: "decoration", cost: 0, currency: "gold", footprint: [1, 1], color: "#cc4040" },
-  { id: "mushroom_cluster",name: "Mushroom Cluster",category: "decoration", cost: 1, currency: "gold", footprint: [1, 1], color: "#cc8060" },
   { id: "boulder",         name: "Boulder",         category: "decoration", cost: 1, currency: "gold", footprint: [1, 1], color: "#a8a8a8" },
   { id: "grass_tuft",      name: "Grass Tuft",      category: "decoration", cost: 0, currency: "gold", footprint: [1, 1], color: "#6aa852" },
 ];

@@ -9,9 +9,27 @@ import {
   deleteTodo,
   getAccountabilityState,
   saveAccountabilityState,
+  getGoldState,
+  awardGold,
+  deductGold,
 } from "./store.js";
 
 const server = new McpServer({ name: "slaythelist", version: "0.1.0" });
+
+const apiPort = Number(process.env.PORT ?? 8788);
+const apiBaseUrl = `http://localhost:${apiPort}`;
+
+async function fireSoundEvent(sound: string = "gold"): Promise<void> {
+  try {
+    await fetch(`${apiBaseUrl}/api/sound/play`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sound }),
+    });
+  } catch {
+    // Sound is best-effort; the API server may not be running.
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Todos
@@ -100,6 +118,62 @@ server.tool(
       return { isError: true, content: [{ type: "text" as const, text: `Todo not found: ${id}` }] };
     }
     return { content: [{ type: "text" as const, text: JSON.stringify({ deleted: true, id }) }] };
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Gold
+// ---------------------------------------------------------------------------
+
+server.tool(
+  "get_gold",
+  "Get the current gold balance and the list of todo IDs that have already been rewarded.",
+  {},
+  async () => {
+    const state = getGoldState();
+    return { content: [{ type: "text" as const, text: JSON.stringify(state, null, 2) }] };
+  },
+);
+
+server.tool(
+  "award_gold",
+  "Add gold to the user's balance. Set with_sound: true to play the gold coin sound in the overlay; leave it false (or omit it) to update silently.",
+  {
+    amount: z
+      .number()
+      .int()
+      .nonnegative()
+      .describe("Amount of gold to award. Must be a non-negative integer."),
+    with_sound: z
+      .boolean()
+      .optional()
+      .describe("If true, play the gold coin sound in the overlay UI. Defaults to false."),
+  },
+  async ({ amount, with_sound = false }) => {
+    const state = awardGold(amount);
+    if (with_sound) await fireSoundEvent("gold");
+    return { content: [{ type: "text" as const, text: JSON.stringify(state, null, 2) }] };
+  },
+);
+
+server.tool(
+  "spend_gold",
+  "Deduct gold from the user's balance (clamps at zero, never negative). Set with_sound: true to play the gold coin sound in the overlay; leave it false (or omit it) to update silently.",
+  {
+    amount: z
+      .number()
+      .int()
+      .nonnegative()
+      .describe("Amount of gold to deduct. Must be a non-negative integer."),
+    with_sound: z
+      .boolean()
+      .optional()
+      .describe("If true, play the gold coin sound in the overlay UI. Defaults to false."),
+  },
+  async ({ amount, with_sound = false }) => {
+    const state = deductGold(amount);
+    if (with_sound) await fireSoundEvent("gold");
+    return { content: [{ type: "text" as const, text: JSON.stringify(state, null, 2) }] };
   },
 );
 
