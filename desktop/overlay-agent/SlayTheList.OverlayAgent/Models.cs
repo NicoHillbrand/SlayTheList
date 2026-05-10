@@ -30,6 +30,9 @@ public sealed class OverlayPayload
 
     [JsonPropertyName("showDetectionIndicator")]
     public bool ShowDetectionIndicator { get; set; } = true;
+
+    [JsonPropertyName("detectionIntervalMs")]
+    public int DetectionIntervalMs { get; set; } = 100;
 }
 
 public sealed class GameWindowHint

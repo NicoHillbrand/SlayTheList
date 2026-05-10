@@ -135,6 +135,7 @@ export const socialSettingsSchema = z.object({
   predictionsVisibility: socialVisibilitySchema.default("friends"),
   goldVisibility: socialVisibilitySchema.default("friends"),
   walkthroughsVisibility: socialVisibilitySchema.default("private"),
+  baseVisibility: socialVisibilitySchema.default("friends"),
 });
 export type SocialSettings = z.infer<typeof socialSettingsSchema>;
 
@@ -198,6 +199,16 @@ export const sharedProfileSchema = z.object({
     canView: z.boolean(),
     state: goldStateSchema.nullable(),
   }),
+  // Optional so this schema still validates against older cloud servers
+  // that haven't been redeployed with the base-sharing feature yet.
+  base: z
+    .object({
+      visibility: socialVisibilitySchema,
+      canView: z.boolean(),
+      // Forward-referenced — see baseSnapshotSchema in the Base Builder section.
+      snapshot: z.lazy(() => baseSnapshotSchema).nullable(),
+    })
+    .optional(),
   encouragedEntryIds: z.array(z.string()).optional(),
   encouragementsRemainingToday: z.number().optional(),
 });
@@ -245,6 +256,8 @@ export const socialSnapshotSchema = z.object({
   predictions: z.array(predictionSchema),
   walkthroughs: z.array(walkthroughSchema).optional(),
   gold: goldStateSchema,
+  // Forward-referenced — defined further down in the Base Builder section.
+  base: z.lazy(() => baseSnapshotSchema).optional(),
   sourceUpdatedAt: z.string(),
   syncedAt: z.string().optional(),
 });
@@ -496,6 +509,16 @@ export const baseStateSchema = z.object({
   updatedAt: z.string(),
 });
 export type BaseState = z.infer<typeof baseStateSchema>;
+
+/** Read-only base view shown to other users via the social profile.
+ *  Excludes inventory and currencies — those stay private. */
+export const baseSnapshotSchema = z.object({
+  version: z.number().int().optional(),
+  placements: z.array(buildingPlacementSchema),
+  cells: z.array(z.array(cellSchema)).optional(),
+  updatedAt: z.string(),
+});
+export type BaseSnapshot = z.infer<typeof baseSnapshotSchema>;
 
 export const progressionSchema = z.object({
   gold: z.number(),

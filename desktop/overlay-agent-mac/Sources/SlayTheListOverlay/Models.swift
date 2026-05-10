@@ -12,6 +12,7 @@ struct OverlayPayload: Codable {
     let gameStates: [GameStateInfo]
     let lastUpdatedAt: String?
     let showDetectionIndicator: Bool?
+    let detectionIntervalMs: Int?
 }
 
 struct GameWindowHint: Codable {

@@ -12,8 +12,13 @@ class OverlayController: NSObject, URLSessionWebSocketDelegate {
     private var webSocketTask: URLSessionWebSocketTask?
     private var syncTimer: Timer?
     private var detectionTimer: Timer?
+    private var detectionIntervalMs: Int = 100
     private var isGameFocused = false
     private var isDetecting = false
+
+    private static let minDetectionIntervalMs = 100
+    private static let maxDetectionIntervalMs = 800
+    private static let defaultDetectionIntervalMs = 100
 
     override init() {
         let wsEnv = ProcessInfo.processInfo.environment["SLAYTHELIST_WS_URL"]
@@ -40,12 +45,8 @@ class OverlayController: NSObject, URLSessionWebSocketDelegate {
             self?.syncOverlay()
         }
 
-        // Detection loop every 200ms (only runs when needed)
-        detectionTimer = Timer.scheduledTimer(
-            withTimeInterval: 0.2, repeats: true
-        ) { [weak self] _ in
-            self?.runDetectionIfNeeded()
-        }
+        // Detection loop — interval is configurable via app settings (default 100ms).
+        rescheduleDetectionTimer(intervalMs: Self.defaultDetectionIntervalMs)
 
         print("[SlayTheList] Overlay agent started")
         print("[SlayTheList] WebSocket: \(wsUrl)")
@@ -118,7 +119,29 @@ class OverlayController: NSObject, URLSessionWebSocketDelegate {
 
         if envelope.type == "overlay_state", let payload = envelope.payload {
             lastOverlayState = payload
+            applyDetectionIntervalFromState(payload)
             renderLockedZones()
+        }
+    }
+
+    private func applyDetectionIntervalFromState(_ payload: OverlayPayload) {
+        let raw = payload.detectionIntervalMs ?? Self.defaultDetectionIntervalMs
+        let clamped = min(
+            Self.maxDetectionIntervalMs,
+            max(Self.minDetectionIntervalMs, raw > 0 ? raw : Self.defaultDetectionIntervalMs)
+        )
+        if clamped != detectionIntervalMs {
+            rescheduleDetectionTimer(intervalMs: clamped)
+        }
+    }
+
+    private func rescheduleDetectionTimer(intervalMs: Int) {
+        detectionIntervalMs = intervalMs
+        detectionTimer?.invalidate()
+        detectionTimer = Timer.scheduledTimer(
+            withTimeInterval: Double(intervalMs) / 1000.0, repeats: true
+        ) { [weak self] _ in
+            self?.runDetectionIfNeeded()
         }
     }
 

@@ -973,6 +973,7 @@ export default function Page() {
   const [expansionContextDraft, setExpansionContextDraft] = useState("");
   const [todoDrafts, setTodoDrafts] = useState<Record<string, string>>({});
   const [showDetectionIndicator, setShowDetectionIndicatorState] = useState(true);
+  const [detectionIntervalMs, setDetectionIntervalMs] = useState(100);
   const [showTodoDuration, setShowTodoDuration] = useState(true);
   const [showCompletionProgress, setShowCompletionProgress] = useState(true);
   const [splitDailyByPriority, setSplitDailyByPriority] = useState(false);
@@ -1213,6 +1214,11 @@ export default function Page() {
       try {
         const indicatorSetting = await getAppSetting("showDetectionIndicator");
         setShowDetectionIndicatorState(indicatorSetting.value !== "false");
+        const intervalSetting = await getAppSetting("detectionIntervalMs");
+        const parsedInterval = Number(intervalSetting.value);
+        if (Number.isFinite(parsedInterval) && parsedInterval > 0) {
+          setDetectionIntervalMs(Math.min(800, Math.max(100, Math.round(parsedInterval))));
+        }
         const storageSetting = await getAppSetting("storageMode");
         if (storageSetting.value === "cloud-vault") {
           setStorageMode("cloud-vault");
@@ -6086,6 +6092,25 @@ export default function Page() {
                   }}
                 />
                 Show detection status overlay
+              </label>
+              <label className="settings-checkbox-label" style={{ display: "flex", gap: "0.6rem", alignItems: "center", flexWrap: "wrap" }}>
+                <span style={{ minWidth: 180 }}>Screen detection interval</span>
+                <input
+                  type="range"
+                  min={100}
+                  max={800}
+                  step={50}
+                  value={detectionIntervalMs}
+                  onChange={(event) => setDetectionIntervalMs(Number(event.target.value))}
+                  onMouseUp={() => { void setAppSetting("detectionIntervalMs", String(detectionIntervalMs)); }}
+                  onTouchEnd={() => { void setAppSetting("detectionIntervalMs", String(detectionIntervalMs)); }}
+                  onKeyUp={() => { void setAppSetting("detectionIntervalMs", String(detectionIntervalMs)); }}
+                  style={{ flex: 1, minWidth: 160 }}
+                />
+                <small style={{ minWidth: 64, textAlign: "right" }}>{detectionIntervalMs} ms</small>
+                <small style={{ flexBasis: "100%", opacity: 0.65 }}>
+                  How often the overlay agent scans the screen to detect game state. Higher values reduce CPU usage; lower values react faster.
+                </small>
               </label>
               <label className="settings-checkbox-label">
                 <input

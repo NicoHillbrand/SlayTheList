@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS user_social_settings (
   predictions_visibility TEXT NOT NULL DEFAULT 'friends' CHECK(predictions_visibility IN ('private', 'friends', 'public')),
   gold_visibility TEXT NOT NULL DEFAULT 'friends' CHECK(gold_visibility IN ('private', 'friends', 'public')),
   walkthroughs_visibility TEXT NOT NULL DEFAULT 'private' CHECK(walkthroughs_visibility IN ('private', 'friends', 'public')),
+  base_visibility TEXT NOT NULL DEFAULT 'friends' CHECK(base_visibility IN ('private', 'friends', 'public')),
   updated_at TEXT NOT NULL,
   FOREIGN KEY(user_id) REFERENCES cloud_users(id) ON DELETE CASCADE
 );
@@ -139,3 +140,5 @@ function ensureColumn(table: string, name: string, definition: string) {
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition};`);
 }
 ensureColumn("user_social_settings", "walkthroughs_visibility", "TEXT NOT NULL DEFAULT 'private'");
+ensureColumn("user_social_settings", "base_visibility", "TEXT NOT NULL DEFAULT 'friends'");
+ensureColumn("user_social_snapshots", "base_json", "TEXT NOT NULL DEFAULT 'null'");

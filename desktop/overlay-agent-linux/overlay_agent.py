@@ -45,7 +45,6 @@ from detection import (  # noqa: E402
     prepare_pixels,
     score_match,
     send_detected_state,
-    DETECTION_INTERVAL_S,
 )
 
 logging.basicConfig(
@@ -740,6 +739,15 @@ class OverlayWindow(Gtk.Window):
 
     # ── Detection loop ──────────────────────────────────────────────────────
 
+    def _detection_interval_s(self) -> float:
+        """Current detection interval in seconds, from overlay state, clamped."""
+        state = self._overlay_state
+        configured_ms = state.detectionIntervalMs if state else 100
+        if configured_ms <= 0:
+            configured_ms = 100
+        configured_ms = max(100, min(800, configured_ms))
+        return configured_ms / 1000.0
+
     def _detection_loop(self):
         """Background thread for local game-state detection."""
         # Wait for initial connection
@@ -751,17 +759,17 @@ class OverlayWindow(Gtk.Window):
             try:
                 state = self._overlay_state
                 if not state or not self._ws_connected:
-                    self._stop_event.wait(DETECTION_INTERVAL_S)
+                    self._stop_event.wait(self._detection_interval_s())
                     continue
 
                 game_states = [gs for gs in state.gameStates if gs.enabled]
                 if not game_states:
-                    self._stop_event.wait(DETECTION_INTERVAL_S)
+                    self._stop_event.wait(self._detection_interval_s())
                     continue
 
                 should_detect = self._game_focused or any(gs.alwaysDetect for gs in game_states)
                 if not should_detect:
-                    self._stop_event.wait(DETECTION_INTERVAL_S)
+                    self._stop_event.wait(self._detection_interval_s())
                     continue
 
                 # Refresh refs if stale
@@ -771,7 +779,7 @@ class OverlayWindow(Gtk.Window):
                         cached_refs = new_refs
 
                 if not cached_refs or not cached_refs.refs:
-                    self._stop_event.wait(DETECTION_INTERVAL_S)
+                    self._stop_event.wait(self._detection_interval_s())
                     continue
 
                 # Capture
@@ -781,7 +789,7 @@ class OverlayWindow(Gtk.Window):
                 if not img:
                     img = capture_screen()
                 if not img:
-                    self._stop_event.wait(DETECTION_INTERVAL_S)
+                    self._stop_event.wait(self._detection_interval_s())
                     continue
 
                 # Score each reference
@@ -814,7 +822,7 @@ class OverlayWindow(Gtk.Window):
             except Exception as e:
                 logger.warning("Detection error: %s", e)
 
-            self._stop_event.wait(DETECTION_INTERVAL_S)
+            self._stop_event.wait(self._detection_interval_s())
 
     # ── Cleanup ─────────────────────────────────────────────────────────────
 

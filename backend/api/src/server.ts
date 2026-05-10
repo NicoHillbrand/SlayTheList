@@ -110,7 +110,11 @@ app.use(
 app.use(express.json({ limit: "50mb" }));
 app.use(requestLogger);
 
-function buildOverlayState(): OverlayState & { showDetectionIndicator: boolean } {
+function buildOverlayState(): OverlayState & { showDetectionIndicator: boolean; detectionIntervalMs: number } {
+  const rawInterval = Number(getSetting("detectionIntervalMs"));
+  const detectionIntervalMs = Number.isFinite(rawInterval) && rawInterval > 0
+    ? Math.min(800, Math.max(100, Math.round(rawInterval)))
+    : 100;
   return {
     gameWindow: { titleHint: "Slay the Spire 2" },
     zones: listOverlayState(),
@@ -118,6 +122,7 @@ function buildOverlayState(): OverlayState & { showDetectionIndicator: boolean }
     gameStates: listGameStates(),
     lastUpdatedAt: new Date().toISOString(),
     showDetectionIndicator: getSetting("showDetectionIndicator") !== "false",
+    detectionIntervalMs,
   };
 }
 

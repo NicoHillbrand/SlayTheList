@@ -64,3 +64,7 @@ frontend/web/public/assets/kenney_nature-kit/Isometric/*
 !frontend/web/public/assets/kenney_nature-kit/Isometric/mushroom_tanGroup_NE.png
 !frontend/web/public/assets/kenney_nature-kit/Isometric/stone_largeA_NE.png
 !frontend/web/public/assets/kenney_nature-kit/Isometric/grass_large_NE.png
+
+# Python bytecode caches (overlay-agent-linux)
+__pycache__/
+*.pyc

@@ -29,13 +29,14 @@ import {
   type VaultVersionResponse,
 } from "@slaythelist/contracts";
 import { db } from "./db.js";
-import { getAccountabilityState, getGoldState } from "./store.js";
+import { getAccountabilityState, getBaseState, getGoldState } from "./store.js";
 
 type LocalSocialSettingsRow = {
   habits_visibility: SocialSettings["habitsVisibility"];
   predictions_visibility: SocialSettings["predictionsVisibility"];
   gold_visibility: SocialSettings["goldVisibility"];
   walkthroughs_visibility?: SocialSettings["walkthroughsVisibility"];
+  base_visibility?: SocialSettings["baseVisibility"];
 };
 
 type CloudConnectionRow = {
@@ -60,6 +61,7 @@ const DEFAULT_SOCIAL_SETTINGS: SocialSettings = {
   predictionsVisibility: "friends",
   goldVisibility: "friends",
   walkthroughsVisibility: "private",
+  baseVisibility: "friends",
 };
 
 const DEFAULT_CLOUD_BASE_URL = "https://slaythelist.nicohillbrand.com";
@@ -121,7 +123,7 @@ function updateConnectionRow(patch: Partial<CloudConnectionRow>) {
 function getLocalSocialSettingsRow(): LocalSocialSettingsRow | undefined {
   return db
     .prepare(
-      `SELECT habits_visibility, predictions_visibility, gold_visibility, walkthroughs_visibility
+      `SELECT habits_visibility, predictions_visibility, gold_visibility, walkthroughs_visibility, base_visibility
        FROM local_social_settings
        WHERE id = 1`,
     )
@@ -214,6 +216,7 @@ export function getLocalSocialSettings(): SocialSettings {
     predictionsVisibility: row.predictions_visibility,
     goldVisibility: row.gold_visibility,
     walkthroughsVisibility: row.walkthroughs_visibility ?? "private",
+    baseVisibility: row.base_visibility ?? "friends",
   };
 }
 
@@ -221,21 +224,37 @@ export function saveLocalSocialSettings(settings: SocialSettings) {
   const parsed = socialSettingsSchema.parse(settings);
   db.prepare(
     `UPDATE local_social_settings
-     SET habits_visibility = ?, predictions_visibility = ?, gold_visibility = ?, walkthroughs_visibility = ?, updated_at = ?
+     SET habits_visibility = ?, predictions_visibility = ?, gold_visibility = ?, walkthroughs_visibility = ?, base_visibility = ?, updated_at = ?
      WHERE id = 1`,
-  ).run(parsed.habitsVisibility, parsed.predictionsVisibility, parsed.goldVisibility, parsed.walkthroughsVisibility, new Date().toISOString());
+  ).run(
+    parsed.habitsVisibility,
+    parsed.predictionsVisibility,
+    parsed.goldVisibility,
+    parsed.walkthroughsVisibility,
+    parsed.baseVisibility,
+    new Date().toISOString(),
+  );
   return parsed;
 }
 
 export function buildLocalSocialSnapshot(): SocialSnapshot {
   const now = new Date().toISOString();
   const state = getAccountabilityState();
+  // Slice the local BaseState into a snapshot — placements + cells only,
+  // no inventory/currencies (those stay private).
+  const baseState = getBaseState();
   return socialSnapshotSchema.parse({
     settings: getLocalSocialSettings(),
     habits: state.habits.filter((h) => h.visibility !== "private"),
     predictions: state.predictions.filter((p) => p.visibility !== "private"),
     walkthroughs: (state.walkthroughs ?? []).filter((w) => w.visibility !== "private"),
     gold: getGoldState(),
+    base: {
+      version: baseState.version,
+      placements: baseState.placements ?? [],
+      cells: baseState.cells,
+      updatedAt: baseState.updatedAt,
+    },
     sourceUpdatedAt: now,
   });
 }

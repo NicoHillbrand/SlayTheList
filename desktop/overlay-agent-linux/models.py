@@ -59,6 +59,7 @@ class OverlayState:
     gameStates: list[GameState] = field(default_factory=list)
     lastUpdatedAt: Optional[str] = None
     showDetectionIndicator: bool = False
+    detectionIntervalMs: int = 100
 
 
 def parse_overlay_state(data: dict) -> OverlayState:
@@ -112,5 +113,13 @@ def parse_overlay_state(data: dict) -> OverlayState:
 
     state.lastUpdatedAt = data.get("lastUpdatedAt")
     state.showDetectionIndicator = data.get("showDetectionIndicator", False)
+    raw_interval = data.get("detectionIntervalMs", 100)
+    try:
+        interval_int = int(raw_interval)
+    except (TypeError, ValueError):
+        interval_int = 100
+    if interval_int <= 0:
+        interval_int = 100
+    state.detectionIntervalMs = max(100, min(800, interval_int))
 
     return state

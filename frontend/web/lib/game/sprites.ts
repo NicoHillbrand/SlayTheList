@@ -13,6 +13,10 @@ export interface SpriteAsset {
   height: number;
   /** Y offset from tile center (negative = up) — use to align the base of the sprite with the tile */
   offsetY: number;
+  /** Optional: render this asset as multiple overlapping copies offset by
+   *  (stepX, stepY) in screen pixels. Used to fake a continuous wall by
+   *  packing many small cube sprites into one tile so their tops blend. */
+  tile?: { count: number; stepX: number; stepY: number };
 }
 
 /**
@@ -131,14 +135,20 @@ export const SPRITE_ASSETS: Record<string, SpriteAsset> = {
     path: "kenney_nature-kit/Isometric/grass_large_NE.png",
     width: 100, height: 100, offsetY: -12,
   },
-  // ---- Sketch desert pack (more kenney/kenney_sketch-desert) ----
-  // Source PNGs are 256x352 (taller than wide). Render at the same 4:5.5
-  // ratio so the structures aren't squashed.
-  desert_walls_corner: {
-    path: "more kenney/kenney_sketch-desert/Tiles/walls_corner_E.png",
-    width: 128, height: 176, offsetY: -52,
+  // Stone / rock wall cubes. Each placement renders 5 small cube copies
+  // packed across the tile so their top diamonds overlap into a
+  // continuous strip. Adjacent placements' strips overlap into each
+  // other's tile boundaries, so a row of these reads as one wall.
+  stone_wall_block: {
+    path: "kenney_nature-kit/Isometric/cliff_block_stone_NE.png",
+    width: 80, height: 80, offsetY: 2,
+    tile: { count: 5, stepX: 14, stepY: 0 },
   },
-
+  rock_wall_block: {
+    path: "kenney_nature-kit/Isometric/cliff_block_rock_NE.png",
+    width: 80, height: 80, offsetY: 2,
+    tile: { count: 5, stepX: 14, stepY: 0 },
+  },
   // ---- Tower defense kit (more kenney/kenney_tower-defense-kit) ----
   // All preview PNGs are 64x64 squares. The "build-f" variants are fully
   // assembled towers (bottom + middle + roof + crown). Render square — the
@@ -159,11 +169,6 @@ export const SPRITE_ASSETS: Record<string, SpriteAsset> = {
     path: "more kenney/kenney_tower-defense-kit/Previews/tower-round-build-c.png",
     width: 72, height: 72, offsetY: -16,
   },
-  td_catapult: {
-    path: "more kenney/kenney_tower-defense-kit/Previews/weapon-catapult.png",
-    width: 72, height: 72, offsetY: -16,
-  },
-
   // ---- Modular buildings (more kenney/kenney_modular-buildings) ----
   // Pre-assembled "sample" houses & towers — 64x64 squares.
   house_small: {
@@ -193,52 +198,12 @@ export const SPRITE_ASSETS: Record<string, SpriteAsset> = {
 
   // ---- Fantasy town kit (more kenney/kenney_fantasy-town-kit_2.0) ----
   // 64x64 source PNGs; render slightly larger but keep the square ratio.
-  market_stall: {
-    path: "more kenney/kenney_fantasy-town-kit_2.0/Previews/stall.png",
-    width: 80, height: 80, offsetY: -16,
-  },
-  stall_green: {
-    path: "more kenney/kenney_fantasy-town-kit_2.0/Previews/stall-green.png",
-    width: 80, height: 80, offsetY: -16,
-  },
-  stall_red: {
-    path: "more kenney/kenney_fantasy-town-kit_2.0/Previews/stall-red.png",
-    width: 80, height: 80, offsetY: -16,
-  },
   fountain_round: {
     path: "more kenney/kenney_fantasy-town-kit_2.0/Previews/fountain-round.png",
     width: 80, height: 80, offsetY: -12,
   },
-  fountain_square: {
-    path: "more kenney/kenney_fantasy-town-kit_2.0/Previews/fountain-square.png",
-    width: 80, height: 80, offsetY: -12,
-  },
-  cart: {
-    path: "more kenney/kenney_fantasy-town-kit_2.0/Previews/cart.png",
-    width: 72, height: 72, offsetY: -14,
-  },
-  cart_high: {
-    path: "more kenney/kenney_fantasy-town-kit_2.0/Previews/cart-high.png",
-    width: 72, height: 72, offsetY: -16,
-  },
   lantern: {
     path: "more kenney/kenney_fantasy-town-kit_2.0/Previews/lantern.png",
-    width: 56, height: 56, offsetY: -14,
-  },
-  hedge: {
-    path: "more kenney/kenney_fantasy-town-kit_2.0/Previews/hedge.png",
-    width: 64, height: 64, offsetY: -10,
-  },
-  hedge_large: {
-    path: "more kenney/kenney_fantasy-town-kit_2.0/Previews/hedge-large.png",
-    width: 64, height: 64, offsetY: -12,
-  },
-  banner_red: {
-    path: "more kenney/kenney_fantasy-town-kit_2.0/Previews/banner-red.png",
-    width: 56, height: 56, offsetY: -14,
-  },
-  banner_green: {
-    path: "more kenney/kenney_fantasy-town-kit_2.0/Previews/banner-green.png",
     width: 56, height: 56, offsetY: -14,
   },
   rock_large: {

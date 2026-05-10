@@ -238,6 +238,7 @@ CREATE TABLE IF NOT EXISTS local_social_settings (
   predictions_visibility TEXT NOT NULL DEFAULT 'friends' CHECK(predictions_visibility IN ('private', 'friends', 'public')),
   gold_visibility TEXT NOT NULL DEFAULT 'friends' CHECK(gold_visibility IN ('private', 'friends', 'public')),
   walkthroughs_visibility TEXT NOT NULL DEFAULT 'private' CHECK(walkthroughs_visibility IN ('private', 'friends', 'public')),
+  base_visibility TEXT NOT NULL DEFAULT 'friends' CHECK(base_visibility IN ('private', 'friends', 'public')),
   updated_at TEXT NOT NULL
 );
 
@@ -465,8 +466,8 @@ const existingLocalSocialSettingsRow = db
 if (!existingLocalSocialSettingsRow) {
   db.prepare(
     `INSERT INTO local_social_settings
-      (id, habits_visibility, predictions_visibility, gold_visibility, updated_at)
-     VALUES (1, 'friends', 'friends', 'friends', ?)`,
+      (id, habits_visibility, predictions_visibility, gold_visibility, walkthroughs_visibility, base_visibility, updated_at)
+     VALUES (1, 'friends', 'friends', 'friends', 'private', 'friends', ?)`,
   ).run(new Date().toISOString());
 }
 
@@ -508,6 +509,7 @@ function ensureSocialSettingsColumn(table: string, name: string, definition: str
 }
 ensureSocialSettingsColumn("local_social_settings", "walkthroughs_visibility", "TEXT NOT NULL DEFAULT 'private'");
 ensureSocialSettingsColumn("user_social_settings", "walkthroughs_visibility", "TEXT NOT NULL DEFAULT 'private'");
+ensureSocialSettingsColumn("local_social_settings", "base_visibility", "TEXT NOT NULL DEFAULT 'friends'");
 
 ensureBaseStateColumn("diamonds", "INTEGER NOT NULL DEFAULT 0");
 ensureBaseStateColumn("emeralds", "INTEGER NOT NULL DEFAULT 0");

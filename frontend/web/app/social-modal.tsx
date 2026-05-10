@@ -48,6 +48,7 @@ const DEFAULT_SETTINGS: SocialSettings = {
   predictionsVisibility: "friends",
   goldVisibility: "friends",
   walkthroughsVisibility: "private",
+  baseVisibility: "friends",
 };
 
 
@@ -469,6 +470,15 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
               {selectedProfile.gold.canView && (
                 <span className="social-gold-value">{selectedProfile.gold.state?.gold ?? 0} gold</span>
               )}
+              {selectedProfile.base?.canView && (
+                <a
+                  className="social-action-btn"
+                  href={`/base/view/${encodeURIComponent(selectedProfile.user.username)}`}
+                  style={{ marginLeft: "auto", textDecoration: "none" }}
+                >
+                  View base
+                </a>
+              )}
             </div>
 
             {selectedProfile.relationship === "friend" && encouragementsRemaining !== null && (
@@ -804,6 +814,22 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
                 setSettings((current) => ({
                   ...current,
                   walkthroughsVisibility: event.target.value as SocialVisibility,
+                }))
+              }
+            >
+              <option value="private">Private</option>
+              <option value="friends">Friends</option>
+              <option value="public">Public</option>
+            </select>
+          </label>
+          <label className="social-visibility-row">
+            <span>Base</span>
+            <select
+              value={settings.baseVisibility}
+              onChange={(event) =>
+                setSettings((current) => ({
+                  ...current,
+                  baseVisibility: event.target.value as SocialVisibility,
                 }))
               }
             >

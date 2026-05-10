@@ -30,7 +30,9 @@ public partial class MainWindow : Window
     private const uint SndAsync = 0x0001;
     private const uint SndNodefault = 0x0002;
     private const uint SndFilename = 0x00020000;
-    private const int DetectionIntervalMs = 100;
+    private const int DefaultDetectionIntervalMs = 100;
+    private const int MinDetectionIntervalMs = 100;
+    private const int MaxDetectionIntervalMs = 800;
 
     private OverlayPayload? _lastOverlayState;
     private IntPtr _gameWindowHandle = IntPtr.Zero;
@@ -157,7 +159,7 @@ public partial class MainWindow : Window
         {
             try
             {
-                await Task.Delay(DetectionIntervalMs);
+                await Task.Delay(GetDetectionIntervalMs());
 
                 var hasGameStates = (_lastOverlayState?.GameStates.Count ?? 0) > 0;
                 if (!hasGameStates)
@@ -328,6 +330,16 @@ public partial class MainWindow : Window
     {
         var gs = (_lastOverlayState?.GameStates ?? []).FirstOrDefault(s => s.Id == gameStateId);
         return gs?.MatchThreshold ?? 0.8;
+    }
+
+    private int GetDetectionIntervalMs()
+    {
+        var configured = _lastOverlayState?.DetectionIntervalMs ?? DefaultDetectionIntervalMs;
+        if (configured <= 0)
+        {
+            return DefaultDetectionIntervalMs;
+        }
+        return Math.Clamp(configured, MinDetectionIntervalMs, MaxDetectionIntervalMs);
     }
 
     private static async Task<string> ReceiveText(ClientWebSocket socket)

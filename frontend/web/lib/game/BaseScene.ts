@@ -13,7 +13,7 @@ import {
 import { getCatalogItem, type CatalogItem } from "./catalog";
 import { renderBuilding } from "./renderers";
 import { SPRITE_ASSETS, spriteKey, hasSprite, GROUND_TILES, groundTileKey } from "./sprites";
-import type { BaseCurrencyType, BaseInventory, BaseState, BuildingPlacement, Progression, Cell } from "@slaythelist/contracts";
+import type { BaseCurrencyType, BaseInventory, BaseSnapshot, BaseState, BuildingPlacement, Progression, Cell } from "@slaythelist/contracts";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8788";
 
@@ -29,10 +29,18 @@ export class BaseScene extends Phaser.Scene {
   private baseState: BaseState | null = null;
   private progression: Progression | null = null;
 
+  /** Read-only viewing mode (e.g. browsing a friend's base). When true the
+   *  scene skips API fetches, ignores edit-style input, and never saves. */
+  readOnly = false;
+  /** Snapshot to render in read-only mode instead of fetching `/api/base-state`. */
+  externalSnapshot: BaseSnapshot | null = null;
+  /** Optional label drawn in the HUD when read-only (e.g. "@username's base"). */
+  viewerLabel: string | null = null;
+
   // Placement mode
   private placingItem: CatalogItem | null = null;
   private placementGhost: Phaser.GameObjects.Graphics | null = null;
-  private placementGhostSprite: Phaser.GameObjects.Image | null = null;
+  private placementGhostSprites: Phaser.GameObjects.Image[] = [];
   private ghostCol = 0;
   private ghostRow = 0;
   private placingRotation = 0;
@@ -125,7 +133,7 @@ export class BaseScene extends Phaser.Scene {
           // Right-click cancels placement
           this.cancelPlacement();
         } else {
-          // Right/middle-click drag for camera
+          // Right/middle-click drag for camera (allowed in read-only too)
           this.isDragging = true;
           this.dragStartX = pointer.x;
           this.dragStartY = pointer.y;
@@ -133,6 +141,16 @@ export class BaseScene extends Phaser.Scene {
           this.camStartY = this.cameras.main.scrollY;
         }
       } else if (pointer.leftButtonDown()) {
+        // In read-only mode, left-click also drags the camera so the user
+        // can pan around without a mouse with a right button.
+        if (this.readOnly) {
+          this.isDragging = true;
+          this.dragStartX = pointer.x;
+          this.dragStartY = pointer.y;
+          this.camStartX = this.cameras.main.scrollX;
+          this.camStartY = this.cameras.main.scrollY;
+          return;
+        }
         if (this.placingItem) {
           this.tryPlaceBuilding();
         } else {
@@ -343,6 +361,31 @@ export class BaseScene extends Phaser.Scene {
   }
 
   private async loadData() {
+    // Read-only path: render the supplied snapshot, skip every API call.
+    if (this.readOnly) {
+      this.goldText.setVisible(false);
+      this.diamondText.setVisible(false);
+      if (this.viewerLabel) {
+        this.statusText.setText(this.viewerLabel);
+      }
+      const snapshot = this.externalSnapshot;
+      if (snapshot?.cells && snapshot.cells.length > 0) {
+        this.cells = snapshot.cells.map((row) => row.map((cell) => ({
+          terrain: [...(cell.terrain || [])],
+          object: null,
+        })));
+      } else {
+        this.cells = Array.from({ length: GRID_ROWS }, () =>
+          Array.from({ length: GRID_COLS }, () => ({ terrain: [], object: null })),
+        );
+      }
+      for (const placement of snapshot?.placements ?? []) {
+        this.renderPlacedBuilding(placement);
+      }
+      this.onStateChange?.();
+      return;
+    }
+
     try {
       const [baseRes, progRes] = await Promise.all([
         fetch(`${API_BASE}/api/base-state`).then((r) => r.json()) as Promise<BaseState>,
@@ -383,6 +426,35 @@ export class BaseScene extends Phaser.Scene {
     }
   }
 
+  /** Spawn the sprite copies for an item placed at screen `(x, y)` with the
+   *  given base depth. Single-sprite items get one image; assets with a
+   *  `tile` config get N copies stepping along (stepX, stepY) in screen
+   *  pixels with rising depth, so later (more-NE) copies render on top of
+   *  earlier ones — that's what fakes the continuous-wall look. */
+  private createItemSprites(
+    itemId: string,
+    x: number,
+    y: number,
+    baseDepth: number,
+  ): Phaser.GameObjects.Image[] {
+    const asset = SPRITE_ASSETS[itemId];
+    const tile = asset.tile ?? { count: 1, stepX: 0, stepY: 0 };
+    const startX = x - ((tile.count - 1) / 2) * tile.stepX;
+    const startY = y - ((tile.count - 1) / 2) * tile.stepY;
+    const out: Phaser.GameObjects.Image[] = [];
+    for (let i = 0; i < tile.count; i++) {
+      const img = this.add.image(
+        startX + i * tile.stepX,
+        startY + i * tile.stepY + asset.offsetY,
+        spriteKey(itemId),
+      );
+      img.setDisplaySize(asset.width, asset.height);
+      img.setDepth(baseDepth + i * 0.001);
+      out.push(img);
+    }
+    return out;
+  }
+
   private renderPlacedBuilding(placement: BuildingPlacement): PlacedBuilding | null {
     const item = getCatalogItem(placement.itemId);
     if (!item) return null;
@@ -409,11 +481,8 @@ export class BaseScene extends Phaser.Scene {
     const depth = isoDepth(centerCol, centerRow) * 10 + 2;
 
     if (hasSprite(placement.itemId)) {
-      const asset = SPRITE_ASSETS[placement.itemId];
-      const img = this.add.image(x, y + asset.offsetY, spriteKey(placement.itemId));
-      img.setDisplaySize(asset.width, asset.height);
-      img.setDepth(depth);
-      sprites.push(img);
+      const imgs = this.createItemSprites(placement.itemId, x, y, depth);
+      for (const img of imgs) sprites.push(img);
     } else {
       const g = this.add.graphics();
       g.setDepth(depth);
@@ -599,13 +668,12 @@ export class BaseScene extends Phaser.Scene {
     const depth = isoDepth(centerCol, centerRow) * 10 + 2;
 
     if (hasSprite(building.placement.itemId)) {
-      const asset = SPRITE_ASSETS[building.placement.itemId];
-      const img = this.add.image(x, y + asset.offsetY, spriteKey(building.placement.itemId));
-      img.setDisplaySize(asset.width, asset.height);
-      img.setDepth(depth);
-      // Flip for rotation (simple approach for sprites)
-      img.setFlipX(building.placement.rotation === 1 || building.placement.rotation === 2);
-      building.sprites.push(img);
+      const imgs = this.createItemSprites(building.placement.itemId, x, y, depth);
+      const flip = building.placement.rotation === 1 || building.placement.rotation === 2;
+      for (const img of imgs) {
+        img.setFlipX(flip);
+        building.sprites.push(img);
+      }
     } else {
       const color = Phaser.Display.Color.HexStringToColor(item.color).color;
       const g = this.add.graphics();
@@ -638,6 +706,7 @@ export class BaseScene extends Phaser.Scene {
 
   /** Start placement mode from inventory. Called from React UI. */
   startPlacement(itemId: string) {
+    if (this.readOnly) return;
     const item = getCatalogItem(itemId);
     if (!item) return;
 
@@ -657,13 +726,12 @@ export class BaseScene extends Phaser.Scene {
     this.placementGhost.setVisible(false);
 
     if (hasSprite(itemId)) {
-      const asset = SPRITE_ASSETS[itemId];
-      const ghostSprite = this.add.image(0, 0, spriteKey(itemId));
-      ghostSprite.setDisplaySize(asset.width, asset.height);
-      ghostSprite.setAlpha(0.7);
-      ghostSprite.setDepth(9999);
-      ghostSprite.setVisible(false);
-      this.placementGhostSprite = ghostSprite;
+      const ghosts = this.createItemSprites(itemId, 0, 0, 9999);
+      for (const g of ghosts) {
+        g.setAlpha(0.7);
+        g.setVisible(false);
+      }
+      this.placementGhostSprites = ghosts;
     }
   }
 
@@ -671,8 +739,8 @@ export class BaseScene extends Phaser.Scene {
     this.placingItem = null;
     this.placementGhost?.destroy();
     this.placementGhost = null;
-    this.placementGhostSprite?.destroy();
-    this.placementGhostSprite = null;
+    for (const g of this.placementGhostSprites) g.destroy();
+    this.placementGhostSprites = [];
     this.statusText.setText("");
   }
 
@@ -710,12 +778,22 @@ export class BaseScene extends Phaser.Scene {
     const centerRow = this.ghostRow + (fh - 1) / 2;
     const { x, y } = gridToScreen(centerCol, centerRow);
 
-    if (this.placementGhostSprite) {
+    if (this.placementGhostSprites.length > 0) {
       const asset = SPRITE_ASSETS[this.placingItem.id];
-      this.placementGhostSprite.setPosition(x, y + asset.offsetY);
-      this.placementGhostSprite.setVisible(true);
-      this.placementGhostSprite.setTint(canPlace ? 0xffffff : 0xff8888);
-      this.placementGhostSprite.setFlipX(this.placingRotation === 1 || this.placingRotation === 2);
+      const tile = asset.tile ?? { count: 1, stepX: 0, stepY: 0 };
+      const startX = x - ((tile.count - 1) / 2) * tile.stepX;
+      const startY = y - ((tile.count - 1) / 2) * tile.stepY;
+      const flip = this.placingRotation === 1 || this.placingRotation === 2;
+      const tint = canPlace ? 0xffffff : 0xff8888;
+      this.placementGhostSprites.forEach((sprite, i) => {
+        sprite.setPosition(
+          startX + i * tile.stepX,
+          startY + i * tile.stepY + asset.offsetY,
+        );
+        sprite.setVisible(true);
+        sprite.setTint(tint);
+        sprite.setFlipX(flip);
+      });
     } else if (canPlace) {
       const color = Phaser.Display.Color.HexStringToColor(this.placingItem.color).color;
       this.placementGhost.setAlpha(0.6);
@@ -787,6 +865,7 @@ export class BaseScene extends Phaser.Scene {
 
   /** Buy an item — charges currency and adds to inventory. Called from React UI. */
   async buyItem(itemId: string, cost: number, currency: BaseCurrencyType): Promise<boolean> {
+    if (this.readOnly) return false;
     try {
       const res = await fetch(`${API_BASE}/api/base-shop/purchase`, {
         method: "POST",
