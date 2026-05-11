@@ -920,6 +920,26 @@ body.desktop-app main {
   align-items: center;
 }
 
+.prediction-day-separator {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: #9f9888;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.15rem 0;
+}
+
+.prediction-day-separator::before,
+.prediction-day-separator::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
 .prediction-title {
   flex: 1;
   min-width: 0;

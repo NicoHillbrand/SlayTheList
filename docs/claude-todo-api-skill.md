@@ -57,8 +57,10 @@ Available MCP tools:
 | `set_predictions` | Replaces full predictions array (read → modify → write). |
 | `list_reflections` | Returns reflections, newest first. Optional `limit` (default 30). |
 | `set_reflections` | Replaces full reflections array (read → modify → write). |
+| `list_walkthroughs` | Returns day walkthrough entries, most recent first. Optional `limit` (default 30). |
+| `set_walkthroughs` | Replaces full walkthroughs array (read → modify → write). |
 
-For habits/predictions/reflections the pattern is: call `list_*` → modify the array → call `set_*` with the full replacement array.
+For habits/predictions/reflections/walkthroughs the pattern is: call `list_*` → modify the array → call `set_*` with the full replacement array.
 
 ### Option B — HTTP API (any context)
 
@@ -308,6 +310,33 @@ The driver mode prompt is generic. Make it work for you by:
 > "Add ultimate driver mode to my CLAUDE.md following the SlayTheList docs."
 
 Claude will paste the snippet, prompt you to fill in your own values/goals/projects, and wire up the SlayTheList pairing.
+
+---
+
+### Associative narrative (day walkthrough)
+
+A "narrative prediction" — the user predicting how their day will go as a flowing story instead of a list of discrete events — belongs in the **day walkthrough** section, not in `predictions`. Use `set_walkthroughs`, not `set_predictions`.
+
+**When to use it.** During morning planning (often alongside ultimate driver mode and core-goal predictions), prompt the user with an "associative narrative" question: not "what will you do today?" but "what happens next? and after that, what's the first thing you think of?" The user free-associates forward through the day — each beat triggers the next. The point is to surface high-variance moments (the "I'll be home at 15:00 and want to watch YouTube" type), modal predictions for how they'll respond, and side-thoughts that wouldn't fit a structured list.
+
+**How to capture it.** Clean the user's stream-of-consciousness lightly (preserve their voice, fix grammar, drop tangents that aren't predictive). Store it as a single walkthrough entry for today, e.g.:
+
+```ts
+{
+  id: "walkthrough-20260511",          // any unique string
+  date: "2026-05-11",                  // YYYY-MM-DD
+  plan: "Open with predictions, then ease into work. Expect tiredness; modal response is ...",
+  divergences: "",                     // filled in at end of day
+  createdAt: 1778907600000,            // ms epoch
+  updatedAt: 1778907600000
+}
+```
+
+End-of-day: prompt the user to fill in `divergences` ("what went differently than expected?"). This closes the loop on the prediction.
+
+**Walkthrough fields** (`walkthroughSchema`): `id`, `date` (YYYY-MM-DD), `plan`, `divergences`, `createdAt`, `updatedAt`, `visibility` (optional: `private` | `friends` | `public`).
+
+**HTTP note.** There is no dedicated `/api/walkthroughs` endpoint. Over HTTP, walkthroughs live inside the accountability state bundle — GET/PUT `/api/accountability-state` and modify the `walkthroughs` array. MCP is strongly preferred for this.
 
 ---
 

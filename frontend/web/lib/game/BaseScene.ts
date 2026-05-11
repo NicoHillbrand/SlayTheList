@@ -12,10 +12,25 @@ import {
 } from "./iso";
 import { getCatalogItem, type CatalogItem } from "./catalog";
 import { renderBuilding } from "./renderers";
-import { SPRITE_ASSETS, spriteKey, hasSprite, GROUND_TILES, groundTileKey } from "./sprites";
+import { SPRITE_ASSETS, spriteKey, hasSprite, GROUND_TILES, groundTileKey, getAssetRows, type TileRow, type SpriteAsset } from "./sprites";
 import type { BaseCurrencyType, BaseInventory, BaseSnapshot, BaseState, BuildingPlacement, Progression, Cell } from "@slaythelist/contracts";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8788";
+
+/** Rotate an iso-aligned screen offset 90° per `rot` step. Iso 90° CW in
+ *  screen-pixel coords is `(sx, sy) → (-2 sy, sx / 2)`, derived from the
+ *  fact that one iso unit is (TILE_WIDTH/2, TILE_HEIGHT/2) = (2, 1) at
+ *  unit scale. Step vectors and shifts that align with the iso lattice
+ *  (multiples of (4, 2)) stay integer through all four rotations. */
+function rotateIso(sx: number, sy: number, rot: number): { x: number; y: number } {
+  switch (((rot % 4) + 4) % 4) {
+    case 0: return { x: sx,        y: sy        };
+    case 1: return { x: -2 * sy,   y: sx / 2    };
+    case 2: return { x: -sx,       y: -sy       };
+    case 3: return { x: 2 * sy,    y: -sx / 2   };
+    default: return { x: sx, y: sy };
+  }
+}
 
 interface PlacedBuilding {
   placement: BuildingPlacement;
@@ -427,29 +442,52 @@ export class BaseScene extends Phaser.Scene {
   }
 
   /** Spawn the sprite copies for an item placed at screen `(x, y)` with the
-   *  given base depth. Single-sprite items get one image; assets with a
-   *  `tile` config get N copies stepping along (stepX, stepY) in screen
-   *  pixels with rising depth, so later (more-NE) copies render on top of
-   *  earlier ones — that's what fakes the continuous-wall look. */
+   *  given base depth. Plain items get one image; `tile` assets get a row
+   *  of cube copies; `rows` assets get several rows in one placement (used
+   *  by corner pieces). Depth scales with screen-y so the front-most cube
+   *  always renders on top regardless of which way the row runs. */
   private createItemSprites(
     itemId: string,
     x: number,
     y: number,
     baseDepth: number,
+    rotation: number = 0,
   ): Phaser.GameObjects.Image[] {
     const asset = SPRITE_ASSETS[itemId];
-    const tile = asset.tile ?? { count: 1, stepX: 0, stepY: 0 };
-    const startX = x - ((tile.count - 1) / 2) * tile.stepX;
-    const startY = y - ((tile.count - 1) / 2) * tile.stepY;
     const out: Phaser.GameObjects.Image[] = [];
-    for (let i = 0; i < tile.count; i++) {
+    for (const row of getAssetRows(asset)) {
+      out.push(...this.createRowSprites(asset, itemId, row, x, y, baseDepth, rotation));
+    }
+    return out;
+  }
+
+  /** Render one cube row (or a single image for `count: 1`). R-rotation
+   *  applies a 90° iso-world rotation to step and shift per press: NE → SE
+   *  → SW → NW for walls; S-corner → W-corner → N-corner → E-corner for
+   *  corners. */
+  private createRowSprites(
+    asset: SpriteAsset,
+    itemId: string,
+    row: TileRow,
+    x: number,
+    y: number,
+    baseDepth: number,
+    rotation: number,
+  ): Phaser.GameObjects.Image[] {
+    const step = rotateIso(row.stepX, row.stepY, rotation);
+    const shift = rotateIso(row.shiftX ?? 0, row.shiftY ?? 0, rotation);
+    const startX = x - ((row.count - 1) / 2) * step.x + shift.x;
+    const startY = y - ((row.count - 1) / 2) * step.y + shift.y;
+    const out: Phaser.GameObjects.Image[] = [];
+    for (let i = 0; i < row.count; i++) {
+      const yPos = startY + i * step.y;
       const img = this.add.image(
-        startX + i * tile.stepX,
-        startY + i * tile.stepY + asset.offsetY,
+        startX + i * step.x,
+        yPos + asset.offsetY,
         spriteKey(itemId),
       );
       img.setDisplaySize(asset.width, asset.height);
-      img.setDepth(baseDepth + i * 0.001);
+      img.setDepth(baseDepth + yPos * 0.0001);
       out.push(img);
     }
     return out;
@@ -481,7 +519,7 @@ export class BaseScene extends Phaser.Scene {
     const depth = isoDepth(centerCol, centerRow) * 10 + 2;
 
     if (hasSprite(placement.itemId)) {
-      const imgs = this.createItemSprites(placement.itemId, x, y, depth);
+      const imgs = this.createItemSprites(placement.itemId, x, y, depth, placement.rotation);
       for (const img of imgs) sprites.push(img);
     } else {
       const g = this.add.graphics();
@@ -668,8 +706,11 @@ export class BaseScene extends Phaser.Scene {
     const depth = isoDepth(centerCol, centerRow) * 10 + 2;
 
     if (hasSprite(building.placement.itemId)) {
-      const imgs = this.createItemSprites(building.placement.itemId, x, y, depth);
-      const flip = building.placement.rotation === 1 || building.placement.rotation === 2;
+      const asset = SPRITE_ASSETS[building.placement.itemId];
+      const imgs = this.createItemSprites(building.placement.itemId, x, y, depth, building.placement.rotation);
+      // For tile/row-mode items rotation already changes the row direction,
+      // so the per-sprite flipX is skipped (each cube is symmetric).
+      const flip = !asset.tile && !asset.rows && (building.placement.rotation === 1 || building.placement.rotation === 2);
       for (const img of imgs) {
         img.setFlipX(flip);
         building.sprites.push(img);
@@ -780,20 +821,29 @@ export class BaseScene extends Phaser.Scene {
 
     if (this.placementGhostSprites.length > 0) {
       const asset = SPRITE_ASSETS[this.placingItem.id];
-      const tile = asset.tile ?? { count: 1, stepX: 0, stepY: 0 };
-      const startX = x - ((tile.count - 1) / 2) * tile.stepX;
-      const startY = y - ((tile.count - 1) / 2) * tile.stepY;
-      const flip = this.placingRotation === 1 || this.placingRotation === 2;
+      const rows = getAssetRows(asset);
+      // Per-cube flipX only applies to plain (non-tile, non-row) sprites — for
+      // walls/corners the row direction already encodes rotation.
+      const flip = !asset.tile && !asset.rows && (this.placingRotation === 1 || this.placingRotation === 2);
       const tint = canPlace ? 0xffffff : 0xff8888;
-      this.placementGhostSprites.forEach((sprite, i) => {
-        sprite.setPosition(
-          startX + i * tile.stepX,
-          startY + i * tile.stepY + asset.offsetY,
-        );
-        sprite.setVisible(true);
-        sprite.setTint(tint);
-        sprite.setFlipX(flip);
-      });
+      let spriteIdx = 0;
+      for (const row of rows) {
+        const step = rotateIso(row.stepX, row.stepY, this.placingRotation);
+        const shift = rotateIso(row.shiftX ?? 0, row.shiftY ?? 0, this.placingRotation);
+        const startX = x - ((row.count - 1) / 2) * step.x + shift.x;
+        const startY = y - ((row.count - 1) / 2) * step.y + shift.y;
+        for (let i = 0; i < row.count; i++) {
+          const sprite = this.placementGhostSprites[spriteIdx++];
+          if (!sprite) break;
+          sprite.setPosition(
+            startX + i * step.x,
+            startY + i * step.y + asset.offsetY,
+          );
+          sprite.setVisible(true);
+          sprite.setTint(tint);
+          sprite.setFlipX(flip);
+        }
+      }
     } else if (canPlace) {
       const color = Phaser.Display.Color.HexStringToColor(this.placingItem.color).color;
       this.placementGhost.setAlpha(0.6);

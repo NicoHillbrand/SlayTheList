@@ -3266,7 +3266,10 @@ export default function Page() {
   }
 
   const activePredictions = useMemo(
-    () => predictions.filter((prediction) => prediction.outcome === "pending" && !prediction.murphy),
+    () =>
+      predictions
+        .filter((prediction) => prediction.outcome === "pending" && !prediction.murphy)
+        .sort((a, b) => b.createdAt - a.createdAt),
     [predictions],
   );
   const resolvedPredictions = useMemo(
@@ -4373,47 +4376,83 @@ export default function Page() {
               </p>
             ) : (
               <ul className="goals-list">
-                {activePredictions.map((prediction) => (
-                  <li key={prediction.id} className="goal-row">
-                    <div className="prediction-row">
-                      <input
-                        className="prediction-title prediction-title-input"
-                        value={prediction.title}
-                        onChange={(e) => updatePredictionTitle(prediction.id, e.target.value)}
-                        aria-label="Prediction title"
-                      />
-                      <div className="goal-actions prediction-actions">
-                        <button
-                          type="button"
-                          className="prediction-visibility-toggle"
-                          onClick={() => togglePredictionVisibility(prediction.id)}
-                          title={prediction.visibility === "private" ? "Private (hidden from friends)" : "Visible to friends"}
+                {(() => {
+                  const localDayKey = (ms: number) => {
+                    const d = new Date(ms);
+                    return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+                  };
+                  const todayKey = localDayKey(Date.now());
+                  const yesterdayKey = localDayKey(Date.now() - 86_400_000);
+                  const labelForDay = (ms: number) => {
+                    const key = localDayKey(ms);
+                    if (key === todayKey) return "Today";
+                    if (key === yesterdayKey) return "Yesterday";
+                    return new Date(ms).toLocaleDateString(undefined, {
+                      weekday: "short",
+                      month: "short",
+                      day: "numeric",
+                    });
+                  };
+                  let prevKey: string | null = null;
+                  const rows: ReactNode[] = [];
+                  for (const prediction of activePredictions) {
+                    const key = localDayKey(prediction.createdAt);
+                    if (prevKey !== null && key !== prevKey) {
+                      rows.push(
+                        <li
+                          key={`sep-${prediction.id}`}
+                          className="prediction-day-separator"
+                          aria-hidden="true"
                         >
-                          {prediction.visibility === "private" ? "🔒" : "👁"}
-                        </button>
-                        <button type="button" onClick={() => setPredictionOutcome(prediction.id, "hit")}>Happened</button>
-                        <button type="button" onClick={() => setPredictionOutcome(prediction.id, "miss")}>Didn't happen</button>
-                        <button type="button" onClick={() => deletePrediction(prediction.id)}>Delete</button>
-                      </div>
-                      <input
-                        type="number"
-                        className="prediction-confidence prediction-confidence-input"
-                        min={1}
-                        max={99}
-                        value={prediction.confidence}
-                        onChange={(e) =>
-                          updatePredictionConfidence(
-                            prediction.id,
-                            Math.max(1, Math.min(99, Number(e.target.value))),
-                          )
-                        }
-                        title="Probability %"
-                        aria-label="Prediction confidence"
-                      />
-                      <span className="prediction-confidence-label">%</span>
-                    </div>
-                  </li>
-                ))}
+                          <span>{labelForDay(prediction.createdAt)}</span>
+                        </li>,
+                      );
+                    }
+                    prevKey = key;
+                    rows.push(
+                      <li key={prediction.id} className="goal-row">
+                        <div className="prediction-row">
+                          <input
+                            className="prediction-title prediction-title-input"
+                            value={prediction.title}
+                            onChange={(e) => updatePredictionTitle(prediction.id, e.target.value)}
+                            aria-label="Prediction title"
+                          />
+                          <div className="goal-actions prediction-actions">
+                            <button
+                              type="button"
+                              className="prediction-visibility-toggle"
+                              onClick={() => togglePredictionVisibility(prediction.id)}
+                              title={prediction.visibility === "private" ? "Private (hidden from friends)" : "Visible to friends"}
+                            >
+                              {prediction.visibility === "private" ? "🔒" : "👁"}
+                            </button>
+                            <button type="button" onClick={() => setPredictionOutcome(prediction.id, "hit")}>Happened</button>
+                            <button type="button" onClick={() => setPredictionOutcome(prediction.id, "miss")}>Didn't happen</button>
+                            <button type="button" onClick={() => deletePrediction(prediction.id)}>Delete</button>
+                          </div>
+                          <input
+                            type="number"
+                            className="prediction-confidence prediction-confidence-input"
+                            min={1}
+                            max={99}
+                            value={prediction.confidence}
+                            onChange={(e) =>
+                              updatePredictionConfidence(
+                                prediction.id,
+                                Math.max(1, Math.min(99, Number(e.target.value))),
+                              )
+                            }
+                            title="Probability %"
+                            aria-label="Prediction confidence"
+                          />
+                          <span className="prediction-confidence-label">%</span>
+                        </div>
+                      </li>,
+                    );
+                  }
+                  return rows;
+                })()}
               </ul>
             )}
             <details className="prediction-goals-panel">

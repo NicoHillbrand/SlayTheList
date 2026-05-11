@@ -99,9 +99,15 @@ export const CATALOG: CatalogItem[] = [
   { id: "boulder",         name: "Boulder",         category: "decoration", cost: 1, currency: "gold", footprint: [1, 1], color: "#a8a8a8" },
   { id: "grass_tuft",      name: "Grass Tuft",      category: "decoration", cost: 0, currency: "gold", footprint: [1, 1], color: "#6aa852" },
 
-  // ---- Wall cubes (overlap-style — adjacent placements visually tile) ----
-  { id: "stone_wall_block",    name: "Stone Wall Block",  category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#9a9a9a" },
-  { id: "rock_wall_block",     name: "Rock Wall Block",   category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#a87050" },
+  // ---- Wall cubes (overlap-style — adjacent placements visually tile.
+  //      _se variants run the perpendicular iso diagonal; press R while
+  //      placing to flip either one between the two directions.) ----
+  { id: "stone_wall_block",    name: "Stone Wall ↗",     category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#9a9a9a" },
+  { id: "stone_wall_block_se", name: "Stone Wall ↘",     category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#9a9a9a" },
+  { id: "stone_wall_corner",   name: "Stone Wall Corner",category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#9a9a9a" },
+  { id: "rock_wall_block",     name: "Rock Wall ↗",      category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#a87050" },
+  { id: "rock_wall_block_se",  name: "Rock Wall ↘",      category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#a87050" },
+  { id: "rock_wall_corner",    name: "Rock Wall Corner", category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#a87050" },
 ];
 
 export function getCatalogItem(id: string): CatalogItem | undefined {

@@ -6,7 +6,80 @@ This document describes how to run `backend/cloud-social` on a VPS at `https://s
 - a Node process managed by `systemd`
 - Caddy as the HTTPS reverse proxy
 
-## Recommended Layout
+## Current production deployment (`srv1252048`)
+
+The live VPS diverges from the recommended layout below — it was set up on the
+`nico` user account, not a dedicated `slaythelist` system user. **Use these
+paths when SSHed in**, not the ones in [deploy/cloud-social/cloud-social.service](../deploy/cloud-social/cloud-social.service):
+
+| Setting | Production value |
+|---|---|
+| Service unit | `/etc/systemd/system/cloud-social.service` |
+| `User=` | `nico` |
+| `WorkingDirectory=` | `/home/nico/apps/SlayTheList` |
+| `EnvironmentFile=` | `/etc/slaythelist/cloud-social.env` |
+| `CLOUD_SOCIAL_DATA_DIR` | `/home/nico/apps/SlayTheList/data/cloud-social` |
+| Listen port | `8790` (Caddy reverse-proxies from `slaythelist.nicohillbrand.com`) |
+
+The repo's `deploy/cloud-social/cloud-social.service` template still says
+`User=slaythelist` / `/opt/slaythelist`. Don't copy it over the live unit —
+it would fail to start because no `slaythelist` user exists on this box.
+
+### Redeploy steps (the ones that actually work)
+
+```bash
+ssh srv1252048
+cd ~/apps/SlayTheList
+
+git fetch origin
+git reset --hard origin/main      # pull may fail if VPS history diverged; reset is safe
+                                   # because data lives outside the repo
+npm install                        # only if package.json changed
+npm run build                      # rebuilds contracts → api → cloud-social → web
+
+sudo systemctl restart cloud-social
+sudo systemctl status cloud-social --no-pager
+sudo journalctl -u cloud-social -n 30 --no-pager
+curl -s https://slaythelist.nicohillbrand.com/health
+```
+
+### Verifying SQLite migrations applied
+
+`sqlite3` CLI isn't installed on the box. Use the workspace's `better-sqlite3`:
+
+```bash
+cat > ~/apps/SlayTheList/.check-cols.cjs <<'EOF'
+const Database = require("better-sqlite3");
+const db = new Database(
+  "/home/nico/apps/SlayTheList/data/cloud-social/cloud-social.db",
+  { readonly: true },
+);
+for (const t of process.argv.slice(2)) {
+  console.log(
+    t + ":",
+    db.prepare(`SELECT name FROM pragma_table_info('${t}')`).all().map((r) => r.name).join(", "),
+  );
+}
+EOF
+node ~/apps/SlayTheList/.check-cols.cjs user_social_settings user_social_snapshots
+rm ~/apps/SlayTheList/.check-cols.cjs
+```
+
+Or `sudo apt install -y sqlite3` once and use the CLI thereafter.
+
+### Recovering from divergent VPS history
+
+If the VPS clone was patched directly at some point and a later history rewrite
+on `origin/main` pruned old asset/scaffold commits, `git pull` will refuse to
+fast-forward. Confirm with `git log --oneline origin/main..HEAD` — if those
+commits are clearly stale (mobile scaffold, asset zips, etc.), `git reset
+--hard origin/main` is the right move. Cloud-social data lives in
+`CLOUD_SOCIAL_DATA_DIR`, **not** in the repo, so `reset --hard` only rewrites
+source/build artifacts.
+
+---
+
+## Recommended Layout (template only — see "Current production deployment" above for the live setup)
 
 - app checkout: `/opt/slaythelist`
 - cloud-social data: `/var/lib/slaythelist/cloud-social`

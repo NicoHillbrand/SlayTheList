@@ -4,6 +4,15 @@
  * When an entry exists here, the renderer uses the sprite instead of procedural graphics.
  */
 
+/** One row of overlapping cube copies — used by walls and (in pairs) corners. */
+export interface TileRow {
+  count: number;
+  stepX: number;
+  stepY: number;
+  shiftX?: number;
+  shiftY?: number;
+}
+
 export interface SpriteAsset {
   /** Path relative to /assets/ */
   path: string;
@@ -13,10 +22,24 @@ export interface SpriteAsset {
   height: number;
   /** Y offset from tile center (negative = up) — use to align the base of the sprite with the tile */
   offsetY: number;
-  /** Optional: render this asset as multiple overlapping copies offset by
+  /** Render this asset as multiple overlapping copies offset by
    *  (stepX, stepY) in screen pixels. Used to fake a continuous wall by
-   *  packing many small cube sprites into one tile so their tops blend. */
-  tile?: { count: number; stepX: number; stepY: number };
+   *  packing many small cube sprites into one tile so their tops blend.
+   *  `shiftX` / `shiftY` move the centered row by N screen pixels — useful
+   *  for placing the row on a tile edge instead of through the center.
+   *  Under R-key rotation `shiftX`'s sign flips alongside `stepY`. */
+  tile?: TileRow;
+  /** Render this asset as several `tile`-style rows in one placement — used
+   *  for corner pieces that combine half-walls in two iso directions.
+   *  If both `tile` and `rows` are set, only `rows` is used. */
+  rows?: TileRow[];
+}
+
+/** Return all the cube-rows for an asset (1 row for simple walls, N for corners). */
+export function getAssetRows(asset: SpriteAsset): TileRow[] {
+  if (asset.rows) return asset.rows;
+  if (asset.tile) return [asset.tile];
+  return [{ count: 1, stepX: 0, stepY: 0 }];
 }
 
 /**
@@ -135,19 +158,60 @@ export const SPRITE_ASSETS: Record<string, SpriteAsset> = {
     path: "kenney_nature-kit/Isometric/grass_large_NE.png",
     width: 100, height: 100, offsetY: -12,
   },
-  // Stone / rock wall cubes. Each placement renders 5 small cube copies
-  // packed across the tile so their top diamonds overlap into a
-  // continuous strip. Adjacent placements' strips overlap into each
-  // other's tile boundaries, so a row of these reads as one wall.
+  // Stone / rock wall cubes. Each placement renders 7 small cube copies
+  // stepping along an iso diagonal (screen ratio 2:1) so adjacent
+  // placements visually merge into one continuous wall. The "_se"
+  // variants step down-right instead of up-right; R-key rotation also
+  // flips stepY's sign at render time, so either direction can be
+  // turned into the other after placement.
   stone_wall_block: {
     path: "kenney_nature-kit/Isometric/cliff_block_stone_NE.png",
-    width: 80, height: 80, offsetY: 2,
-    tile: { count: 5, stepX: 14, stepY: 0 },
+    width: 56, height: 56, offsetY: -2,
+    tile: { count: 8, stepX: 4, stepY: -2, shiftX: 4, shiftY: -2 },
   },
   rock_wall_block: {
     path: "kenney_nature-kit/Isometric/cliff_block_rock_NE.png",
-    width: 80, height: 80, offsetY: 2,
-    tile: { count: 5, stepX: 14, stepY: 0 },
+    width: 56, height: 56, offsetY: -2,
+    tile: { count: 8, stepX: 4, stepY: -2, shiftX: 4, shiftY: -2 },
+  },
+  stone_wall_block_se: {
+    path: "kenney_nature-kit/Isometric/cliff_block_stone_NE.png",
+    width: 56, height: 56, offsetY: -2,
+    // "Back" of an SE-going wall is up-LEFT (NW), not up-right — so shiftX
+    // is negative here while NE walls have positive shiftX. Under R-rotation
+    // shiftX flips sign to keep "shift toward back" consistent. shiftY -4
+    // (instead of -2) puts the wall's middle at the same screen-y as the
+    // corner piece's SE arm so the two render flush when placed adjacent.
+    tile: { count: 8, stepX: 4, stepY: 2, shiftX: -4, shiftY: -4 },
+  },
+  rock_wall_block_se: {
+    path: "kenney_nature-kit/Isometric/cliff_block_rock_NE.png",
+    width: 56, height: 56, offsetY: -2,
+    tile: { count: 8, stepX: 4, stepY: 2, shiftX: -4, shiftY: -4 },
+  },
+  // Corner pieces: NE half-wall (4 cubes ending at the same position the
+  // ↗ wall's back-cube would land) + SE half-wall (4 cubes ending where
+  // the ↘ wall's front-cube would land). The two halves meet at the
+  // top-back of the tile and visually overlap thanks to the cube tops.
+  // Bottom (S-corner) of the diamond: both arms terminate at the same
+  // junction cube around (+2, -3) which becomes the corner's lowest
+  // visible block. Arms fan up-right (5 cubes) and up-left (5 cubes) from
+  // there, ending at symmetric tip y=-11.
+  stone_wall_corner: {
+    path: "kenney_nature-kit/Isometric/cliff_block_stone_NE.png",
+    width: 56, height: 56, offsetY: -2,
+    rows: [
+      { count: 5, stepX: 4, stepY: -2, shiftX: 10, shiftY: -5 }, // NE half (i=0 at junction (+2,-3), tip at (+18,-11))
+      { count: 6, stepX: 4, stepY: 2, shiftX: -8, shiftY: -6 },  // SE half (i=5 at junction (+2,-3), tip at (-18,-13))
+    ],
+  },
+  rock_wall_corner: {
+    path: "kenney_nature-kit/Isometric/cliff_block_rock_NE.png",
+    width: 56, height: 56, offsetY: -2,
+    rows: [
+      { count: 5, stepX: 4, stepY: -2, shiftX: 10, shiftY: -5 },
+      { count: 6, stepX: 4, stepY: 2, shiftX: -8, shiftY: -6 },
+    ],
   },
   // ---- Tower defense kit (more kenney/kenney_tower-defense-kit) ----
   // All preview PNGs are 64x64 squares. The "build-f" variants are fully
