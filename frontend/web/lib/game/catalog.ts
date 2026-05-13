@@ -104,16 +104,10 @@ export const CATALOG: CatalogItem[] = [
   //      placing to flip either one between the two directions.) ----
   { id: "stone_wall_block",    name: "Stone Wall ↗",      category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#9a9a9a" },
   { id: "stone_wall_block_se", name: "Stone Wall ↘",      category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#9a9a9a" },
-  { id: "stone_corner_s",      name: "Stone Corner S",    category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#9a9a9a" },
-  { id: "stone_corner_w",      name: "Stone Corner W",    category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#9a9a9a" },
-  { id: "stone_corner_n",      name: "Stone Corner N",    category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#9a9a9a" },
-  { id: "stone_corner_e",      name: "Stone Corner E",    category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#9a9a9a" },
+  { id: "stone_corner",        name: "Stone Corner",      category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#9a9a9a" },
   { id: "rock_wall_block",     name: "Rock Wall ↗",       category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#a87050" },
   { id: "rock_wall_block_se",  name: "Rock Wall ↘",       category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#a87050" },
-  { id: "rock_corner_s",       name: "Rock Corner S",     category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#a87050" },
-  { id: "rock_corner_w",       name: "Rock Corner W",     category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#a87050" },
-  { id: "rock_corner_n",       name: "Rock Corner N",     category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#a87050" },
-  { id: "rock_corner_e",       name: "Rock Corner E",     category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#a87050" },
+  { id: "rock_corner",         name: "Rock Corner",       category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#a87050" },
 ];
 
 export function getCatalogItem(id: string): CatalogItem | undefined {

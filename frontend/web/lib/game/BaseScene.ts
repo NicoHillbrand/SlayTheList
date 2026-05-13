@@ -214,6 +214,9 @@ export class BaseScene extends Phaser.Scene {
     this.input.keyboard?.on("keydown-R", () => {
       if (this.placingItem) {
         this.placingRotation = (this.placingRotation + 1) % 4;
+        // Pre-rotated assets (rowsByRotation) can have different cube counts
+        // per rotation, so the ghost sprite pool needs to be rebuilt.
+        this.rebuildPlacementGhosts();
         this.updateGhost();
       } else if (this.selectedBuilding) {
         this.rotateSelected();
@@ -454,9 +457,13 @@ export class BaseScene extends Phaser.Scene {
     rotation: number = 0,
   ): Phaser.GameObjects.Image[] {
     const asset = SPRITE_ASSETS[itemId];
+    const rows = getAssetRows(asset, rotation);
+    // Pre-rotated configs in `rowsByRotation` ARE the rotated version, so
+    // skip the iso-rotation transform inside createRowSprites.
+    const effectiveRotation = asset.rowsByRotation ? 0 : rotation;
     const out: Phaser.GameObjects.Image[] = [];
-    for (const row of getAssetRows(asset)) {
-      out.push(...this.createRowSprites(asset, itemId, row, x, y, baseDepth, rotation));
+    for (const row of rows) {
+      out.push(...this.createRowSprites(asset, itemId, row, x, y, baseDepth, effectiveRotation));
     }
     return out;
   }
@@ -772,13 +779,23 @@ export class BaseScene extends Phaser.Scene {
     this.placementGhost.setDepth(9999);
     this.placementGhost.setVisible(false);
 
-    if (hasSprite(itemId)) {
-      const ghosts = this.createItemSprites(itemId, 0, 0, 9999);
-      for (const g of ghosts) {
-        g.setAlpha(0.7);
-        g.setVisible(false);
-      }
-      this.placementGhostSprites = ghosts;
+    this.rebuildPlacementGhosts();
+  }
+
+  /** Tear down any existing ghost sprites and create a fresh pool sized
+   *  for the current item + rotation. Needed because pre-rotated assets
+   *  (corners) have different cube counts per rotation. */
+  private rebuildPlacementGhosts() {
+    for (const g of this.placementGhostSprites) g.destroy();
+    this.placementGhostSprites = [];
+    if (!this.placingItem) return;
+    if (!hasSprite(this.placingItem.id)) return;
+    this.placementGhostSprites = this.createItemSprites(
+      this.placingItem.id, 0, 0, 9999, this.placingRotation,
+    );
+    for (const g of this.placementGhostSprites) {
+      g.setAlpha(0.7);
+      g.setVisible(false);
     }
   }
 
@@ -827,17 +844,21 @@ export class BaseScene extends Phaser.Scene {
 
     if (this.placementGhostSprites.length > 0) {
       const asset = SPRITE_ASSETS[this.placingItem.id];
-      const rows = getAssetRows(asset);
+      const rows = getAssetRows(asset, this.placingRotation);
+      // Pre-rotated configs already encode the rotation; don't apply iso rotation again.
+      const effectiveRotation = asset.rowsByRotation ? 0 : this.placingRotation;
       // Per-cube flipX only applies to plain (non-tile, non-row) sprites — for
       // walls/corners the row direction already encodes rotation.
-      const flip = !asset.tile && !asset.rows && (this.placingRotation === 1 || this.placingRotation === 2);
+      const flip = !asset.tile && !asset.rows && !asset.rowsByRotation && (this.placingRotation === 1 || this.placingRotation === 2);
       const tint = canPlace ? 0xffffff : 0xff8888;
       let spriteIdx = 0;
-      const rotShift = asset.rotationShifts?.[(((this.placingRotation % 4) + 4) % 4)] ?? { x: 0, y: 0 };
-      const off = rotateIso(0, asset.offsetY, this.placingRotation);
+      const rotShift = (asset.rowsByRotation
+        ? { x: 0, y: 0 }
+        : (asset.rotationShifts?.[(((effectiveRotation % 4) + 4) % 4)] ?? { x: 0, y: 0 }));
+      const off = rotateIso(0, asset.offsetY, effectiveRotation);
       for (const row of rows) {
-        const step = rotateIso(row.stepX, row.stepY, this.placingRotation);
-        const shift = rotateIso(row.shiftX ?? 0, row.shiftY ?? 0, this.placingRotation);
+        const step = rotateIso(row.stepX, row.stepY, effectiveRotation);
+        const shift = rotateIso(row.shiftX ?? 0, row.shiftY ?? 0, effectiveRotation);
         const startX = x - ((row.count - 1) / 2) * step.x + shift.x + off.x + rotShift.x;
         const startY = y - ((row.count - 1) / 2) * step.y + shift.y + off.y + rotShift.y;
         for (let i = 0; i < row.count; i++) {
