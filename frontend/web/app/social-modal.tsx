@@ -143,6 +143,9 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
       setFriends(friendsResponse.items);
       setIncomingRequests(requestsResponse.incoming);
       setOutgoingRequests(requestsResponse.outgoing);
+      if (friendsResponse.items.length > 0) {
+        setSelectedUsername((current) => current ?? friendsResponse.items[0].username);
+      }
       return;
     }
 

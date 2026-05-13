@@ -33,6 +33,12 @@ export interface SpriteAsset {
    *  for corner pieces that combine half-walls in two iso directions.
    *  If both `tile` and `rows` are set, only `rows` is used. */
   rows?: TileRow[];
+  /** Extra screen-pixel offsets applied per rotation (rot 0..3). Iso rotation
+   *  rotates the shape around tile center, which is geometrically correct
+   *  but doesn't always land the rotated shape at a natural-looking spot.
+   *  These per-rotation nudges let corners sit at their respective diamond
+   *  corner cardinals without changing the base config. */
+  rotationShifts?: Array<{ x: number; y: number }>;
 }
 
 /** Return all the cube-rows for an asset (1 row for simple walls, N for corners). */
@@ -64,11 +70,11 @@ export const SPRITE_ASSETS: Record<string, SpriteAsset> = {
   },
   pine_tree: {
     path: "kenney_nature-kit/Isometric/tree_pineDefaultA_NE.png",
-    width: 250, height: 250, offsetY: -36,
+    width: 250, height: 250, offsetY: -30,
   },
   sapling: {
     path: "kenney_nature-kit/Isometric/tree_simple_NE.png",
-    width: 210, height: 210, offsetY: -16,
+    width: 210, height: 210, offsetY: -20,
   },
   maple_tree: {
     path: "kenney_nature-kit/Isometric/tree_oak_NE.png",
@@ -80,19 +86,19 @@ export const SPRITE_ASSETS: Record<string, SpriteAsset> = {
   },
   cone_tree: {
     path: "kenney_nature-kit/Isometric/tree_cone_NE.png",
-    width: 230, height: 250, offsetY: -36,
+    width: 230, height: 250, offsetY: -30,
   },
   detailed_tree: {
     path: "kenney_nature-kit/Isometric/tree_detailed_NE.png",
-    width: 250, height: 250, offsetY: -34,
+    width: 250, height: 250, offsetY: -28,
   },
   fat_tree: {
     path: "kenney_nature-kit/Isometric/tree_fat_NE.png",
-    width: 260, height: 250, offsetY: -32,
+    width: 260, height: 250, offsetY: -26,
   },
   palm_tree: {
     path: "kenney_nature-kit/Isometric/tree_palm_NE.png",
-    width: 240, height: 250, offsetY: -34,
+    width: 240, height: 250, offsetY: -28,
   },
   bent_palm: {
     path: "kenney_nature-kit/Isometric/tree_palmBend_NE.png",
@@ -193,24 +199,86 @@ export const SPRITE_ASSETS: Record<string, SpriteAsset> = {
   // ↗ wall's back-cube would land) + SE half-wall (4 cubes ending where
   // the ↘ wall's front-cube would land). The two halves meet at the
   // top-back of the tile and visually overlap thanks to the cube tops.
-  // Bottom (S-corner) of the diamond: both arms terminate at the same
-  // junction cube around (+2, -3) which becomes the corner's lowest
-  // visible block. Arms fan up-right (5 cubes) and up-left (5 cubes) from
-  // there, ending at symmetric tip y=-11.
-  stone_wall_corner: {
+  // Four hand-tuned corner sprites per material, one per diamond corner.
+  // Each is a 90° iso rotation of the S-corner shape — same cube count,
+  // recomputed step/shift to land at the rotated positions. Each has its
+  // own junction and arm directions:
+  //   S-corner: junction (+2, -3), arms run NE and (SE-with-back-up-left).
+  //   W-corner: junction (+6, +1).
+  //   N-corner: junction (-2, +3).
+  //   E-corner: junction (-6, -1).
+  stone_corner_s: {
     path: "kenney_nature-kit/Isometric/cliff_block_stone_NE.png",
     width: 56, height: 56, offsetY: -2,
     rows: [
-      { count: 5, stepX: 4, stepY: -2, shiftX: 10, shiftY: -5 }, // NE half (i=0 at junction (+2,-3), tip at (+18,-11))
-      { count: 6, stepX: 4, stepY: 2, shiftX: -8, shiftY: -6 },  // SE half (i=5 at junction (+2,-3), tip at (-18,-13))
+      { count: 5, stepX: 4,  stepY: -2, shiftX: 10, shiftY: -5 },
+      { count: 6, stepX: 4,  stepY: 2,  shiftX: -8, shiftY: -6 },
     ],
   },
-  rock_wall_corner: {
+  stone_corner_w: {
+    path: "kenney_nature-kit/Isometric/cliff_block_stone_NE.png",
+    width: 56, height: 56, offsetY: -2,
+    // West (left of diamond) corner: NE wall back half (i=3..i=7) plus
+    // SE wall front half (i=5..i=7). Junction at the wall-crossing point
+    // (+2, -3) so each arm sits exactly on top of the cubes of a normal
+    // NE/SE wall placed in the same tile. Cubes on the right side.
+    rows: [
+      { count: 5, stepX: 4, stepY: -2, shiftX: 10, shiftY: -5 }, // NE wall i=3..i=7
+      { count: 3, stepX: 4, stepY: 2,  shiftX: 6,  shiftY: 1  }, // SE wall i=5..i=7
+    ],
+  },
+  stone_corner_n: {
+    path: "kenney_nature-kit/Isometric/cliff_block_stone_NE.png",
+    width: 56, height: 56, offsetY: -2,
+    // North corner: NE wall front half (i=0..i=3) + SE wall front half
+    // (i=5..i=7). Both arms terminate at the wall-crossing (+2, -3) and
+    // extend down-left / down-right — the V-shape opening downward.
+    rows: [
+      { count: 4, stepX: 4, stepY: -2, shiftX: -4, shiftY: 2 }, // NE wall i=0..i=3
+      { count: 3, stepX: 4, stepY: 2,  shiftX: 6,  shiftY: 1 }, // SE wall i=5..i=7
+    ],
+  },
+  stone_corner_e: {
+    path: "kenney_nature-kit/Isometric/cliff_block_stone_NE.png",
+    width: 56, height: 56, offsetY: -2,
+    // East corner: NE wall front half (i=0..i=3) + SE wall back half
+    // (i=0..i=5). Junction at the wall-crossing (+2, -3); cubes on the
+    // LEFT side of tile. Mirror of W corner.
+    rows: [
+      { count: 4, stepX: 4, stepY: -2, shiftX: -4, shiftY: 2  }, // NE wall i=0..i=3
+      { count: 6, stepX: 4, stepY: 2,  shiftX: -8, shiftY: -6 }, // SE wall i=0..i=5
+    ],
+  },
+  rock_corner_s: {
+    path: "kenney_nature-kit/Isometric/cliff_block_rock_NE.png",
+    width: 56, height: 56, offsetY: -2,
+    rows: [
+      { count: 5, stepX: 4,  stepY: -2, shiftX: 10, shiftY: -5 },
+      { count: 6, stepX: 4,  stepY: 2,  shiftX: -8, shiftY: -6 },
+    ],
+  },
+  rock_corner_w: {
     path: "kenney_nature-kit/Isometric/cliff_block_rock_NE.png",
     width: 56, height: 56, offsetY: -2,
     rows: [
       { count: 5, stepX: 4, stepY: -2, shiftX: 10, shiftY: -5 },
-      { count: 6, stepX: 4, stepY: 2, shiftX: -8, shiftY: -6 },
+      { count: 3, stepX: 4, stepY: 2,  shiftX: 6,  shiftY: 1  },
+    ],
+  },
+  rock_corner_n: {
+    path: "kenney_nature-kit/Isometric/cliff_block_rock_NE.png",
+    width: 56, height: 56, offsetY: -2,
+    rows: [
+      { count: 4, stepX: 4, stepY: -2, shiftX: -4, shiftY: 2 },
+      { count: 3, stepX: 4, stepY: 2,  shiftX: 6,  shiftY: 1 },
+    ],
+  },
+  rock_corner_e: {
+    path: "kenney_nature-kit/Isometric/cliff_block_rock_NE.png",
+    width: 56, height: 56, offsetY: -2,
+    rows: [
+      { count: 4, stepX: 4, stepY: -2, shiftX: -4, shiftY: 2  },
+      { count: 6, stepX: 4, stepY: 2,  shiftX: -8, shiftY: -6 },
     ],
   },
   // ---- Tower defense kit (more kenney/kenney_tower-defense-kit) ----

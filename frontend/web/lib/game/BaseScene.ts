@@ -476,14 +476,20 @@ export class BaseScene extends Phaser.Scene {
   ): Phaser.GameObjects.Image[] {
     const step = rotateIso(row.stepX, row.stepY, rotation);
     const shift = rotateIso(row.shiftX ?? 0, row.shiftY ?? 0, rotation);
-    const startX = x - ((row.count - 1) / 2) * step.x + shift.x;
-    const startY = y - ((row.count - 1) / 2) * step.y + shift.y;
+    // offsetY is a screen-pixel vertical shift; treat it as a vector
+    // (0, offsetY) and rotate too so the cube positions rotate cleanly
+    // around tile center. Without this, rotated walls and rotated corners
+    // land off-by-(±4, ±2) from where they should mathematically.
+    const off = rotateIso(0, asset.offsetY, rotation);
+    const rotShift = asset.rotationShifts?.[(((rotation % 4) + 4) % 4)] ?? { x: 0, y: 0 };
+    const startX = x - ((row.count - 1) / 2) * step.x + shift.x + off.x + rotShift.x;
+    const startY = y - ((row.count - 1) / 2) * step.y + shift.y + off.y + rotShift.y;
     const out: Phaser.GameObjects.Image[] = [];
     for (let i = 0; i < row.count; i++) {
       const yPos = startY + i * step.y;
       const img = this.add.image(
         startX + i * step.x,
-        yPos + asset.offsetY,
+        yPos,
         spriteKey(itemId),
       );
       img.setDisplaySize(asset.width, asset.height);
@@ -827,17 +833,19 @@ export class BaseScene extends Phaser.Scene {
       const flip = !asset.tile && !asset.rows && (this.placingRotation === 1 || this.placingRotation === 2);
       const tint = canPlace ? 0xffffff : 0xff8888;
       let spriteIdx = 0;
+      const rotShift = asset.rotationShifts?.[(((this.placingRotation % 4) + 4) % 4)] ?? { x: 0, y: 0 };
+      const off = rotateIso(0, asset.offsetY, this.placingRotation);
       for (const row of rows) {
         const step = rotateIso(row.stepX, row.stepY, this.placingRotation);
         const shift = rotateIso(row.shiftX ?? 0, row.shiftY ?? 0, this.placingRotation);
-        const startX = x - ((row.count - 1) / 2) * step.x + shift.x;
-        const startY = y - ((row.count - 1) / 2) * step.y + shift.y;
+        const startX = x - ((row.count - 1) / 2) * step.x + shift.x + off.x + rotShift.x;
+        const startY = y - ((row.count - 1) / 2) * step.y + shift.y + off.y + rotShift.y;
         for (let i = 0; i < row.count; i++) {
           const sprite = this.placementGhostSprites[spriteIdx++];
           if (!sprite) break;
           sprite.setPosition(
             startX + i * step.x,
-            startY + i * step.y + asset.offsetY,
+            startY + i * step.y,
           );
           sprite.setVisible(true);
           sprite.setTint(tint);

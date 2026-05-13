@@ -4,7 +4,7 @@ import type { BaseCurrencyType } from "@slaythelist/contracts";
 
 /** Temporary: while we're seeding the shop with new Kenney assets, treat
  *  every item as free. Flip back to `false` to restore the original prices. */
-export const FREE_MODE = true;
+export const FREE_MODE = false;
 
 /** Use this everywhere instead of `item.cost` so FREE_MODE flips a single switch. */
 export function effectiveCost(item: CatalogItem): number {
@@ -102,12 +102,18 @@ export const CATALOG: CatalogItem[] = [
   // ---- Wall cubes (overlap-style — adjacent placements visually tile.
   //      _se variants run the perpendicular iso diagonal; press R while
   //      placing to flip either one between the two directions.) ----
-  { id: "stone_wall_block",    name: "Stone Wall ↗",     category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#9a9a9a" },
-  { id: "stone_wall_block_se", name: "Stone Wall ↘",     category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#9a9a9a" },
-  { id: "stone_wall_corner",   name: "Stone Wall Corner",category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#9a9a9a" },
-  { id: "rock_wall_block",     name: "Rock Wall ↗",      category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#a87050" },
-  { id: "rock_wall_block_se",  name: "Rock Wall ↘",      category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#a87050" },
-  { id: "rock_wall_corner",    name: "Rock Wall Corner", category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#a87050" },
+  { id: "stone_wall_block",    name: "Stone Wall ↗",      category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#9a9a9a" },
+  { id: "stone_wall_block_se", name: "Stone Wall ↘",      category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#9a9a9a" },
+  { id: "stone_corner_s",      name: "Stone Corner S",    category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#9a9a9a" },
+  { id: "stone_corner_w",      name: "Stone Corner W",    category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#9a9a9a" },
+  { id: "stone_corner_n",      name: "Stone Corner N",    category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#9a9a9a" },
+  { id: "stone_corner_e",      name: "Stone Corner E",    category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#9a9a9a" },
+  { id: "rock_wall_block",     name: "Rock Wall ↗",       category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#a87050" },
+  { id: "rock_wall_block_se",  name: "Rock Wall ↘",       category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#a87050" },
+  { id: "rock_corner_s",       name: "Rock Corner S",     category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#a87050" },
+  { id: "rock_corner_w",       name: "Rock Corner W",     category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#a87050" },
+  { id: "rock_corner_n",       name: "Rock Corner N",     category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#a87050" },
+  { id: "rock_corner_e",       name: "Rock Corner E",     category: "building", cost: 2, currency: "gold", footprint: [1, 1], color: "#a87050" },
 ];
 
 export function getCatalogItem(id: string): CatalogItem | undefined {
