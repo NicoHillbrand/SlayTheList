@@ -1001,6 +1001,7 @@ export default function Page() {
   const activeFlyingCoinNodesRef = useRef<HTMLSpanElement[]>([]);
   const accountabilityLoadedRef = useRef(false);
   const accountabilitySaveTimerRef = useRef<number | null>(null);
+  const suppressNextAccountabilitySaveRef = useRef(false);
   const [focusTodoId, setFocusTodoId] = useState<string | null>(null);
   const [gameStates, setGameStates] = useState<GameState[]>([]);
   const [newGameStateName, setNewGameStateName] = useState("");
@@ -1416,6 +1417,7 @@ export default function Page() {
   useEffect(() => {
     void runAction(async () => {
       const state = await getAccountabilityState();
+      suppressNextAccountabilitySaveRef.current = true;
       setHabits(state.habits.map((habit) => ({ ...habit, status: habit.status ?? "active" })));
       setPredictions(state.predictions);
       setReflections(state.reflections);
@@ -1426,6 +1428,10 @@ export default function Page() {
 
   useEffect(() => {
     if (!accountabilityLoadedRef.current) return;
+    if (suppressNextAccountabilitySaveRef.current) {
+      suppressNextAccountabilitySaveRef.current = false;
+      return;
+    }
     if (accountabilitySaveTimerRef.current !== null) {
       window.clearTimeout(accountabilitySaveTimerRef.current);
     }
@@ -1440,6 +1446,30 @@ export default function Page() {
       }
     };
   }, [habits, predictions, reflections, walkthroughs]);
+
+  useEffect(() => {
+    const reload = () => {
+      if (!accountabilityLoadedRef.current) return;
+      void runAction(async () => {
+        const state = await getAccountabilityState();
+        suppressNextAccountabilitySaveRef.current = true;
+        setHabits(state.habits.map((habit) => ({ ...habit, status: habit.status ?? "active" })));
+        setPredictions(state.predictions);
+        setReflections(state.reflections);
+        setWalkthroughs(state.walkthroughs ?? []);
+      });
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") reload();
+    };
+    const onFocus = () => reload();
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, []);
 
   useEffect(() => {
     if (!selectedGameStateId) return;

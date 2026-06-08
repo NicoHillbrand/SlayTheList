@@ -193,14 +193,33 @@ server.tool(
 
 server.tool(
   "set_habits",
-  "Replace the full habits array. Read the current state with list_habits first, modify the array, then call this to save.",
+  "Replace the full habits array. Read the current state with list_habits first, modify the array, then call this to save. When a new completed check is added (a {date, done: true} entry that wasn't there before), the gold coin sound fires in the overlay UI so the user gets feedback, matching what clicking the habit in the app does.",
   {
     habits: z.array(habitSchema).describe("The complete replacement habits array."),
   },
   async ({ habits }) => {
     const state = getAccountabilityState();
+    const prevDoneDates = new Map<string, Set<string>>();
+    for (const h of state.habits) {
+      prevDoneDates.set(h.id, new Set(h.checks.filter((c) => c.done).map((c) => c.date)));
+    }
+    let newlyCompleted = 0;
+    for (const h of habits) {
+      const prior = prevDoneDates.get(h.id) ?? new Set<string>();
+      for (const c of h.checks) {
+        if (c.done && !prior.has(c.date)) newlyCompleted += 1;
+      }
+    }
     saveAccountabilityState({ ...state, habits });
-    return { content: [{ type: "text" as const, text: JSON.stringify({ saved: true, count: habits.length }) }] };
+    if (newlyCompleted > 0) await fireSoundEvent("gold");
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify({ saved: true, count: habits.length, newlyCompleted }),
+        },
+      ],
+    };
   },
 );
 
