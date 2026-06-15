@@ -15,5 +15,9 @@ REM ============================================================================
 set "ROOT=%~dp0"
 cd /d "%ROOT%"
 
-start "" powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%ROOT%scripts\setup-wizard.ps1" -Mode Update -Root "%ROOT%"
+REM Strip the trailing backslash: passing "...\path\" makes the closing \" an
+REM escaped quote, which mangles the -Root argument (same fix as launcher.vbs).
+set "ROOTNB=%ROOT:~0,-1%"
+
+start "" powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%ROOT%scripts\setup-wizard.ps1" -Mode Update -Root "%ROOTNB%"
 exit /b 0

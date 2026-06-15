@@ -19,6 +19,10 @@ param(
 )
 
 if (-not $Root) { $Root = (Split-Path -Parent $PSScriptRoot) }
+# Defend against a stray quote/backslash if a caller passed "...\path\" (the
+# trailing \" gets escaped into the argument). Fall back to the script's repo.
+$Root = $Root.Trim().Trim('"').TrimEnd('\')
+if (-not (Test-Path -LiteralPath $Root)) { $Root = (Split-Path -Parent $PSScriptRoot) }
 $Root = (Resolve-Path -LiteralPath $Root).Path.TrimEnd('\')
 
 Add-Type -AssemblyName PresentationFramework
@@ -191,13 +195,21 @@ $worker = {
   }
 
   # Reuse start.bat's own kill logic to stop a running instance before we rebuild,
-  # so npm install can't fail on locked native modules (better-sqlite3 / sharp).
+  # so npm install can't fail on locked native modules (better-sqlite3 / sharp)
+  # and the overlay .exe isn't locked while dotnet republishes it.
   function Stop-RunningApp {
+    $startBat = Join-Path $Root "start.bat"
     Log "> start.bat stop"
     try {
-      Start-Process -FilePath (Join-Path $Root "start.bat") -ArgumentList "stop" `
-        -WorkingDirectory $Root -WindowStyle Hidden -Wait
-    } catch {}
+      if (Test-Path -LiteralPath $startBat) {
+        Start-Process -FilePath $startBat -ArgumentList "stop" -WorkingDirectory $Root -WindowStyle Hidden -Wait
+      } else {
+        Log "[--] start.bat not found at $startBat"
+      }
+    } catch { Log ("[--] stop failed: " + $_.Exception.Message) }
+    # Belt-and-suspenders: make sure the overlay exe is released before we rebuild it.
+    try { Get-Process -Name "SlayTheList.OverlayAgent" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue } catch {}
+    Start-Sleep -Milliseconds 600
   }
 
   function Refresh-Path {
