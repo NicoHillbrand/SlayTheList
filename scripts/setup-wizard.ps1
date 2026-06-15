@@ -162,6 +162,8 @@ foreach ($s in $sync.Steps) {
 # --- The worker: does all the real work, mutating $sync ----------------------
 $worker = {
   Set-Location -LiteralPath $Root
+  # Native/cmd children inherit this, not $PWD - set both so npm/git/dotnet run in the repo.
+  [System.Environment]::CurrentDirectory = $Root
 
   function Log([string]$m) { [void]$sync.LogLines.Add($m) }
   function Step([string]$key) { foreach ($s in $sync.Steps) { if ($s.Key -eq $key) { return $s } } }
@@ -172,15 +174,30 @@ $worker = {
   function Fail([string]$key, [string]$d)            { $s = Step $key; $s.Detail = $d; $s.Status = "Fail" }
 
   # Run an external command, streaming each output line into the log. Returns exit code.
-  function Run([string]$file, [string[]]$cmdArgs) {
-    Log ("> " + $file + " " + ($cmdArgs -join " "))
+  # Run a build/install command through cmd.exe and stream each output line into
+  # the log. We go through cmd (not PowerShell's & operator) because `npm` on
+  # Windows is a PowerShell shim (npm.ps1) that mangles splatted args. Pass a
+  # single command string; keep args space-free and rely on the working dir
+  # (set above) instead of absolute paths.
+  function Run([string]$cmdline) {
+    Log ("> " + $cmdline)
     try {
-      & $file @cmdArgs 2>&1 | ForEach-Object { Log ([string]$_) }
+      & cmd.exe /c $cmdline 2>&1 | ForEach-Object { Log ([string]$_) }
       return $LASTEXITCODE
     } catch {
       Log ("ERROR: " + $_.Exception.Message)
       return 1
     }
+  }
+
+  # Reuse start.bat's own kill logic to stop a running instance before we rebuild,
+  # so npm install can't fail on locked native modules (better-sqlite3 / sharp).
+  function Stop-RunningApp {
+    Log "> start.bat stop"
+    try {
+      Start-Process -FilePath (Join-Path $Root "start.bat") -ArgumentList "stop" `
+        -WorkingDirectory $Root -WindowStyle Hidden -Wait
+    } catch {}
   }
 
   function Refresh-Path {
@@ -215,7 +232,7 @@ $worker = {
       # ---- 2. Pull latest (fast-forward only) ------------------------------
       Begin "pull"
       $sync.Status = "Downloading the latest version..."
-      $pullCode = Run "git" @("-C", $Root, "pull", "--ff-only")
+      $pullCode = Run "git pull --ff-only"
       $new = (& git -C $Root rev-parse HEAD 2>$null)
       if ($new) { $new = $new.Trim() }
 
@@ -239,6 +256,11 @@ $worker = {
         Log ("[OK] Updated " + $old.Substring(0, [Math]::Min(7, $old.Length)) + " -> " + $new.Substring(0, [Math]::Min(7, $new.Length)))
         $changed = @(& git -C $Root diff --name-only $old $new 2>$null)
 
+        # Stop any running instance before rebuilding so locked native modules
+        # can't break npm install. start.bat browser relaunches at the end.
+        $sync.Status = "Stopping the running app before updating..."
+        Stop-RunningApp
+
         # ---- 3. Dependencies (only if package manifests changed) ----------
         $depsChanged = $false
         foreach ($f in $changed) {
@@ -247,7 +269,7 @@ $worker = {
         if ($depsChanged) {
           Begin "deps"
           $sync.Status = "Updating dependencies (this can take a minute)..."
-          $code = Run "npm" @("install")
+          $code = Run "npm install"
           if ($code -ne 0) {
             Fail "deps" "failed"
             $sync.Status = "Dependency install failed. Show this window to Nico."
@@ -261,7 +283,7 @@ $worker = {
         # ---- 4. Build shared types (always, after an update) --------------
         Begin "contracts"
         $sync.Status = "Building shared types..."
-        $code = Run "npm" @("run", "build:contracts")
+        $code = Run "npm run build:contracts"
         if ($code -ne 0) {
           Fail "contracts" "failed"
           $sync.Status = "Shared types failed to build. Show this window to Nico."
@@ -275,7 +297,7 @@ $worker = {
         if ($overlayChanged -and (Has "dotnet")) {
           Begin "overlay"
           $sync.Status = "Rebuilding the overlay agent..."
-          $code = Run "dotnet" @("publish", (Join-Path $Root "desktop\overlay-agent\SlayTheList.OverlayAgent"), "-c", "Release")
+          $code = Run "dotnet publish desktop\overlay-agent\SlayTheList.OverlayAgent -c Release"
           if ($code -ne 0) { Warn "overlay" "build failed"; Log "[!!] Overlay rebuild failed - the web app still works." }
           else { Ok "overlay" "rebuilt" }
         } elseif ($overlayChanged) {
@@ -316,7 +338,7 @@ $worker = {
     }
     if (-not $nodeOk) {
       $sync.Status = "Installing Node.js via winget..."
-      $code = Run "winget" @("install", "OpenJS.NodeJS.LTS", "--accept-source-agreements", "--accept-package-agreements")
+      $code = Run "winget install OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements"
       Refresh-Path
       if (-not (Has "node")) {
         Fail "node" "install failed"
@@ -334,16 +356,19 @@ $worker = {
       Ok "dotnet" "found"
     } else {
       $sync.Status = "Installing .NET 8 SDK via winget..."
-      $code = Run "winget" @("install", "Microsoft.DotNet.SDK.8", "--accept-source-agreements", "--accept-package-agreements")
+      $code = Run "winget install Microsoft.DotNet.SDK.8 --accept-source-agreements --accept-package-agreements"
       Refresh-Path
       if (Has "dotnet") { Ok "dotnet" "installed" }
       else { Warn "dotnet" "skipped"; Log "[--] .NET unavailable - the overlay won't build, but the web app will work." }
     }
 
     # ---- 3. npm install --------------------------------------------------
+    # Stop a running instance first (in case this is a re-install) so locked
+    # native modules can't break npm install.
+    Stop-RunningApp
     Begin "deps"
     $sync.Status = "Installing dependencies (this can take a few minutes)..."
-    $code = Run "npm" @("install")
+    $code = Run "npm install"
     if ($code -ne 0) {
       Fail "deps" "failed"
       $sync.Status = "Dependency install failed. Show this window to Nico."
@@ -354,7 +379,7 @@ $worker = {
     # ---- 4. Build shared contracts ---------------------------------------
     Begin "contracts"
     $sync.Status = "Building shared types..."
-    $code = Run "npm" @("run", "build:contracts")
+    $code = Run "npm run build:contracts"
     if ($code -ne 0) {
       Fail "contracts" "failed"
       $sync.Status = "Shared types failed to build. Show this window to Nico."
@@ -381,7 +406,7 @@ $worker = {
     Begin "overlay"
     if (Has "dotnet") {
       $sync.Status = "Building the overlay agent..."
-      $code = Run "dotnet" @("publish", (Join-Path $Root "desktop\overlay-agent\SlayTheList.OverlayAgent"), "-c", "Release")
+      $code = Run "dotnet publish desktop\overlay-agent\SlayTheList.OverlayAgent -c Release"
       if ($code -ne 0) { Warn "overlay" "build failed"; Log "[!!] Overlay build failed - the web app still works without it." }
       else { Ok "overlay" "built" }
     } else {
