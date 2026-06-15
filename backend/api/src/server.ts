@@ -2,6 +2,10 @@ import cors from "cors";
 import express from "express";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
+import { execFile, spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import {
   accountabilityStateSchema,
@@ -1295,6 +1299,87 @@ app.put("/api/settings/:key", (req, res) => {
   setSetting(req.params.key, value);
   broadcastOverlayState();
   ok(res, { updated: true });
+});
+
+// ---------------------------------------------------------------------------
+// Self-update (drives the same GUI wizard as update.bat)
+// ---------------------------------------------------------------------------
+
+function findRepoRoot(): string | null {
+  let dir = path.dirname(fileURLToPath(import.meta.url)); // backend/api/src
+  for (let i = 0; i < 6; i += 1) {
+    if (existsSync(path.join(dir, ".git"))) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
+function runGit(
+  repo: string,
+  args: string[],
+  timeoutMs = 20_000,
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    execFile("git", args, { cwd: repo, timeout: timeoutMs, windowsHide: true }, (err, stdout, stderr) => {
+      const rawCode = (err as NodeJS.ErrnoException | null)?.code;
+      const code = typeof rawCode === "number" ? rawCode : err ? 1 : 0;
+      resolve({ code, stdout: stdout?.toString() ?? "", stderr: stderr?.toString() ?? "" });
+    });
+  });
+}
+
+app.get("/api/update/check", async (_req, res) => {
+  const repo = findRepoRoot();
+  if (!repo) {
+    return ok(res, { supported: false, available: false, reason: "This install isn't a git checkout." });
+  }
+  const head = (await runGit(repo, ["rev-parse", "HEAD"])).stdout.trim();
+  if (!head) {
+    return ok(res, { supported: false, available: false, reason: "git not available." });
+  }
+  const upstream = await runGit(repo, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]);
+  const branch = (await runGit(repo, ["rev-parse", "--abbrev-ref", "HEAD"])).stdout.trim();
+  if (upstream.code !== 0) {
+    return ok(res, { supported: true, available: false, currentCommit: head, branch, reason: "No upstream branch is configured." });
+  }
+  const up = upstream.stdout.trim();
+  const fetched = await runGit(repo, ["fetch", "--quiet"], 25_000);
+  const remoteCommit = (await runGit(repo, ["rev-parse", up])).stdout.trim();
+  const behind = Number.parseInt((await runGit(repo, ["rev-list", "--count", `HEAD..${up}`])).stdout.trim(), 10) || 0;
+  ok(res, {
+    supported: true,
+    available: behind > 0,
+    behind,
+    currentCommit: head,
+    remoteCommit,
+    branch,
+    fetchOk: fetched.code === 0,
+    reason: fetched.code === 0 ? undefined : "Couldn't reach the remote (offline?).",
+  });
+});
+
+app.post("/api/update/apply", (_req, res) => {
+  const repo = findRepoRoot();
+  if (!repo) return badRequest(res, "This install isn't a git checkout — can't self-update.");
+  if (process.platform !== "win32") return badRequest(res, "The update wizard is only available on Windows.");
+  const bat = path.join(repo, "update.bat");
+  if (!existsSync(bat)) return badRequest(res, "update.bat not found at the repo root.");
+  try {
+    // Launch detached via `start` so the wizard survives this API being killed
+    // when start.bat relaunches everything at the end of the update.
+    const child = spawn("cmd.exe", ["/c", "start", "", bat], {
+      cwd: repo,
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    child.unref();
+    ok(res, { started: true });
+  } catch (err) {
+    badRequest(res, err instanceof Error ? err.message : "Failed to launch the updater.");
+  }
 });
 
 // ---------------------------------------------------------------------------

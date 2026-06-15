@@ -56,6 +56,25 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
+export type UpdateCheckResult = {
+  supported: boolean;
+  available: boolean;
+  behind?: number;
+  currentCommit?: string;
+  remoteCommit?: string;
+  branch?: string;
+  fetchOk?: boolean;
+  reason?: string;
+};
+
+export async function checkForUpdates() {
+  return request<UpdateCheckResult>("/api/update/check");
+}
+
+export async function applyUpdate() {
+  return request<{ started: boolean }>("/api/update/apply", { method: "POST" });
+}
+
 export async function getCloudConnectionStatus() {
   return request<CloudConnectionStatus>("/api/cloud-social/status");
 }

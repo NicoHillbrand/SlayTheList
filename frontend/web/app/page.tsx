@@ -85,6 +85,9 @@ import {
   getVaultVersion,
   pullVaultData,
   pushVaultData,
+  checkForUpdates,
+  applyUpdate,
+  type UpdateCheckResult,
 } from "../lib/api";
 import { encryptVault, decryptVault } from "../lib/vault-crypto";
 import SocialModal from "./social-modal";
@@ -985,6 +988,9 @@ export default function Page() {
   const [vaultSyncError, setVaultSyncError] = useState<string | null>(null);
   const [vaultVersion, setVaultVersion] = useState(0);
   const [vaultPassphraseSet, setVaultPassphraseSet] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState<"idle" | "checking" | "result" | "updating" | "error">("idle");
+  const [updateInfo, setUpdateInfo] = useState<UpdateCheckResult | null>(null);
+  const [updateError, setUpdateError] = useState<string | null>(null);
   const [todoDurations, setTodoDurations] = useState<Record<string, number>>({});
   const [zoneImageOverrides, setZoneImageOverrides] = useState<Record<string, string>>({});
   const [blockedImages, setBlockedImages] = useState<string[]>([]);
@@ -1877,6 +1883,33 @@ export default function Page() {
       setVaultSyncStatus("error");
       const message = err instanceof Error ? err.message : "Vault pull failed";
       setVaultSyncError(message.includes("decrypt") ? "Wrong passphrase or corrupted data." : message);
+    }
+  }
+
+  async function handleCheckForUpdates() {
+    setUpdateStatus("checking");
+    setUpdateError(null);
+    setUpdateInfo(null);
+    try {
+      const result = await checkForUpdates();
+      setUpdateInfo(result);
+      setUpdateStatus("result");
+    } catch {
+      setUpdateError("Couldn't reach the local app server. Is SlayTheList running?");
+      setUpdateStatus("error");
+    }
+  }
+
+  async function handleApplyUpdate() {
+    setUpdateStatus("updating");
+    setUpdateError(null);
+    try {
+      await applyUpdate();
+      // The updater wizard now owns the process: it pulls, rebuilds, and relaunches
+      // the app (which restarts this server). Nothing more to do here.
+    } catch (err) {
+      setUpdateError(err instanceof Error ? err.message : "Failed to start the updater.");
+      setUpdateStatus("error");
     }
   }
 
@@ -6209,6 +6242,47 @@ export default function Page() {
                 <p className="settings-section-copy" style={{ marginLeft: "1.6rem" }}>
                   Two headings on the day view. Drag items between them to mark what is core for today versus nice-to-do. Adds a Day · Core view with only core items.
                 </p>
+              )}
+            </section>
+            <section className="settings-section">
+              <p className="settings-section-title">App updates</p>
+              <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  disabled={updateStatus === "checking" || updateStatus === "updating"}
+                  onClick={() => void handleCheckForUpdates()}
+                >
+                  {updateStatus === "checking" ? "Checking..." : "Check for updates"}
+                </button>
+                {updateStatus === "result" && updateInfo?.available && (
+                  <button
+                    type="button"
+                    style={{ background: "#7c3aed", color: "white" }}
+                    onClick={() => void handleApplyUpdate()}
+                  >
+                    Update &amp; restart
+                  </button>
+                )}
+              </div>
+              {updateStatus === "result" && updateInfo?.available && (
+                <p className="settings-hint">
+                  An update is available{typeof updateInfo.behind === "number" ? ` (${updateInfo.behind} change${updateInfo.behind === 1 ? "" : "s"} behind)` : ""}.
+                  Updating opens a wizard that downloads it, rebuilds, and relaunches the app.
+                </p>
+              )}
+              {updateStatus === "result" && !updateInfo?.available && updateInfo?.supported && updateInfo?.fetchOk !== false && (
+                <p className="settings-hint" style={{ color: "#4ade80" }}>You&apos;re on the latest version.</p>
+              )}
+              {updateStatus === "result" && updateInfo?.reason && (
+                <p className="settings-hint">{updateInfo.reason}</p>
+              )}
+              {updateStatus === "updating" && (
+                <p className="settings-hint" style={{ color: "#c084fc" }}>
+                  Updating&hellip; the update wizard has opened in a new window and will relaunch SlayTheList when it&apos;s done.
+                </p>
+              )}
+              {updateStatus === "error" && updateError && (
+                <p className="settings-hint" style={{ color: "#f87171" }}>{updateError}</p>
               )}
             </section>
             <section className="settings-section">

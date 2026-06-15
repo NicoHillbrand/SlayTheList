@@ -13,11 +13,11 @@ SlayTheList combines a todo app with a local API and a desktop launcher. The cur
 
 ## Quick start
 
-1. Install dependencies:
-   - Windows: `install.bat`
+1. Install dependencies (first time only):
+   - Windows: `install.bat` (console) or `install-wizard.bat` (GUI wizard)
    - macOS / Linux: `./install.sh`
 2. Launch:
-   - Windows: double-click `start.bat` (GUI mode selector) or `start.bat browser`
+   - Windows: double-click `update.bat` to auto-update and launch (recommended for testers — a GUI wizard pulls the latest version, rebuilds only what changed, then launches), or `start.bat` (GUI mode selector) / `start.bat browser` to launch without updating
    - macOS: double-click `start.command`
    - Linux: `./start.sh`
 3. Or run manually:
