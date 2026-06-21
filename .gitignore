@@ -34,7 +34,6 @@ desktop/app/dist*/
 # Asset packs we have on disk but aren't using yet — keep them locally,
 # don't track in git. Re-include specific files via "!" rules below as we
 # start using them. To re-track a whole pack: drop its line here.
-frontend/web/public/assets/more kenney/
 frontend/web/public/assets/Kyrise's 16x16 RPG Icon Pack - V1.3/
 frontend/web/public/assets/Kyrises_16x16_RPG_Icon_Pack_V1.3.zip
 frontend/web/public/assets/kenney_nature-kit.zip
@@ -64,6 +63,56 @@ frontend/web/public/assets/kenney_nature-kit/Isometric/*
 !frontend/web/public/assets/kenney_nature-kit/Isometric/mushroom_tanGroup_NE.png
 !frontend/web/public/assets/kenney_nature-kit/Isometric/stone_largeA_NE.png
 !frontend/web/public/assets/kenney_nature-kit/Isometric/grass_large_NE.png
+!frontend/web/public/assets/kenney_nature-kit/Isometric/tree_oak_NE.png
+!frontend/web/public/assets/kenney_nature-kit/Isometric/tree_blocks_NE.png
+!frontend/web/public/assets/kenney_nature-kit/Isometric/tree_cone_NE.png
+!frontend/web/public/assets/kenney_nature-kit/Isometric/tree_detailed_NE.png
+!frontend/web/public/assets/kenney_nature-kit/Isometric/tree_fat_NE.png
+!frontend/web/public/assets/kenney_nature-kit/Isometric/tree_palm_NE.png
+!frontend/web/public/assets/kenney_nature-kit/Isometric/tree_palmBend_NE.png
+!frontend/web/public/assets/kenney_nature-kit/Isometric/tree_palmTall_NE.png
+!frontend/web/public/assets/kenney_nature-kit/Isometric/tree_pineRoundA_NE.png
+!frontend/web/public/assets/kenney_nature-kit/Isometric/tree_pineSmallA_NE.png
+!frontend/web/public/assets/kenney_nature-kit/Isometric/tree_pineTallA_NE.png
+!frontend/web/public/assets/kenney_nature-kit/Isometric/tree_plateau_NE.png
+!frontend/web/public/assets/kenney_nature-kit/Isometric/tree_small_NE.png
+!frontend/web/public/assets/kenney_nature-kit/Isometric/tree_tall_NE.png
+!frontend/web/public/assets/kenney_nature-kit/Isometric/tree_thin_NE.png
+!frontend/web/public/assets/kenney_nature-kit/Isometric/tree_default_fall_NE.png
+!frontend/web/public/assets/kenney_nature-kit/Isometric/tree_oak_fall_NE.png
+!frontend/web/public/assets/kenney_nature-kit/Isometric/tree_default_dark_NE.png
+!frontend/web/public/assets/kenney_nature-kit/Isometric/cliff_block_stone_NE.png
+!frontend/web/public/assets/kenney_nature-kit/Isometric/cliff_block_rock_NE.png
+
+# "more kenney" pack: ignore the bulk, re-include only the Preview sprites
+# sprites.ts references. Re-including a file under an ignored tree requires
+# un-ignoring each parent directory first (git won't descend otherwise).
+frontend/web/public/assets/more kenney/*
+!frontend/web/public/assets/more kenney/kenney_tower-defense-kit/
+frontend/web/public/assets/more kenney/kenney_tower-defense-kit/*
+!frontend/web/public/assets/more kenney/kenney_tower-defense-kit/Previews/
+frontend/web/public/assets/more kenney/kenney_tower-defense-kit/Previews/*
+!frontend/web/public/assets/more kenney/kenney_tower-defense-kit/Previews/tower-square-build-f.png
+!frontend/web/public/assets/more kenney/kenney_tower-defense-kit/Previews/tower-round-build-f.png
+!frontend/web/public/assets/more kenney/kenney_tower-defense-kit/Previews/tower-square-build-c.png
+!frontend/web/public/assets/more kenney/kenney_tower-defense-kit/Previews/tower-round-build-c.png
+!frontend/web/public/assets/more kenney/kenney_modular-buildings/
+frontend/web/public/assets/more kenney/kenney_modular-buildings/*
+!frontend/web/public/assets/more kenney/kenney_modular-buildings/Previews/
+frontend/web/public/assets/more kenney/kenney_modular-buildings/Previews/*
+!frontend/web/public/assets/more kenney/kenney_modular-buildings/Previews/building-sample-house-a.png
+!frontend/web/public/assets/more kenney/kenney_modular-buildings/Previews/building-sample-house-b.png
+!frontend/web/public/assets/more kenney/kenney_modular-buildings/Previews/building-sample-house-c.png
+!frontend/web/public/assets/more kenney/kenney_modular-buildings/Previews/building-sample-tower-a.png
+!frontend/web/public/assets/more kenney/kenney_modular-buildings/Previews/building-sample-tower-b.png
+!frontend/web/public/assets/more kenney/kenney_modular-buildings/Previews/building-sample-tower-c.png
+!frontend/web/public/assets/more kenney/kenney_fantasy-town-kit_2.0/
+frontend/web/public/assets/more kenney/kenney_fantasy-town-kit_2.0/*
+!frontend/web/public/assets/more kenney/kenney_fantasy-town-kit_2.0/Previews/
+frontend/web/public/assets/more kenney/kenney_fantasy-town-kit_2.0/Previews/*
+!frontend/web/public/assets/more kenney/kenney_fantasy-town-kit_2.0/Previews/fountain-round.png
+!frontend/web/public/assets/more kenney/kenney_fantasy-town-kit_2.0/Previews/lantern.png
+!frontend/web/public/assets/more kenney/kenney_fantasy-town-kit_2.0/Previews/rock-large.png
 
 # Python bytecode caches (overlay-agent-linux)
 __pycache__/
