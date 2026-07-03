@@ -88,6 +88,9 @@ import {
   checkForUpdates,
   applyUpdate,
   type UpdateCheckResult,
+  getAutostart,
+  setAutostart,
+  type AutostartState,
 } from "../lib/api";
 import { encryptVault, decryptVault } from "../lib/vault-crypto";
 import SocialModal from "./social-modal";
@@ -991,6 +994,9 @@ export default function Page() {
   const [updateStatus, setUpdateStatus] = useState<"idle" | "checking" | "result" | "updating" | "error">("idle");
   const [updateInfo, setUpdateInfo] = useState<UpdateCheckResult | null>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);
+  const [autostart, setAutostartState] = useState<AutostartState | null>(null);
+  const [autostartBusy, setAutostartBusy] = useState(false);
+  const [autostartError, setAutostartError] = useState<string | null>(null);
   const [todoDurations, setTodoDurations] = useState<Record<string, number>>({});
   const [zoneImageOverrides, setZoneImageOverrides] = useState<Record<string, string>>({});
   const [blockedImages, setBlockedImages] = useState<string[]>([]);
@@ -1262,6 +1268,15 @@ export default function Page() {
     document.body.classList.toggle("desktop-app", isDesktopApp);
     return () => document.body.classList.remove("desktop-app");
   }, []);
+
+  // Load auto-start status when the settings modal opens (cheap, and reflects
+  // changes made via the standalone GUI launcher).
+  useEffect(() => {
+    if (showSettingsModal) {
+      setAutostartError(null);
+      void refreshAutostart();
+    }
+  }, [showSettingsModal]);
 
   useEffect(() => {
     let ws: WebSocket | null = null;
@@ -1910,6 +1925,29 @@ export default function Page() {
     } catch (err) {
       setUpdateError(err instanceof Error ? err.message : "Failed to start the updater.");
       setUpdateStatus("error");
+    }
+  }
+
+  async function refreshAutostart() {
+    try {
+      setAutostartState(await getAutostart());
+    } catch {
+      setAutostartState({ supported: false, enabled: false, reason: "Local app server unreachable." });
+    }
+  }
+
+  async function handleToggleAutostart(enabled: boolean) {
+    setAutostartBusy(true);
+    setAutostartError(null);
+    // Optimistic: reflect the intended state immediately.
+    setAutostartState((prev) => (prev ? { ...prev, enabled } : prev));
+    try {
+      setAutostartState(await setAutostart(enabled));
+    } catch (err) {
+      setAutostartError(err instanceof Error ? err.message : "Failed to change auto-start.");
+      await refreshAutostart();
+    } finally {
+      setAutostartBusy(false);
     }
   }
 
@@ -3698,13 +3736,6 @@ export default function Page() {
                 <button
                   type="button"
                   className="goals-subtab"
-                  onClick={() => setActiveTab("reflection")}
-                >
-                  Reflection
-                </button>
-                <button
-                  type="button"
-                  className="goals-subtab"
                   onClick={() => setActiveTab("blocks")}
                 >
                   Blocks
@@ -3905,9 +3936,6 @@ export default function Page() {
                 </button>
                 <button type="button" className="goals-subtab" onClick={() => setActiveTab("predictions")}>
                   Predictions
-                </button>
-                <button type="button" className="goals-subtab" onClick={() => setActiveTab("reflection")}>
-                  Reflection
                 </button>
                 <button type="button" className="goals-subtab" onClick={() => setActiveTab("blocks")}>
                   Blocks
@@ -4375,9 +4403,6 @@ export default function Page() {
                 <button type="button" className="goals-subtab" onClick={() => setActiveTab("habits")}>Habits</button>
                 <button type="button" className="goals-subtab active" onClick={() => setActiveTab("predictions")}>
                   Predictions
-                </button>
-                <button type="button" className="goals-subtab" onClick={() => setActiveTab("reflection")}>
-                  Reflection
                 </button>
                 <button type="button" className="goals-subtab" onClick={() => setActiveTab("blocks")}>
                   Blocks
@@ -4852,9 +4877,6 @@ export default function Page() {
                 <button type="button" className="goals-subtab" onClick={() => setActiveTab("predictions")}>
                   Predictions
                 </button>
-                <button type="button" className="goals-subtab active" onClick={() => setActiveTab("reflection")}>
-                  Reflection
-                </button>
                 <button type="button" className="goals-subtab" onClick={() => setActiveTab("blocks")}>
                   Blocks
                 </button>
@@ -5014,13 +5036,6 @@ export default function Page() {
                 onClick={() => setActiveTab("predictions")}
               >
                 Predictions
-              </button>
-              <button
-                type="button"
-                className="goals-subtab"
-                onClick={() => setActiveTab("reflection")}
-              >
-                Reflection
               </button>
               <button
                 type="button"
@@ -5973,9 +5988,6 @@ export default function Page() {
                 <button type="button" className="goals-subtab" onClick={() => setActiveTab("predictions")}>
                   Predictions
                 </button>
-                <button type="button" className="goals-subtab" onClick={() => setActiveTab("reflection")}>
-                  Reflection
-                </button>
                 <button type="button" className="goals-subtab" onClick={() => setActiveTab("blocks")}>
                   Blocks
                 </button>
@@ -6283,6 +6295,32 @@ export default function Page() {
               )}
               {updateStatus === "error" && updateError && (
                 <p className="settings-hint" style={{ color: "#f87171" }}>{updateError}</p>
+              )}
+            </section>
+            <section className="settings-section">
+              <p className="settings-section-title">Startup</p>
+              {autostart?.supported ? (
+                <>
+                  <label className="settings-checkbox-label">
+                    <input
+                      type="checkbox"
+                      checked={autostart.enabled}
+                      disabled={autostartBusy}
+                      onChange={(event) => void handleToggleAutostart(event.target.checked)}
+                    />
+                    Start automatically when I log in
+                  </label>
+                  <p className="settings-section-copy" style={{ marginLeft: "1.6rem" }}>
+                    Launches SlayTheList in browser mode at Windows login (starts the servers and opens your default browser). Adds a shortcut to your Startup folder — no admin needed.
+                  </p>
+                  {autostartError && (
+                    <p className="settings-hint" style={{ color: "#f87171" }}>{autostartError}</p>
+                  )}
+                </>
+              ) : (
+                <p className="settings-hint">
+                  {autostart?.reason ?? "Auto-start is only available in the Windows desktop install."}
+                </p>
               )}
             </section>
             <section className="settings-section">
