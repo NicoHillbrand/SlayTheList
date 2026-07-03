@@ -57,6 +57,44 @@ function toErrorMessage(error: unknown) {
   return "Something went wrong";
 }
 
+const FRIEND_ORDER_KEY = "slaythelist.friendOrder";
+
+function readFriendOrder(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(FRIEND_ORDER_KEY);
+    const parsed = raw ? (JSON.parse(raw) as unknown) : null;
+    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeFriendOrder(ids: string[]) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(FRIEND_ORDER_KEY, JSON.stringify(ids));
+  } catch {
+    // localStorage may be unavailable (private mode); ordering is best-effort.
+  }
+}
+
+// Sort friends by the locally-saved drag order. Unknown ids (new friends) fall
+// to the end, preserving the server's ordering among them.
+function applyFriendOrder(items: FriendSummary[]): FriendSummary[] {
+  const order = readFriendOrder();
+  if (order.length === 0) return items;
+  const rank = new Map(order.map((id, index) => [id, index]));
+  return items
+    .map((friend, index) => ({ friend, index }))
+    .sort((a, b) => {
+      const ra = rank.get(a.friend.id) ?? Number.MAX_SAFE_INTEGER;
+      const rb = rank.get(b.friend.id) ?? Number.MAX_SAFE_INTEGER;
+      return ra === rb ? a.index - b.index : ra - rb;
+    })
+    .map(({ friend }) => friend);
+}
+
 function relationshipLabel(relationship: FriendRelationship) {
   switch (relationship) {
     case "friend":
@@ -129,6 +167,7 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
   const [error, setError] = useState<string | null>(null);
   const [encouragedIds, setEncouragedIds] = useState<Set<string>>(new Set());
   const [encouragementsRemaining, setEncouragementsRemaining] = useState<number | null>(null);
+  const [draggingFriendId, setDraggingFriendId] = useState<string | null>(null);
   const closeSettings = onCloseSettings ?? (() => {});
 
   const refreshConnectedData = useCallback(async (currentStatus?: CloudConnectionStatus | null) => {
@@ -140,11 +179,12 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
 
     if (nextStatus.connected) {
       const [friendsResponse, requestsResponse] = await Promise.all([listCloudFriends(), listCloudFriendRequests()]);
-      setFriends(friendsResponse.items);
+      const orderedFriends = applyFriendOrder(friendsResponse.items);
+      setFriends(orderedFriends);
       setIncomingRequests(requestsResponse.incoming);
       setOutgoingRequests(requestsResponse.outgoing);
-      if (friendsResponse.items.length > 0) {
-        setSelectedUsername((current) => current ?? friendsResponse.items[0].username);
+      if (orderedFriends.length > 0) {
+        setSelectedUsername((current) => current ?? orderedFriends[0].username);
       }
       return;
     }
@@ -373,6 +413,22 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
       }
       await refreshAfterMutation();
     }).catch((nextError) => setError(toErrorMessage(nextError)));
+  }
+
+  function reorderFriend(targetId: string) {
+    const sourceId = draggingFriendId;
+    setDraggingFriendId(null);
+    if (!sourceId || sourceId === targetId) return;
+    setFriends((current) => {
+      const from = current.findIndex((f) => f.id === sourceId);
+      const to = current.findIndex((f) => f.id === targetId);
+      if (from === -1 || to === -1) return current;
+      const next = [...current];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      writeFriendOrder(next.map((f) => f.id));
+      return next;
+    });
   }
 
   async function onEncourage(entryType: EncouragementEntryType, entryId: string, kind: EncouragementKind) {
@@ -713,8 +769,29 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
             friends.map((friend) => (
               <div
                 key={friend.id}
-                className={`social-friend-item ${selectedUsername === friend.username ? "active" : ""}`}
+                className={`social-friend-item ${selectedUsername === friend.username ? "active" : ""} ${
+                  draggingFriendId === friend.id ? "dragging" : ""
+                }`}
+                draggable
+                onDragStart={(event) => {
+                  setDraggingFriendId(friend.id);
+                  event.dataTransfer.effectAllowed = "move";
+                }}
+                onDragOver={(event) => {
+                  if (draggingFriendId && draggingFriendId !== friend.id) {
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                  }
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  reorderFriend(friend.id);
+                }}
+                onDragEnd={() => setDraggingFriendId(null)}
               >
+                <span className="social-friend-drag-handle" aria-hidden="true" title="Drag to reorder">
+                  ⠿
+                </span>
                 <button
                   type="button"
                   className="social-friend-item-name"

@@ -1931,6 +1931,35 @@ body.desktop-app main {
   color: #f3ede0;
 }
 
+.social-friend-item.dragging {
+  opacity: 0.5;
+}
+
+.social-friend-drag-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1rem;
+  margin-right: 0.35rem;
+  color: #6f6555;
+  font-size: 0.9rem;
+  line-height: 1;
+  cursor: grab;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.social-friend-item:hover .social-friend-drag-handle,
+.social-friend-item:focus-within .social-friend-drag-handle,
+.social-friend-item.dragging .social-friend-drag-handle {
+  opacity: 1;
+}
+
+.social-friend-item.dragging .social-friend-drag-handle {
+  cursor: grabbing;
+}
+
 .social-friend-item-name {
   flex: 1;
   text-align: left;
