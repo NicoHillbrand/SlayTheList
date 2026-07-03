@@ -1383,6 +1383,58 @@ app.post("/api/update/apply", (_req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// Auto-start on login (Windows Startup-folder shortcut)
+// ---------------------------------------------------------------------------
+
+function runAutostartManage(
+  action: "status" | "enable" | "disable",
+): Promise<{ enabled: boolean; path: string }> {
+  return new Promise((resolve, reject) => {
+    const repo = findRepoRoot();
+    if (!repo) return reject(new Error("This install isn't a git checkout."));
+    const script = path.join(repo, "scripts", "autostart-manage.ps1");
+    if (!existsSync(script)) return reject(new Error("autostart-manage.ps1 not found."));
+    execFile(
+      "powershell",
+      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-Action", action, "-Root", repo],
+      { timeout: 15_000, windowsHide: true },
+      (err, stdout) => {
+        if (err) return reject(err);
+        try {
+          resolve(JSON.parse(stdout.toString().trim()));
+        } catch {
+          reject(new Error("Couldn't parse auto-start status."));
+        }
+      },
+    );
+  });
+}
+
+app.get("/api/autostart", async (_req, res) => {
+  if (process.platform !== "win32") {
+    return ok(res, { supported: false, enabled: false, reason: "Auto-start is only available on Windows." });
+  }
+  try {
+    const state = await runAutostartManage("status");
+    ok(res, { supported: true, enabled: state.enabled });
+  } catch (err) {
+    ok(res, { supported: false, enabled: false, reason: err instanceof Error ? err.message : "unavailable" });
+  }
+});
+
+app.post("/api/autostart", async (req, res) => {
+  if (process.platform !== "win32") return badRequest(res, "Auto-start is only available on Windows.");
+  const enabled = req.body?.enabled;
+  if (typeof enabled !== "boolean") return badRequest(res, "`enabled` must be a boolean.");
+  try {
+    const state = await runAutostartManage(enabled ? "enable" : "disable");
+    ok(res, { supported: true, enabled: state.enabled });
+  } catch (err) {
+    badRequest(res, err instanceof Error ? err.message : "Failed to change auto-start.");
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Base Builder
 // ---------------------------------------------------------------------------
 

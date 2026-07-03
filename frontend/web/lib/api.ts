@@ -75,6 +75,23 @@ export async function applyUpdate() {
   return request<{ started: boolean }>("/api/update/apply", { method: "POST" });
 }
 
+export type AutostartState = {
+  supported: boolean;
+  enabled: boolean;
+  reason?: string;
+};
+
+export async function getAutostart() {
+  return request<AutostartState>("/api/autostart");
+}
+
+export async function setAutostart(enabled: boolean) {
+  return request<AutostartState>("/api/autostart", {
+    method: "POST",
+    body: JSON.stringify({ enabled }),
+  });
+}
+
 export async function getCloudConnectionStatus() {
   return request<CloudConnectionStatus>("/api/cloud-social/status");
 }

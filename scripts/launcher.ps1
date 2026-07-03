@@ -16,10 +16,31 @@ $Root = "$Root\"
 
 $ApiPort = 8788
 
+# ---------------------------------------------------------------------------
+# Auto-start on login (Startup-folder shortcut -> scripts\autostart.vbs)
+# ---------------------------------------------------------------------------
+function Get-AutoStartShortcutPath {
+  Join-Path ([Environment]::GetFolderPath('Startup')) "SlayTheList.lnk"
+}
+
+function Test-AutoStartEnabled {
+  Test-Path (Get-AutoStartShortcutPath)
+}
+
+function Set-AutoStart {
+  param(
+    [Parameter(Mandatory)] [bool]$Enabled,
+    [string]$Mode = "browser"
+  )
+  $manage = Join-Path $Root "scripts\autostart-manage.ps1"
+  $action = if ($Enabled) { "enable" } else { "disable" }
+  & $manage -Action $action -Root $Root.TrimEnd('\') -Mode $Mode | Out-Null
+}
+
 $xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="SlayTheList" Width="340" Height="370"
+        Title="SlayTheList" Width="340" Height="418"
         WindowStartupLocation="CenterScreen" ResizeMode="NoResize"
         Background="#1a1a2e" Foreground="#e0e0e0">
   <Grid Margin="28">
@@ -32,6 +53,8 @@ $xaml = @"
       <RowDefinition Height="12"/>
       <RowDefinition Height="Auto"/>
       <RowDefinition Height="24"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="16"/>
       <RowDefinition Height="Auto"/>
       <RowDefinition Height="*"/>
       <RowDefinition Height="Auto"/>
@@ -103,7 +126,11 @@ $xaml = @"
       </Button.Template>
     </Button>
 
-    <TextBlock x:Name="TxtStatus" Grid.Row="10" FontSize="11" Foreground="#666"
+    <CheckBox x:Name="ChkAutoStart" Grid.Row="10" FontSize="12" Foreground="#e0e0e0"
+              HorizontalAlignment="Center" VerticalContentAlignment="Center"
+              Content="Start automatically when I log in"/>
+
+    <TextBlock x:Name="TxtStatus" Grid.Row="12" FontSize="11" Foreground="#666"
                HorizontalAlignment="Center" TextAlignment="Center" Text=""/>
   </Grid>
 </Window>
@@ -112,10 +139,29 @@ $xaml = @"
 $reader = [System.Xml.XmlReader]::Create([System.IO.StringReader]::new($xaml))
 $window = [System.Windows.Markup.XamlReader]::Load($reader)
 
-$btnBrowser = $window.FindName("BtnBrowser")
-$btnDesktop = $window.FindName("BtnDesktop")
-$btnStop    = $window.FindName("BtnStop")
-$txtStatus  = $window.FindName("TxtStatus")
+$btnBrowser   = $window.FindName("BtnBrowser")
+$btnDesktop   = $window.FindName("BtnDesktop")
+$btnStop      = $window.FindName("BtnStop")
+$txtStatus    = $window.FindName("TxtStatus")
+$chkAutoStart = $window.FindName("ChkAutoStart")
+
+# Reflect current auto-start state (set before wiring the handler so this
+# programmatic assignment doesn't fire Click).
+$chkAutoStart.IsChecked = Test-AutoStartEnabled
+
+$chkAutoStart.Add_Click({
+  try {
+    Set-AutoStart -Enabled ([bool]$chkAutoStart.IsChecked) -Mode "browser"
+    $txtStatus.Text = if ($chkAutoStart.IsChecked) {
+      "Auto-start enabled (browser mode)."
+    } else {
+      "Auto-start disabled."
+    }
+  } catch {
+    $chkAutoStart.IsChecked = -not $chkAutoStart.IsChecked
+    $txtStatus.Text = "Auto-start change failed: $($_.Exception.Message)"
+  }
+})
 
 $selectedMode = $null
 

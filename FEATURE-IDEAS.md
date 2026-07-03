@@ -28,3 +28,5 @@ Collect feature ideas and improvements here. Add freely, prioritize later.
 ## In Progress
 
 ## Done
+
+- Windows auto-start on login: "Start automatically when I log in" toggle, available both in the GUI launcher and in the app's in-app Settings modal (Startup section). Creates/removes a Startup-folder shortcut (`SlayTheList.lnk`) that silently runs `start.bat browser` at login via `scripts/autostart.vbs`. Shortcut logic lives in the shared `scripts/autostart-manage.ps1`; the API exposes it at `GET/POST /api/autostart`. No admin required.
