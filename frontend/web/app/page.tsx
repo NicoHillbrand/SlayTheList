@@ -214,6 +214,17 @@ const SPLIT_DAILY_BY_PRIORITY_STORAGE_KEY = "slaythelist.splitDailyByPriority";
 const PRIORITY_DIVIDER_ID = "__priority_divider__";
 const DEFAULT_TODO_DURATION_MINUTES = 5;
 const DEFAULT_PREDICTION_CONFIDENCE = 95;
+
+// Payout for a staked prediction: baseline-relative quadratic scoring.
+// Break-even at 50% confidence, up to 2× the stake back when confident and
+// right, clamped at 0 so the maximum loss is the stake. Honest confidence
+// maximizes expected gold (mildly overconfidence-tolerant above ~71% only
+// because of the clamp).
+function predictionStakePayout(stake: number, confidence: number, outcome: "hit" | "miss"): number {
+  const f = confidence / 100;
+  const o = outcome === "hit" ? 1 : 0;
+  return Math.round(stake * Math.max(0, 2 - 4 * (f - o) ** 2));
+}
 const CALIBRATION_CHART_WIDTH = 320;
 const CALIBRATION_CHART_HEIGHT = 190;
 const CALIBRATION_CHART_PADDING = { top: 16, right: 18, bottom: 28, left: 34 };
@@ -953,7 +964,9 @@ export default function Page() {
   const [predictions, setPredictions] = useState<Prediction[]>([]);
   const [newPredictionTitle, setNewPredictionTitle] = useState("");
   const [newPredictionConfidence, setNewPredictionConfidence] = useState(DEFAULT_PREDICTION_CONFIDENCE);
+  const [newPredictionStake, setNewPredictionStake] = useState(0);
   const [goalPredictionConfidences, setGoalPredictionConfidences] = useState<Record<string, number>>({});
+  const [goalPredictionStakes, setGoalPredictionStakes] = useState<Record<string, number>>({});
   const [murphyOpen, setMurphyOpen] = useState(false);
   const [selectedMurphyTodoId, setSelectedMurphyTodoId] = useState<string | null>(null);
   const [predictionCalibrationResetAt, setPredictionCalibrationResetAt] = useState<number | null>(null);
@@ -969,6 +982,7 @@ export default function Page() {
   const [editingTodoId, setEditingTodoId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
   const [editDeadline, setEditDeadline] = useState("");
+  const [editVisibility, setEditVisibility] = useState<"visible" | "private">("visible");
   const [expandingTodoId, setExpandingTodoId] = useState<string | null>(null);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [expandProvider, setExpandProvider] = useState<ExpandProvider>("gemini-flash");
@@ -1563,7 +1577,11 @@ export default function Page() {
       const updated = await setTodoStatus(todo.id, next);
       setTodos((previous) => previous.map((item) => (item.id === updated.id ? updated : item)));
       if (shouldAwardGold) {
-        const result = await awardTodoGoldApi(todo.id, GOLD_PER_TODO);
+        const result = await awardTodoGoldApi(todo.id, GOLD_PER_TODO, {
+          sourceType: "todo",
+          sourceId: todo.id,
+          label: todo.title,
+        });
         setGold(result.state.gold);
         setRewardedTodoIds(result.state.rewardedTodoIds);
       }
@@ -1720,12 +1738,14 @@ export default function Page() {
     setEditingTodoId(todo.id);
     setEditTitle(todo.title);
     setEditDeadline(deadlineToDateInput(todo.deadlineAt));
+    setEditVisibility(todo.visibility === "private" ? "private" : "visible");
   }
 
   function closeEditModal() {
     setEditingTodoId(null);
     setEditTitle("");
     setEditDeadline("");
+    setEditVisibility("visible");
   }
 
   function saveEditModal() {
@@ -1744,7 +1764,7 @@ export default function Page() {
     }
 
     void runAction(async () => {
-      await updateTodo(editingTodoId, { title: nextTitle, deadlineAt: newDeadline });
+      await updateTodo(editingTodoId, { title: nextTitle, deadlineAt: newDeadline, visibility: editVisibility });
       // Bump any sub-todos that are now earlier than the new deadline
       if (newDeadline) {
         const newDeadlineDate = new Date(newDeadline);
@@ -3105,21 +3125,29 @@ export default function Page() {
   const todayKey = getDateKey(new Date());
   const habitsView: HabitsView = habitsSubtab === "month" ? "month" : "week";
 
-  function awardHabitGold(streak: number, sourceElement: HTMLElement | null) {
+  function awardHabitGold(streak: number, sourceElement: HTMLElement | null, habit?: Habit) {
     const rewardAmount = 4 + streak;
     playGoldSound();
     launchFlyingCoins(sourceElement);
     void runAction(async () => {
-      const nextGoldState = await awardGoldApi(rewardAmount);
+      const nextGoldState = await awardGoldApi(rewardAmount, {
+        sourceType: "habit",
+        sourceId: habit?.id ?? null,
+        label: habit?.name ?? "",
+      });
       setGold(nextGoldState.gold);
       setRewardedTodoIds(nextGoldState.rewardedTodoIds);
     });
   }
 
-  function deductHabitGold(streak: number) {
+  function deductHabitGold(streak: number, habit?: Habit) {
     const deductAmount = 4 + streak;
     void runAction(async () => {
-      const nextGoldState = await deductGoldApi(deductAmount);
+      const nextGoldState = await deductGoldApi(deductAmount, {
+        sourceType: "habit",
+        sourceId: habit?.id ?? null,
+        label: habit?.name ?? "",
+      });
       setGold(nextGoldState.gold);
       setRewardedTodoIds(nextGoldState.rewardedTodoIds);
     });
@@ -3168,10 +3196,10 @@ export default function Page() {
         checks: [...habit.checks.filter((check) => check.date !== dateKey), { date: dateKey, done: true }],
       };
       const streak = calculateHabitDayStreak(nextHabit, dateKey);
-      awardHabitGold(streak, sourceElement);
+      awardHabitGold(streak, sourceElement, habit);
     } else {
       const streak = calculateHabitDayStreak(habit, dateKey);
-      deductHabitGold(streak);
+      deductHabitGold(streak, habit);
     }
     setHabits((prev) =>
       prev.map((h) => {
@@ -3200,10 +3228,10 @@ export default function Page() {
         checks: [...habit.checks, { date: getDateKey(weekEnd), done: true }],
       };
       const streak = calculateHabitWeekStreak(nextHabit, weekStart, weekEnd);
-      awardHabitGold(streak, sourceElement);
+      awardHabitGold(streak, sourceElement, habit);
     } else {
       const streak = calculateHabitWeekStreak(habit, weekStart, weekEnd);
-      deductHabitGold(streak);
+      deductHabitGold(streak, habit);
     }
     setHabits((prev) =>
       prev.map((h) => {
@@ -3243,6 +3271,17 @@ export default function Page() {
     });
   }
 
+  function toggleTodoVisibility(todo: Todo) {
+    const next = todo.visibility === "private" ? ("visible" as const) : ("private" as const);
+    setTodos((previous) =>
+      previous.map((item) => (item.id === todo.id ? { ...item, visibility: next } : item)),
+    );
+    void runAction(async () => {
+      const updated = await updateTodo(todo.id, { visibility: next });
+      setTodos((previous) => previous.map((item) => (item.id === updated.id ? updated : item)));
+    });
+  }
+
   function toggleHabitVisibility(habitId: string) {
     const nextHabits = habits.map((habit) =>
       habit.id === habitId
@@ -3274,58 +3313,135 @@ export default function Page() {
   const newHabitPlaceholder =
     habitsSubtab === "ideas" ? "Add a new habit idea..." : "Add a new habit...";
 
+  // Escrow a stake on a freshly created prediction: deduct the gold now and
+  // write a 🎯 ledger entry. If the API is unreachable the stake is rolled
+  // back off the prediction so balance and state stay consistent.
+  function stakePredictionGold(predictionId: string, title: string, confidence: number, stake: number) {
+    void runAction(async () => {
+      try {
+        const nextGoldState = await deductGoldApi(stake, {
+          sourceType: "prediction",
+          sourceId: predictionId,
+          label: `Staked ${stake} on "${title}" (${confidence}%)`,
+        });
+        setGold(nextGoldState.gold);
+        setRewardedTodoIds(nextGoldState.rewardedTodoIds);
+      } catch (err) {
+        setPredictions((prev) =>
+          prev.map((p) => (p.id === predictionId ? { ...p, stake: undefined } : p)),
+        );
+        throw err;
+      }
+    });
+  }
+
   function addPrediction() {
     const title = newPredictionTitle.trim();
     if (!title) return;
+    const confidence = Math.max(1, Math.min(99, newPredictionConfidence));
+    // Can't stake more gold than you have (the backend clamps the deduction
+    // at the balance, which would silently escrow less than the record says).
+    const stake = Math.min(Math.max(0, Math.floor(newPredictionStake)), gold);
+    const id = crypto.randomUUID();
     setPredictions((prev) => [
       ...prev,
       {
-        id: crypto.randomUUID(),
+        id,
         title,
-        confidence: Math.max(1, Math.min(99, newPredictionConfidence)),
+        confidence,
         outcome: "pending",
         createdAt: Date.now(),
         resolvedAt: null,
+        ...(stake > 0 ? { stake } : {}),
       },
     ]);
+    if (stake > 0) stakePredictionGold(id, title, confidence, stake);
     setNewPredictionTitle("");
     setNewPredictionConfidence(DEFAULT_PREDICTION_CONFIDENCE);
+    setNewPredictionStake(0);
   }
 
   function setPredictionOutcome(predictionId: string, outcome: PredictionOutcome) {
+    const prediction = predictions.find((p) => p.id === predictionId);
+    const stake =
+      prediction && prediction.outcome === "pending" && outcome !== "pending"
+        ? prediction.stake ?? 0
+        : 0;
+    const payout =
+      prediction && stake > 0 && outcome !== "pending"
+        ? predictionStakePayout(stake, prediction.confidence, outcome)
+        : 0;
     setPredictions((prev) =>
-      prev.map((prediction) =>
-        prediction.id === predictionId
+      prev.map((p) =>
+        p.id === predictionId
           ? {
-              ...prediction,
+              ...p,
               outcome,
               resolvedAt: outcome === "pending" ? null : Date.now(),
+              ...(stake > 0 ? { payout } : {}),
             }
-          : prediction,
+          : p,
       ),
     );
+    // A zero payout writes no ledger entry (the stake entry from bet time
+    // already carries the loss); a positive payout logs with the net spelled
+    // out so the shareable view can't read as pure upside.
+    if (prediction && stake > 0 && payout > 0 && outcome !== "pending") {
+      const net = payout - stake;
+      const netLabel = `net ${net >= 0 ? "+" : "−"}${Math.abs(net)}`;
+      const label =
+        outcome === "hit"
+          ? `Called it: "${prediction.title}" (${prediction.confidence}%) — staked ${stake}, won ${payout} (${netLabel})`
+          : `Missed: "${prediction.title}" (${prediction.confidence}%) — staked ${stake}, got back ${payout} (${netLabel})`;
+      if (net > 0) playGoldSound();
+      void runAction(async () => {
+        const nextGoldState = await awardGoldApi(payout, {
+          sourceType: "prediction",
+          sourceId: predictionId,
+          label,
+        });
+        setGold(nextGoldState.gold);
+        setRewardedTodoIds(nextGoldState.rewardedTodoIds);
+      });
+    }
   }
 
   function deletePrediction(predictionId: string) {
-    setPredictions((prev) => prev.filter((prediction) => prediction.id !== predictionId));
+    const prediction = predictions.find((p) => p.id === predictionId);
+    setPredictions((prev) => prev.filter((p) => p.id !== predictionId));
+    // Refund an unresolved stake balance-only (no ledger entry): a "+N refund"
+    // line would read as a gain in the shareable log for what is net-zero.
+    const stake = prediction?.outcome === "pending" ? prediction.stake ?? 0 : 0;
+    if (stake > 0) {
+      void runAction(async () => {
+        const nextGoldState = await awardGoldApi(stake);
+        setGold(nextGoldState.gold);
+        setRewardedTodoIds(nextGoldState.rewardedTodoIds);
+      });
+    }
   }
 
   function addGoalPrediction(todo: Todo) {
     const goalTitle = todo.title.trim();
     if (!goalTitle) return;
     const confidence = Math.max(1, Math.min(99, goalPredictionConfidences[todo.id] ?? DEFAULT_PREDICTION_CONFIDENCE));
+    const stake = Math.min(Math.max(0, Math.floor(goalPredictionStakes[todo.id] ?? 0)), gold);
+    const id = crypto.randomUUID();
     setPredictions((prev) => [
       ...prev,
       {
-        id: crypto.randomUUID(),
+        id,
         title: goalTitle,
         confidence,
         outcome: "pending",
         createdAt: Date.now(),
         resolvedAt: null,
+        ...(stake > 0 ? { stake } : {}),
       },
     ]);
+    if (stake > 0) stakePredictionGold(id, goalTitle, confidence, stake);
     setGoalPredictionConfidences((prev) => ({ ...prev, [todo.id]: DEFAULT_PREDICTION_CONFIDENCE }));
+    setGoalPredictionStakes((prev) => ({ ...prev, [todo.id]: 0 }));
   }
 
   function addMurphyPrediction(targetTitle?: string) {
@@ -3351,8 +3467,12 @@ export default function Page() {
   }
 
   function updatePredictionConfidence(predictionId: string, confidence: number) {
+    // Staked confidence is locked while pending — it sets the payout, so
+    // editing it after betting would let you dial in a win before resolving.
     setPredictions((prev) =>
-      prev.map((p) => (p.id === predictionId ? { ...p, confidence } : p)),
+      prev.map((p) =>
+        p.id === predictionId && !(p.stake && p.outcome === "pending") ? { ...p, confidence } : p,
+      ),
     );
   }
 
@@ -4455,6 +4575,20 @@ export default function Page() {
                     );
                   }}
                 />
+                <input
+                  type="number"
+                  className="prediction-stake-add"
+                  min={0}
+                  max={gold}
+                  placeholder="🪙 0"
+                  value={newPredictionStake || ""}
+                  onChange={(event) => {
+                    const numeric = Number(event.target.value);
+                    setNewPredictionStake(Number.isFinite(numeric) ? Math.max(0, Math.floor(numeric)) : 0);
+                  }}
+                  title={`Gold to stake (optional). Break-even at 50%, up to 2× back when you're confident and right. You have ${gold}.`}
+                  aria-label="Gold to stake"
+                />
                 <button type="button" onClick={addPrediction}>Add</button>
               </div>
             </div>
@@ -4519,19 +4653,28 @@ export default function Page() {
                             <button type="button" onClick={() => setPredictionOutcome(prediction.id, "miss")}>Didn't happen</button>
                             <button type="button" onClick={() => deletePrediction(prediction.id)}>Delete</button>
                           </div>
+                          {prediction.stake ? (
+                            <span
+                              className="prediction-stake-chip"
+                              title={`${prediction.stake} gold staked — win ${predictionStakePayout(prediction.stake, prediction.confidence, "hit")} if it happens, get back ${predictionStakePayout(prediction.stake, prediction.confidence, "miss")} if not. Confidence is locked while staked.`}
+                            >
+                              🪙{prediction.stake}
+                            </span>
+                          ) : null}
                           <input
                             type="number"
                             className="prediction-confidence prediction-confidence-input"
                             min={1}
                             max={99}
                             value={prediction.confidence}
+                            disabled={Boolean(prediction.stake)}
                             onChange={(e) =>
                               updatePredictionConfidence(
                                 prediction.id,
                                 Math.max(1, Math.min(99, Number(e.target.value))),
                               )
                             }
-                            title="Probability %"
+                            title={prediction.stake ? "Confidence locked — gold is staked on this" : "Probability %"}
                             aria-label="Prediction confidence"
                           />
                           <span className="prediction-confidence-label">%</span>
@@ -4567,6 +4710,23 @@ export default function Page() {
                               }));
                             }}
                             aria-label={`Confidence for ${todo.title}`}
+                          />
+                          <input
+                            type="number"
+                            className="prediction-stake-add"
+                            min={0}
+                            max={gold}
+                            placeholder="🪙 0"
+                            value={goalPredictionStakes[todo.id] || ""}
+                            onChange={(event) => {
+                              const numeric = Number(event.target.value);
+                              setGoalPredictionStakes((prev) => ({
+                                ...prev,
+                                [todo.id]: Number.isFinite(numeric) ? Math.max(0, Math.floor(numeric)) : 0,
+                              }));
+                            }}
+                            title={`Gold to stake (optional). You have ${gold}.`}
+                            aria-label={`Gold to stake on ${todo.title}`}
                           />
                           <button type="button" onClick={() => addGoalPrediction(todo)}>
                             Add
@@ -4748,6 +4908,15 @@ export default function Page() {
                                   day: "numeric",
                                 })}
                               </span>
+                              {typeof prediction.stake === "number" && (
+                                <span
+                                  className={`prediction-stake-result ${
+                                    (prediction.payout ?? 0) >= prediction.stake ? "is-win" : "is-loss"
+                                  }`}
+                                >
+                                  🪙 {prediction.stake} → {prediction.payout ?? 0}
+                                </span>
+                              )}
                             </div>
                           </div>
                           <div className="goal-actions prediction-actions">
@@ -6040,6 +6209,20 @@ export default function Page() {
                   +
                 </button>
               </div>
+            </label>
+            <label className="todo-edit-visibility-row">
+              <span>
+                Visibility
+                <span className="settings-hint"> — private items show as “Completed a private task” in your shared daily log</span>
+              </span>
+              <button
+                type="button"
+                className={`visibility-toggle ${editVisibility === "private" ? "is-private" : ""}`}
+                onClick={() => setEditVisibility((v) => (v === "private" ? "visible" : "private"))}
+                title={editVisibility === "private" ? "Private (hidden from friends)" : "Visible to friends"}
+              >
+                {editVisibility === "private" ? "🔒 Private" : "👁 Visible"}
+              </button>
             </label>
             <div className="todo-edit-modal-actions">
               <button type="button" onClick={closeEditModal}>Cancel</button>

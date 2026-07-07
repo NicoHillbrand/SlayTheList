@@ -135,22 +135,55 @@ server.tool(
   },
 );
 
+function mcpCategoryToSourceType(category?: string): "todo" | "habit" | "encouragement" | "prediction" | "manual" {
+  const c = (category ?? "").trim().toLowerCase();
+  if (c === "tasks" || c === "task" || c === "todo" || c === "todos") return "todo";
+  if (c === "habits" || c === "habit") return "habit";
+  if (c === "encouragements" || c === "encouragement" || c === "encourage") return "encouragement";
+  if (c === "predictions" || c === "prediction") return "prediction";
+  return "manual";
+}
+
 server.tool(
   "award_gold",
-  "Add gold to the user's balance. Set with_sound: true to play the gold coin sound in the overlay; leave it false (or omit it) to update silently.",
+  "Add gold to the user's balance. Pass `title` to record a named achievement in the daily/shareable log (e.g. a subtask you completed); without a title only the balance changes. Set with_sound: true to play the gold coin sound in the overlay.",
   {
     amount: z
       .number()
       .int()
       .nonnegative()
       .describe("Amount of gold to award. Must be a non-negative integer."),
+    title: z
+      .string()
+      .optional()
+      .describe("What was accomplished. When provided, this shows up as a log entry in the achievement view. Omit for a silent balance-only bump."),
+    category: z
+      .string()
+      .optional()
+      .describe('Which category the entry belongs to: "Tasks", "Habits", "Encouragements", or "Predictions". Unknown/missing falls back to "Other".'),
+    source: z
+      .string()
+      .optional()
+      .describe('Which agent submitted this (e.g. "claude-code"). Optional.'),
+    timestamp: z
+      .string()
+      .optional()
+      .describe("ISO 8601 timestamp to backdate the entry. Defaults to now."),
     with_sound: z
       .boolean()
       .optional()
       .describe("If true, play the gold coin sound in the overlay UI. Defaults to false."),
   },
-  async ({ amount, with_sound = false }) => {
-    const state = awardGold(amount);
+  async ({ amount, title, category, source, timestamp, with_sound = false }) => {
+    const activity = title && title.trim()
+      ? {
+          sourceType: mcpCategoryToSourceType(category),
+          label: title.trim().slice(0, 500),
+          source: source ?? null,
+          at: timestamp ?? null,
+        }
+      : undefined;
+    const state = awardGold(amount, undefined, activity);
     if (with_sound) await fireSoundEvent("gold");
     return { content: [{ type: "text" as const, text: JSON.stringify(state, null, 2) }] };
   },
@@ -171,7 +204,7 @@ server.tool(
       .describe("If true, play the gold coin sound in the overlay UI. Defaults to false."),
   },
   async ({ amount, with_sound = false }) => {
-    const state = deductGold(amount);
+    const state = deductGold(amount, undefined, { sourceType: "spend", label: "Spent via Claude" });
     if (with_sound) await fireSoundEvent("gold");
     return { content: [{ type: "text" as const, text: JSON.stringify(state, null, 2) }] };
   },

@@ -20,6 +20,7 @@ import {
   type FriendRequest,
   type FriendSearchResult,
   type FriendSummary,
+  type SharedDailyLogDay,
   type SharedProfile,
   type SocialSettings,
   type SocialSnapshot,
@@ -29,7 +30,13 @@ import {
   type VaultVersionResponse,
 } from "@slaythelist/contracts";
 import { db } from "./db.js";
-import { getAccountabilityState, getBaseState, getGoldState } from "./store.js";
+import {
+  getAccountabilityState,
+  getBaseState,
+  getGoldState,
+  listGoldActivityDays,
+  listTodos,
+} from "./store.js";
 
 type LocalSocialSettingsRow = {
   habits_visibility: SocialSettings["habitsVisibility"];
@@ -37,6 +44,7 @@ type LocalSocialSettingsRow = {
   gold_visibility: SocialSettings["goldVisibility"];
   walkthroughs_visibility?: SocialSettings["walkthroughsVisibility"];
   base_visibility?: SocialSettings["baseVisibility"];
+  daily_log_visibility?: SocialSettings["dailyLogVisibility"];
 };
 
 type CloudConnectionRow = {
@@ -62,6 +70,7 @@ const DEFAULT_SOCIAL_SETTINGS: SocialSettings = {
   goldVisibility: "friends",
   walkthroughsVisibility: "private",
   baseVisibility: "friends",
+  dailyLogVisibility: "friends",
 };
 
 const DEFAULT_CLOUD_BASE_URL = "https://slaythelist.nicohillbrand.com";
@@ -217,6 +226,7 @@ export function getLocalSocialSettings(): SocialSettings {
     goldVisibility: row.gold_visibility,
     walkthroughsVisibility: row.walkthroughs_visibility ?? "private",
     baseVisibility: row.base_visibility ?? "friends",
+    dailyLogVisibility: row.daily_log_visibility ?? "friends",
   };
 }
 
@@ -224,7 +234,7 @@ export function saveLocalSocialSettings(settings: SocialSettings) {
   const parsed = socialSettingsSchema.parse(settings);
   db.prepare(
     `UPDATE local_social_settings
-     SET habits_visibility = ?, predictions_visibility = ?, gold_visibility = ?, walkthroughs_visibility = ?, base_visibility = ?, updated_at = ?
+     SET habits_visibility = ?, predictions_visibility = ?, gold_visibility = ?, walkthroughs_visibility = ?, base_visibility = ?, daily_log_visibility = ?, updated_at = ?
      WHERE id = 1`,
   ).run(
     parsed.habitsVisibility,
@@ -232,9 +242,54 @@ export function saveLocalSocialSettings(settings: SocialSettings) {
     parsed.goldVisibility,
     parsed.walkthroughsVisibility,
     parsed.baseVisibility,
+    parsed.dailyLogVisibility,
     new Date().toISOString(),
   );
   return parsed;
+}
+
+// How many days of gold-activity history ship in the shared snapshot.
+const SHARED_DAILY_LOG_DAYS = 14;
+
+// Roll the local gold-activity ledger into the privacy-applied form that gets
+// shared. Private todos/habits keep their gold delta (so day totals reconcile)
+// but lose their identifying label. Visibility is resolved live from the
+// current item, falling back to "visible" for deleted items.
+export function buildSharedDailyLog(days = SHARED_DAILY_LOG_DAYS): SharedDailyLogDay[] {
+  const todoVisibility = new Map<string, string>();
+  for (const todo of listTodos()) {
+    todoVisibility.set(todo.id, todo.visibility ?? "visible");
+  }
+  const accountability = getAccountabilityState();
+  const habitVisibility = new Map<string, string>();
+  for (const habit of accountability.habits) {
+    habitVisibility.set(habit.id, habit.visibility ?? "visible");
+  }
+  const predictionVisibility = new Map<string, string>();
+  for (const prediction of accountability.predictions) {
+    predictionVisibility.set(prediction.id, prediction.visibility ?? "visible");
+  }
+
+  return listGoldActivityDays(days).map((day) => ({
+    date: day.date,
+    total: day.total,
+    entries: day.entries.map((entry) => {
+      let isPrivate = false;
+      if (entry.sourceType === "todo" && entry.sourceId) {
+        isPrivate = todoVisibility.get(entry.sourceId) === "private";
+      } else if (entry.sourceType === "habit" && entry.sourceId) {
+        isPrivate = habitVisibility.get(entry.sourceId) === "private";
+      } else if (entry.sourceType === "prediction" && entry.sourceId) {
+        isPrivate = predictionVisibility.get(entry.sourceId) === "private";
+      }
+      return {
+        delta: entry.delta,
+        sourceType: entry.sourceType,
+        label: isPrivate ? null : entry.label,
+        private: isPrivate,
+      };
+    }),
+  }));
 }
 
 export function buildLocalSocialSnapshot(): SocialSnapshot {
@@ -249,6 +304,7 @@ export function buildLocalSocialSnapshot(): SocialSnapshot {
     predictions: state.predictions.filter((p) => p.visibility !== "private"),
     walkthroughs: (state.walkthroughs ?? []).filter((w) => w.visibility !== "private"),
     gold: getGoldState(),
+    dailyLog: buildSharedDailyLog(),
     base: {
       version: baseState.version,
       placements: baseState.placements ?? [],

@@ -34,6 +34,7 @@ import {
   syncCloudSnapshot,
   updateCloudUsername,
 } from "../lib/api";
+import { AchievementSummary } from "./daily-log";
 
 type Props = {
   open?: boolean;
@@ -49,6 +50,7 @@ const DEFAULT_SETTINGS: SocialSettings = {
   goldVisibility: "friends",
   walkthroughsVisibility: "private",
   baseVisibility: "friends",
+  dailyLogVisibility: "friends",
 };
 
 
@@ -540,41 +542,15 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
               )}
             </div>
 
-            {selectedProfile.relationship === "friend" && encouragementsRemaining !== null && (
-              <p className="encouragements-remaining">
-                {encouragementsRemaining > 0
-                  ? `${encouragementsRemaining} encouragement${encouragementsRemaining === 1 ? "" : "s"} left today`
-                  : "No encouragements left today"}
-              </p>
+            {selectedProfile.habits.canView || selectedProfile.dailyLog?.canView ? (
+              <AchievementSummary
+                days={selectedProfile.dailyLog?.canView ? selectedProfile.dailyLog.days : []}
+                habits={selectedProfile.habits.canView ? selectedProfile.habits.items : []}
+                showHabits={selectedProfile.habits.canView}
+              />
+            ) : (
+              <p className="settings-hint">Nothing shared.</p>
             )}
-
-            <section className="social-profile-section">
-              <h5>Habits</h5>
-              {!selectedProfile.habits.canView ? (
-                <p className="settings-hint">Hidden</p>
-              ) : selectedProfile.habits.items.length === 0 ? (
-                <p className="settings-hint">No habits shared yet.</p>
-              ) : (
-                <ul className="social-profile-list">
-                  {selectedProfile.habits.items.map((habit) => (
-                    <li key={habit.id} className="social-entry-row">
-                      <span>{habit.name} <span className="settings-hint">({habit.status})</span></span>
-                      {selectedProfile.relationship === "friend" && (
-                        <button
-                          type="button"
-                          className={`encourage-btn ${encouragedIds.has(habit.id) ? "encouraged" : ""}`}
-                          disabled={encouragedIds.has(habit.id) || (encouragementsRemaining !== null && encouragementsRemaining <= 0)}
-                          onClick={() => onEncourage("habit", habit.id, "encourage")}
-                          title={encouragedIds.has(habit.id) ? "Encouraged!" : "Encourage"}
-                        >
-                          {encouragedIds.has(habit.id) ? "Encouraged" : "Encourage"}
-                        </button>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </section>
 
             <section className="social-profile-section">
               <h5>Predictions <span className="settings-hint">(last 7 days)</span></h5>
@@ -595,31 +571,13 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
                   <div key={day.label} className="social-predictions-day">
                     <p className="social-day-label">{day.label}</p>
                     <div className="social-predictions-day-items">
-                      {day.items.map((prediction) => {
-                        const isResolved = prediction.outcome !== "pending";
-                        const btnKind: EncouragementKind = isResolved ? "celebrate" : "encourage";
-                        const btnLabel = encouragedIds.has(prediction.id)
-                          ? (isResolved ? "Celebrated" : "Encouraged")
-                          : (isResolved ? "Celebrate" : "Encourage");
-                        return (
-                          <div key={prediction.id} className="social-prediction-row">
-                            <span className={outcomeClass(prediction.outcome)}>{outcomeIcon(prediction.outcome)}</span>
-                            <span className="social-prediction-title">{prediction.title}</span>
-                            <span className="social-prediction-confidence">{prediction.confidence}%</span>
-                            {selectedProfile!.relationship === "friend" && (
-                              <button
-                                type="button"
-                                className={`encourage-btn ${encouragedIds.has(prediction.id) ? "encouraged" : ""}`}
-                                disabled={encouragedIds.has(prediction.id) || (encouragementsRemaining !== null && encouragementsRemaining <= 0)}
-                                onClick={() => onEncourage("prediction", prediction.id, btnKind)}
-                                title={btnLabel}
-                              >
-                                {btnLabel}
-                              </button>
-                            )}
-                          </div>
-                        );
-                      })}
+                      {day.items.map((prediction) => (
+                        <div key={prediction.id} className="social-prediction-row">
+                          <span className={outcomeClass(prediction.outcome)}>{outcomeIcon(prediction.outcome)}</span>
+                          <span className="social-prediction-title">{prediction.title}</span>
+                          <span className="social-prediction-confidence">{prediction.confidence}%</span>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 );
@@ -757,6 +715,30 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
                 </button>
               </div>
             ))}
+          </div>
+        )}
+
+        {/* Self preview */}
+        {status?.user?.username && (
+          <div className="social-friends-list">
+            <p className="social-section-label">You</p>
+            <div
+              className={`social-friend-item ${
+                selectedUsername === status.user.username ? "active" : ""
+              }`}
+            >
+              <span className="social-friend-drag-handle" aria-hidden="true">
+                ★
+              </span>
+              <button
+                type="button"
+                className="social-friend-item-name"
+                onClick={() => setSelectedUsername(status.user!.username)}
+                title="Preview what friends see on your profile"
+              >
+                @{status.user.username} <span className="settings-hint">(preview)</span>
+              </button>
+            </div>
           </div>
         )}
 
@@ -910,6 +892,22 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
                 setSettings((current) => ({
                   ...current,
                   baseVisibility: event.target.value as SocialVisibility,
+                }))
+              }
+            >
+              <option value="private">Private</option>
+              <option value="friends">Friends</option>
+              <option value="public">Public</option>
+            </select>
+          </label>
+          <label className="social-visibility-row">
+            <span>Daily log</span>
+            <select
+              value={settings.dailyLogVisibility}
+              onChange={(event) =>
+                setSettings((current) => ({
+                  ...current,
+                  dailyLogVisibility: event.target.value as SocialVisibility,
                 }))
               }
             >

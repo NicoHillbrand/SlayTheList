@@ -13,6 +13,8 @@ import type {
   GameState,
   GameStateDetectionRegion,
   GameStateReferenceImage,
+  GoldActivityDay,
+  GoldActivitySource,
   GoldState,
   Habit,
   LockScheduleEntry,
@@ -37,6 +39,7 @@ type TodoRow = {
   archived_at: string | null;
   completed_at: string | null;
   push_count: number;
+  visibility: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -99,6 +102,7 @@ function toTodo(row: TodoRow): Todo {
     archivedAt: row.archived_at,
     completedAt: row.completed_at,
     pushCount: row.push_count ?? 0,
+    visibility: row.visibility === "private" ? "private" : "visible",
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -193,21 +197,22 @@ export function createTodo(title: string, options?: { deadlineAt?: string | null
     archivedAt: null,
     completedAt: null,
     pushCount: 0,
+    visibility: "visible",
     createdAt: now,
     updatedAt: now,
   };
   db.prepare(
     `INSERT INTO todos
-      (id, title, context, status, indent, sort_order, deadline_at, archived_at, completed_at, push_count, created_at, updated_at)
+      (id, title, context, status, indent, sort_order, deadline_at, archived_at, completed_at, push_count, visibility, created_at, updated_at)
      VALUES
-      (@id, @title, @context, @status, @indent, @sortOrder, @deadlineAt, @archivedAt, @completedAt, @pushCount, @createdAt, @updatedAt)`,
+      (@id, @title, @context, @status, @indent, @sortOrder, @deadlineAt, @archivedAt, @completedAt, @pushCount, @visibility, @createdAt, @updatedAt)`,
   ).run(todo);
   return todo;
 }
 
 export function updateTodo(
   id: string,
-  patch: Partial<Pick<Todo, "title" | "context" | "status" | "indent" | "deadlineAt" | "archivedAt" | "pushCount">>,
+  patch: Partial<Pick<Todo, "title" | "context" | "status" | "indent" | "deadlineAt" | "archivedAt" | "pushCount" | "visibility">>,
 ): Todo | undefined {
   const row = db.prepare("SELECT * FROM todos WHERE id = ?").get(id) as TodoRow | undefined;
   if (!row) return undefined;
@@ -231,6 +236,7 @@ export function updateTodo(
         ? null
         : current.completedAt,
     pushCount: patch.pushCount ?? current.pushCount,
+    visibility: patch.visibility ?? current.visibility ?? "visible",
     updatedAt: now,
   };
   db.prepare(
@@ -243,6 +249,7 @@ export function updateTodo(
          archived_at = ?,
          completed_at = ?,
          push_count = ?,
+         visibility = ?,
          updated_at = ?
      WHERE id = ?`,
   ).run(
@@ -254,6 +261,7 @@ export function updateTodo(
     next.archivedAt,
     next.completedAt,
     next.pushCount,
+    next.visibility ?? "visible",
     next.updatedAt,
     id,
   );
@@ -368,7 +376,7 @@ export function setZoneRequirements(zoneId: string, todoIds: string[]): void {
 
 export function spendGoldAndActivateUnlock(zoneId: string, amount: number, userId?: string): void {
   db.transaction(() => {
-    spendGold(amount, userId);
+    spendGold(amount, userId, { sourceType: "spend", sourceId: zoneId, label: "Unlocked a zone" });
 
     // Disable the zone (unlocked)
     db.prepare("UPDATE lock_zones SET locked = 0, updated_at = ? WHERE id = ?")
@@ -572,45 +580,159 @@ export function saveGoldState(state: GoldState, userId?: string): GoldState {
   return normalized;
 }
 
-export function awardGold(amount: number, userId?: string): GoldState {
-  const current = getGoldState(userId);
-  return saveGoldState({
-    gold: current.gold + Math.max(0, Math.floor(amount)),
-    rewardedTodoIds: current.rewardedTodoIds,
-  }, userId);
+// ---------------------------------------------------------------------------
+// Gold activity ledger — records how gold was earned/spent so we can render a
+// per-day log on the user's own profile and (privacy-filtered) to friends.
+// ---------------------------------------------------------------------------
+
+export interface GoldActivityContext {
+  sourceType: GoldActivitySource;
+  sourceId?: string | null;
+  label?: string | null;
+  // Which external agent submitted this (e.g. "claude-code"); null for in-app actions.
+  source?: string | null;
+  // ISO timestamp to backdate the entry; defaults to now.
+  at?: string | null;
 }
 
-export function awardTodoGold(todoId: string, amount: number, userId?: string): { state: GoldState; awarded: boolean } {
+function localDateKey(iso: string): string {
+  const d = new Date(iso);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+export function recordGoldActivity(
+  delta: number,
+  context: GoldActivityContext,
+  userId?: string,
+): void {
+  if (!Number.isFinite(delta) || delta === 0) return;
+  const at = context.at && !Number.isNaN(Date.parse(context.at)) ? new Date(context.at).toISOString() : new Date().toISOString();
+  db.prepare(
+    `INSERT INTO gold_activity (id, user_id, date, created_at, delta, source_type, source_id, label, source)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    randomUUID(),
+    userId ?? "local",
+    localDateKey(at),
+    at,
+    Math.trunc(delta),
+    context.sourceType,
+    context.sourceId ?? null,
+    context.label ?? "",
+    context.source ?? null,
+  );
+}
+
+type GoldActivityRow = {
+  id: string;
+  date: string;
+  created_at: string;
+  delta: number;
+  source_type: string;
+  source_id: string | null;
+  label: string | null;
+};
+
+export function listGoldActivityDays(days = 30, userId?: string): GoldActivityDay[] {
+  const rows = db
+    .prepare(
+      `SELECT id, date, created_at, delta, source_type, source_id, label
+       FROM gold_activity
+       WHERE user_id = ?
+       ORDER BY created_at DESC`,
+    )
+    .all(userId ?? "local") as GoldActivityRow[];
+
+  const byDay = new Map<string, GoldActivityDay>();
+  for (const row of rows) {
+    let day = byDay.get(row.date);
+    if (!day) {
+      day = { date: row.date, total: 0, entries: [] };
+      byDay.set(row.date, day);
+    }
+    day.total += row.delta;
+    day.entries.push({
+      id: row.id,
+      date: row.date,
+      createdAt: row.created_at,
+      delta: row.delta,
+      sourceType: (row.source_type as GoldActivitySource) ?? "manual",
+      sourceId: row.source_id,
+      label: row.label ?? "",
+    });
+  }
+  return [...byDay.values()]
+    .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
+    .slice(0, Math.max(0, days));
+}
+
+export function awardGold(amount: number, userId?: string, activity?: GoldActivityContext): GoldState {
+  const delta = Math.max(0, Math.floor(amount));
+  const current = getGoldState(userId);
+  const state = saveGoldState({
+    gold: current.gold + delta,
+    rewardedTodoIds: current.rewardedTodoIds,
+  }, userId);
+  // Only write a log entry when the caller describes the activity. Bare balance
+  // bumps (e.g. `award_gold` with just an amount) stay out of the log.
+  if (activity) recordGoldActivity(delta, activity, userId);
+  return state;
+}
+
+export function awardTodoGold(
+  todoId: string,
+  amount: number,
+  userId?: string,
+  activity?: GoldActivityContext,
+): { state: GoldState; awarded: boolean } {
   const current = getGoldState(userId);
   if (current.rewardedTodoIds.includes(todoId)) {
     return { state: current, awarded: false };
   }
+  const delta = Math.max(0, Math.floor(amount));
   const state = saveGoldState({
-    gold: current.gold + Math.max(0, Math.floor(amount)),
+    gold: current.gold + delta,
     rewardedTodoIds: [...current.rewardedTodoIds, todoId],
   }, userId);
+  recordGoldActivity(
+    delta,
+    activity ?? { sourceType: "todo", sourceId: todoId, label: "" },
+    userId,
+  );
   return { state, awarded: true };
 }
 
-export function deductGold(amount: number, userId?: string): GoldState {
+export function deductGold(amount: number, userId?: string, activity?: GoldActivityContext): GoldState {
   const normalizedAmount = Math.max(0, Math.floor(amount));
   const current = getGoldState(userId);
-  return saveGoldState({
+  const applied = Math.min(normalizedAmount, current.gold);
+  const state = saveGoldState({
     gold: Math.max(0, current.gold - normalizedAmount),
     rewardedTodoIds: current.rewardedTodoIds,
   }, userId);
+  if (applied > 0) {
+    recordGoldActivity(-applied, activity ?? { sourceType: "spend" }, userId);
+  }
+  return state;
 }
 
-export function spendGold(amount: number, userId?: string): GoldState {
+export function spendGold(amount: number, userId?: string, activity?: GoldActivityContext): GoldState {
   const normalizedAmount = Math.max(0, Math.floor(amount));
   const current = getGoldState(userId);
   if (current.gold < normalizedAmount) {
     throw new Error("not enough gold");
   }
-  return saveGoldState({
+  const state = saveGoldState({
     gold: current.gold - normalizedAmount,
     rewardedTodoIds: current.rewardedTodoIds,
   }, userId);
+  if (normalizedAmount > 0) {
+    recordGoldActivity(-normalizedAmount, activity ?? { sourceType: "spend" }, userId);
+  }
+  return state;
 }
 
 // ---------------------------------------------------------------------------
@@ -1126,6 +1248,18 @@ export function checkAndAwardDiamonds(): { awarded: number; newMilestones: numbe
   }
 
   return { awarded, newMilestones };
+}
+
+/** Award premium base currency (diamonds/emeralds). Gold is deliberately NOT
+ *  awardable here — gold is minted by productivity (todos/habits) only, so
+ *  in-game rewards can't become a substitute for doing real work. */
+export function awardBaseCurrency(currency: "diamonds" | "emeralds", amount: number): { diamonds: number; emeralds: number } {
+  if (amount > 0) {
+    const now = new Date().toISOString();
+    db.prepare(`UPDATE base_state SET ${currency} = ${currency} + ?, updated_at = ? WHERE id = 1`).run(amount, now);
+  }
+  const updated = getBaseState();
+  return { diamonds: updated.currencies.diamonds, emeralds: updated.currencies.emeralds };
 }
 
 export function purchaseBaseItem(itemId: string, cost: number, currency: BaseCurrencyType = "gold"): { gold: number; diamonds: number; emeralds: number; inventory: BaseInventory } {

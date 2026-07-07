@@ -108,6 +108,21 @@ CREATE TABLE IF NOT EXISTS gold_state (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS gold_activity (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL DEFAULT 'local',
+  date TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  delta INTEGER NOT NULL,
+  source_type TEXT NOT NULL,
+  source_id TEXT,
+  label TEXT NOT NULL DEFAULT '',
+  source TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_gold_activity_user_date
+  ON gold_activity(user_id, date);
+
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   username TEXT NOT NULL,
@@ -368,6 +383,7 @@ ensureTodoColumn("deadline_at", "TEXT");
 ensureTodoColumn("archived_at", "TEXT");
 ensureTodoColumn("completed_at", "TEXT");
 ensureTodoColumn("push_count", "INTEGER NOT NULL DEFAULT 0");
+ensureTodoColumn("visibility", "TEXT NOT NULL DEFAULT 'visible'");
 ensureLockZoneColumn("unlock_mode", "TEXT NOT NULL DEFAULT 'todos' CHECK(unlock_mode IN ('todos', 'gold'))");
 ensureLockZoneColumn("cooldown_enabled", "INTEGER NOT NULL DEFAULT 0");
 ensureLockZoneColumn("cooldown_seconds", "INTEGER NOT NULL DEFAULT 3600");
@@ -510,6 +526,16 @@ function ensureSocialSettingsColumn(table: string, name: string, definition: str
 ensureSocialSettingsColumn("local_social_settings", "walkthroughs_visibility", "TEXT NOT NULL DEFAULT 'private'");
 ensureSocialSettingsColumn("user_social_settings", "walkthroughs_visibility", "TEXT NOT NULL DEFAULT 'private'");
 ensureSocialSettingsColumn("local_social_settings", "base_visibility", "TEXT NOT NULL DEFAULT 'friends'");
+ensureSocialSettingsColumn("local_social_settings", "daily_log_visibility", "TEXT NOT NULL DEFAULT 'friends'");
+ensureSocialSettingsColumn("user_social_settings", "daily_log_visibility", "TEXT NOT NULL DEFAULT 'friends'");
+
+// gold_activity: add source column (which external agent submitted the entry)
+{
+  const existing = db
+    .prepare("SELECT 1 FROM pragma_table_info('gold_activity') WHERE name = 'source' LIMIT 1")
+    .get() as { 1: number } | undefined;
+  if (!existing) db.exec("ALTER TABLE gold_activity ADD COLUMN source TEXT;");
+}
 
 ensureBaseStateColumn("diamonds", "INTEGER NOT NULL DEFAULT 0");
 ensureBaseStateColumn("emeralds", "INTEGER NOT NULL DEFAULT 0");

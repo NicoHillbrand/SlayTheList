@@ -19,7 +19,7 @@ Individual rows with full CRUD:
 | Tool | Purpose |
 |------|---------|
 | `get_gold` | Returns the current `GoldState` (`gold` balance + `rewardedTodoIds`). |
-| `award_gold` | Add gold. Requires `amount` (non-negative integer). Optional `with_sound: true` plays the gold coin sound in the overlay (best-effort — needs the API server running). Defaults to silent. |
+| `award_gold` | Add gold. Requires `amount` (non-negative integer). Optional: `title` — records a named achievement in the daily/shareable log (omit for a silent balance-only bump); `category` — `"Tasks"` \| `"Habits"` \| `"Encouragements"` (unknown/missing → `"Other"`); `source` — which agent submitted it (e.g. `"claude-code"`); `timestamp` — ISO 8601 to backdate; `with_sound: true` plays the gold coin sound in the overlay (best-effort — needs the API server running). |
 | `spend_gold` | Deduct gold (clamps at zero, never negative). Requires `amount`. Optional `with_sound` like above. |
 
 ### Habits, Predictions, Reflections

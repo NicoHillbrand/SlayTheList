@@ -141,4 +141,6 @@ function ensureColumn(table: string, name: string, definition: string) {
 }
 ensureColumn("user_social_settings", "walkthroughs_visibility", "TEXT NOT NULL DEFAULT 'private'");
 ensureColumn("user_social_settings", "base_visibility", "TEXT NOT NULL DEFAULT 'friends'");
+ensureColumn("user_social_settings", "daily_log_visibility", "TEXT NOT NULL DEFAULT 'friends'");
 ensureColumn("user_social_snapshots", "base_json", "TEXT NOT NULL DEFAULT 'null'");
+ensureColumn("user_social_snapshots", "daily_log_json", "TEXT NOT NULL DEFAULT '[]'");

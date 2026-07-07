@@ -65,6 +65,7 @@ type SocialSettingsRow = {
   gold_visibility: SocialSettings["goldVisibility"];
   walkthroughs_visibility?: SocialSettings["walkthroughsVisibility"];
   base_visibility?: SocialSettings["baseVisibility"];
+  daily_log_visibility?: SocialSettings["dailyLogVisibility"];
 };
 
 type SnapshotRow = {
@@ -72,6 +73,7 @@ type SnapshotRow = {
   predictions_json: string;
   gold_json: string;
   base_json?: string;
+  daily_log_json?: string;
   source_updated_at: string;
   synced_at: string;
 };
@@ -91,7 +93,18 @@ const DEFAULT_SOCIAL_SETTINGS: SocialSettings = {
   goldVisibility: "friends",
   walkthroughsVisibility: "private",
   baseVisibility: "friends",
+  dailyLogVisibility: "friends",
 };
+
+function safeParseSharedDailyLog(value: string | undefined | null): SocialSnapshot["dailyLog"] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
 
 function safeParseBaseSnapshot(value: string | undefined | null): BaseSnapshot | null {
   if (!value || value === "null") return null;
@@ -390,7 +403,7 @@ export function getSocialSettings(userId: string): SocialSettings {
   ensureUserSocialRows(userId);
   const row = db
     .prepare(
-      `SELECT habits_visibility, predictions_visibility, gold_visibility, walkthroughs_visibility, base_visibility
+      `SELECT habits_visibility, predictions_visibility, gold_visibility, walkthroughs_visibility, base_visibility, daily_log_visibility
        FROM user_social_settings
        WHERE user_id = ?`,
     )
@@ -402,6 +415,7 @@ export function getSocialSettings(userId: string): SocialSettings {
     goldVisibility: row.gold_visibility,
     walkthroughsVisibility: row.walkthroughs_visibility ?? "private",
     baseVisibility: row.base_visibility ?? "friends",
+    dailyLogVisibility: row.daily_log_visibility ?? "friends",
   };
 }
 
@@ -414,6 +428,7 @@ export function saveSocialSettings(userId: string, settings: SocialSettings) {
          gold_visibility = ?,
          walkthroughs_visibility = ?,
          base_visibility = ?,
+         daily_log_visibility = ?,
          updated_at = ?
      WHERE user_id = ?`,
   ).run(
@@ -422,6 +437,7 @@ export function saveSocialSettings(userId: string, settings: SocialSettings) {
     settings.goldVisibility,
     settings.walkthroughsVisibility,
     settings.baseVisibility,
+    settings.dailyLogVisibility,
     new Date().toISOString(),
     userId,
   );
@@ -437,6 +453,7 @@ export function saveSocialSnapshot(userId: string, snapshot: SocialSnapshot) {
          predictions_json = ?,
          gold_json = ?,
          base_json = ?,
+         daily_log_json = ?,
          source_updated_at = ?,
          synced_at = ?
      WHERE user_id = ?`,
@@ -445,6 +462,7 @@ export function saveSocialSnapshot(userId: string, snapshot: SocialSnapshot) {
     JSON.stringify(snapshot.predictions),
     JSON.stringify(snapshot.gold),
     JSON.stringify(snapshot.base ?? null),
+    JSON.stringify(snapshot.dailyLog ?? []),
     snapshot.sourceUpdatedAt,
     syncedAt,
     userId,
@@ -459,7 +477,7 @@ function getSnapshot(userId: string): SocialSnapshot {
   ensureUserSocialRows(userId);
   const row = db
     .prepare(
-      `SELECT habits_json, predictions_json, gold_json, base_json, source_updated_at, synced_at
+      `SELECT habits_json, predictions_json, gold_json, base_json, daily_log_json, source_updated_at, synced_at
        FROM user_social_snapshots
        WHERE user_id = ?`,
     )
@@ -471,6 +489,7 @@ function getSnapshot(userId: string): SocialSnapshot {
       habits: [],
       predictions: [],
       gold: { gold: 0, rewardedTodoIds: [] },
+      dailyLog: [],
       sourceUpdatedAt: now,
       syncedAt: now,
     };
@@ -481,6 +500,7 @@ function getSnapshot(userId: string): SocialSnapshot {
     habits: safeParseArray(row.habits_json),
     predictions: safeParseArray(row.predictions_json),
     gold: safeParseGoldState(row.gold_json),
+    dailyLog: safeParseSharedDailyLog(row.daily_log_json),
     base: base ?? undefined,
     sourceUpdatedAt: row.source_updated_at,
     syncedAt: row.synced_at,
@@ -677,6 +697,7 @@ export function getSharedProfile(viewerUserId: string, targetUsername: string): 
   const canViewPredictions = canViewerSeeSection(settings.predictionsVisibility, relationship, viewerUserId);
   const canViewGold = canViewerSeeSection(settings.goldVisibility, relationship, viewerUserId);
   const canViewBase = canViewerSeeSection(settings.baseVisibility, relationship, viewerUserId);
+  const canViewDailyLog = canViewerSeeSection(settings.dailyLogVisibility, relationship, viewerUserId);
   const encouragedEntryIds = getEncouragementEntryIdsByViewer(viewerUserId, target.id);
   const remainingToday = getEncourementsRemainingToday(viewerUserId);
   return {
@@ -702,6 +723,11 @@ export function getSharedProfile(viewerUserId: string, targetUsername: string): 
       visibility: settings.baseVisibility,
       canView: canViewBase,
       snapshot: canViewBase ? (snapshot.base ?? null) : null,
+    },
+    dailyLog: {
+      visibility: settings.dailyLogVisibility,
+      canView: canViewDailyLog,
+      days: canViewDailyLog ? (snapshot.dailyLog ?? []) : [],
     },
     encouragedEntryIds,
     encouragementsRemainingToday: remainingToday,

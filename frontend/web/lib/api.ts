@@ -14,6 +14,8 @@ import type {
   GameState,
   GameStateDetectionRegion,
   GameStateReferenceImage,
+  GoldActivityDay,
+  GoldActivitySource,
   GoldState,
   Habit,
   HabitStatus,
@@ -253,6 +255,7 @@ export async function updateTodo(
     deadlineTime: string;
     archived: boolean;
     pushCount: number;
+    visibility: "visible" | "private";
   }>,
 ) {
   return request<Todo>(`/api/todos/${id}`, {
@@ -359,25 +362,35 @@ export async function saveGoldState(state: GoldState) {
   });
 }
 
-export async function awardGold(amount: number) {
+export type GoldActivityInput = {
+  sourceType: GoldActivitySource;
+  sourceId?: string | null;
+  label?: string;
+};
+
+export async function awardGold(amount: number, activity?: GoldActivityInput) {
   return request<GoldState>("/api/gold/award", {
     method: "POST",
-    body: JSON.stringify({ amount }),
+    body: JSON.stringify({ amount, activity }),
   });
 }
 
-export async function deductGold(amount: number) {
+export async function deductGold(amount: number, activity?: GoldActivityInput) {
   return request<GoldState>("/api/gold/deduct", {
     method: "POST",
-    body: JSON.stringify({ amount }),
+    body: JSON.stringify({ amount, activity }),
   });
 }
 
-export async function awardTodoGold(todoId: string, amount: number) {
+export async function awardTodoGold(todoId: string, amount: number, activity?: GoldActivityInput) {
   return request<{ state: GoldState; awarded: boolean }>("/api/gold/award-todo", {
     method: "POST",
-    body: JSON.stringify({ todoId, amount }),
+    body: JSON.stringify({ todoId, amount, activity }),
   });
+}
+
+export async function listGoldActivity(days = 30) {
+  return request<{ days: GoldActivityDay[] }>(`/api/gold/activity?days=${days}`);
 }
 
 export async function listHabits() {

@@ -14,6 +14,9 @@ export const todoSchema = z.object({
   archivedAt: z.string().nullable(),
   completedAt: z.string().nullable(),
   pushCount: z.number().int().nonnegative(),
+  // Controls whether this todo's title shows up in the shared daily gold log.
+  // Defaults to "visible"; toggled per-todo from the edit (pen) UI.
+  visibility: z.enum(["visible", "private"]).optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -55,6 +58,12 @@ export const predictionSchema = z.object({
   murphy: z.boolean().optional(),
   targetTitle: z.string().optional(),
   visibility: itemVisibilitySchema.optional(),
+  // Gold escrowed on this prediction at creation. While pending, a staked
+  // prediction's confidence is locked (it determines the payout).
+  stake: z.number().int().min(1).optional(),
+  // Gold returned at resolution (0 = stake fully lost). Set iff stake is set
+  // and the prediction is resolved.
+  payout: z.number().int().min(0).optional(),
 });
 export type Prediction = z.infer<typeof predictionSchema>;
 
@@ -106,6 +115,58 @@ export const goldStateSchema = z.object({
 });
 export type GoldState = z.infer<typeof goldStateSchema>;
 
+// ---------------------------------------------------------------------------
+// Gold activity ledger — a per-action history of how gold was earned/spent,
+// aggregated per day for the "daily log" shown on your own and friends' profiles.
+// ---------------------------------------------------------------------------
+
+export const goldActivitySourceSchema = z.enum([
+  "todo",
+  "habit",
+  "encouragement",
+  "manual",
+  "spend",
+  "prediction",
+]);
+export type GoldActivitySource = z.infer<typeof goldActivitySourceSchema>;
+
+// A single ledger row as stored/served locally (full detail, no privacy applied).
+export const goldActivityEntrySchema = z.object({
+  id: z.string(),
+  date: z.string(), // YYYY-MM-DD (local day the action happened)
+  createdAt: z.string(), // ISO timestamp
+  delta: z.number().int(), // positive = earned, negative = spent
+  sourceType: goldActivitySourceSchema,
+  sourceId: z.string().nullable(),
+  label: z.string(), // e.g. todo title or habit name at time of the action
+});
+export type GoldActivityEntry = z.infer<typeof goldActivityEntrySchema>;
+
+// A single day's rollup for local display.
+export const goldActivityDaySchema = z.object({
+  date: z.string(), // YYYY-MM-DD
+  total: z.number().int(), // net gold for the day
+  entries: z.array(goldActivityEntrySchema),
+});
+export type GoldActivityDay = z.infer<typeof goldActivityDaySchema>;
+
+// The privacy-applied form that gets shared with friends. Private entries keep
+// their delta (so day totals still reconcile) but drop the identifying label.
+export const sharedDailyLogEntrySchema = z.object({
+  delta: z.number().int(),
+  sourceType: goldActivitySourceSchema,
+  label: z.string().nullable(), // null when the source item is private
+  private: z.boolean(),
+});
+export type SharedDailyLogEntry = z.infer<typeof sharedDailyLogEntrySchema>;
+
+export const sharedDailyLogDaySchema = z.object({
+  date: z.string(), // YYYY-MM-DD
+  total: z.number().int(),
+  entries: z.array(sharedDailyLogEntrySchema),
+});
+export type SharedDailyLogDay = z.infer<typeof sharedDailyLogDaySchema>;
+
 export const socialVisibilitySchema = z.enum(["private", "friends", "public"]);
 export type SocialVisibility = z.infer<typeof socialVisibilitySchema>;
 
@@ -136,6 +197,7 @@ export const socialSettingsSchema = z.object({
   goldVisibility: socialVisibilitySchema.default("friends"),
   walkthroughsVisibility: socialVisibilitySchema.default("private"),
   baseVisibility: socialVisibilitySchema.default("friends"),
+  dailyLogVisibility: socialVisibilitySchema.default("friends"),
 });
 export type SocialSettings = z.infer<typeof socialSettingsSchema>;
 
@@ -209,6 +271,15 @@ export const sharedProfileSchema = z.object({
       snapshot: z.lazy(() => baseSnapshotSchema).nullable(),
     })
     .optional(),
+  // Optional so this schema still validates against older cloud servers that
+  // predate the daily-log feature.
+  dailyLog: z
+    .object({
+      visibility: socialVisibilitySchema,
+      canView: z.boolean(),
+      days: z.array(sharedDailyLogDaySchema),
+    })
+    .optional(),
   encouragedEntryIds: z.array(z.string()).optional(),
   encouragementsRemainingToday: z.number().optional(),
 });
@@ -256,6 +327,8 @@ export const socialSnapshotSchema = z.object({
   predictions: z.array(predictionSchema),
   walkthroughs: z.array(walkthroughSchema).optional(),
   gold: goldStateSchema,
+  // Privacy already applied before this leaves the local machine.
+  dailyLog: z.array(sharedDailyLogDaySchema).optional(),
   // Forward-referenced — defined further down in the Base Builder section.
   base: z.lazy(() => baseSnapshotSchema).optional(),
   sourceUpdatedAt: z.string(),

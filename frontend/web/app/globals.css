@@ -1059,6 +1059,38 @@ body.desktop-app main {
   flex-shrink: 0;
 }
 
+.prediction-confidence-input:disabled {
+  color: #bbb4a4;
+  opacity: 1;
+  cursor: default;
+}
+
+.prediction-stake-add {
+  width: 5rem;
+}
+
+.prediction-stake-chip {
+  color: #e8c86a;
+  font-size: 0.85rem;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+  cursor: help;
+}
+
+.prediction-stake-result {
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.prediction-stake-result.is-win {
+  color: #9fce7f;
+}
+
+.prediction-stake-result.is-loss {
+  color: #d98b7a;
+}
+
 .visibility-toggle {
   background: rgba(20, 31, 47, 0.85);
   color: #cec6b5;
@@ -2245,6 +2277,465 @@ body.desktop-app main {
   font-size: 0.85rem;
   min-width: 1rem;
   text-align: center;
+}
+
+/* Habit checkmark grid (shared profile) */
+.social-habit-grid-wrap {
+  overflow-x: auto;
+  margin-bottom: 0.6rem;
+}
+
+.social-habit-grid {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.8rem;
+}
+
+.social-habit-grid th,
+.social-habit-grid td {
+  padding: 0.2rem 0.3rem;
+  text-align: center;
+}
+
+.social-habit-grid-name {
+  text-align: left;
+  color: #e8e0d0;
+  max-width: 11rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.social-habit-grid-day {
+  color: #8b8477;
+  font-weight: 600;
+  line-height: 1.1;
+}
+
+.social-habit-grid-day-label,
+.social-habit-grid-day-sub {
+  display: block;
+}
+
+.social-habit-grid-day-sub {
+  font-size: 0.62rem;
+  opacity: 0.7;
+  font-weight: 400;
+}
+
+.social-habit-grid-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 5px;
+  background: rgba(17, 24, 39, 0.45);
+  color: #4b5568;
+}
+
+.social-habit-grid-mark.done {
+  background: rgba(110, 231, 183, 0.16);
+  color: #6ee7b7;
+  font-weight: 700;
+}
+
+/* Bonus habits: a labeled divider row + subtler, gold-tinted styling */
+.social-habit-grid-section td {
+  text-align: left;
+  padding: 0.45rem 0.3rem 0.2rem;
+  font-size: 0.66rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #c9a94a;
+  border-top: 1px solid rgba(233, 196, 106, 0.18);
+}
+
+.social-habit-grid tr.is-bonus .social-habit-grid-name {
+  color: #c9b98a;
+}
+
+.social-habit-grid-mark.bonus.done {
+  background: rgba(233, 196, 106, 0.18);
+  color: #e9c46a;
+}
+
+/* Daily gold log (shared profile) */
+.social-log-timeline {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.social-log-day {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.social-log-day-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.social-log-day-total {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #e9c46a;
+  font-variant-numeric: tabular-nums;
+}
+
+.social-log-day-total.negative {
+  color: #fda4af;
+}
+
+.social-log-entries {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.social-log-entry {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.5rem;
+  border-radius: 6px;
+  background: rgba(17, 24, 39, 0.45);
+}
+
+.social-log-entry-icon {
+  min-width: 1.1rem;
+  text-align: center;
+  font-size: 0.85rem;
+}
+
+.social-log-entry-label {
+  flex: 1;
+  font-size: 0.85rem;
+  color: #e8e0d0;
+}
+
+.social-log-entry-label.is-private {
+  color: #8b8477;
+  font-style: italic;
+}
+
+.social-log-entry-delta {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #e9c46a;
+  font-variant-numeric: tabular-nums;
+}
+
+.social-log-entry-delta.negative {
+  color: #fda4af;
+}
+
+.social-log-past {
+  margin-top: 0.25rem;
+}
+
+.social-log-past > summary {
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.social-log-past > summary::before {
+  content: "\25b6";
+  display: inline-block;
+  margin-right: 0.4em;
+  font-size: 0.6em;
+  transition: transform 0.15s ease;
+}
+
+.social-log-past[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.social-log-past > summary::-webkit-details-marker {
+  display: none;
+}
+
+.social-log-past > .social-log-day {
+  margin-top: 0.5rem;
+}
+
+/* Shareable achievement summary (own social profile) */
+.achievement-card {
+  display: grid;
+  gap: 0.9rem;
+  padding: 1.25rem;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(20, 27, 42, 0.9), rgba(12, 17, 28, 0.92));
+  border: 1px solid rgba(233, 196, 106, 0.18);
+}
+
+.achievement-range-toggle {
+  display: inline-flex;
+  gap: 0.25rem;
+  padding: 0.2rem;
+  border-radius: 999px;
+  background: rgba(17, 24, 39, 0.6);
+  width: fit-content;
+}
+
+.achievement-range-btn {
+  border: none;
+  background: transparent;
+  color: #8b8477;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 0.3rem 0.8rem;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.achievement-range-btn.active {
+  background: rgba(233, 196, 106, 0.16);
+  color: #e9c46a;
+}
+
+.achievement-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.achievement-header-text {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.achievement-user {
+  font-size: 0.8rem;
+  color: #8b8477;
+}
+
+.achievement-range-label {
+  font-family: Cinzel, Georgia, serif;
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: #e8e0d0;
+  line-height: 1.1;
+}
+
+.achievement-date {
+  font-size: 0.75rem;
+  color: #8b8477;
+}
+
+.achievement-total {
+  display: grid;
+  justify-items: end;
+  line-height: 1;
+}
+
+.achievement-total-value {
+  font-size: 2rem;
+  font-weight: 800;
+  color: #e9c46a;
+  font-variant-numeric: tabular-nums;
+}
+
+.achievement-total-unit {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #8b8477;
+}
+
+.achievement-range-prefix {
+  font-size: 0.78rem;
+  color: #8b8477;
+  padding: 0 0.15rem;
+}
+
+.achievement-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.achievement-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  border: 1px solid rgba(233, 196, 106, 0.22);
+  background: rgba(233, 196, 106, 0.1);
+  color: #e0d7c2;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.22rem 0.6rem;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.achievement-filter-chip.is-off {
+  opacity: 0.4;
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.12);
+  text-decoration: line-through;
+}
+
+.achievement-filter-icon {
+  font-size: 0.75rem;
+}
+
+.achievement-days {
+  display: grid;
+  gap: 1rem;
+}
+
+.achievement-day {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.achievement-day-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.achievement-day-label {
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: #e8e0d0;
+}
+
+.achievement-day-total {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #e9c46a;
+  font-variant-numeric: tabular-nums;
+}
+
+.achievement-empty {
+  margin: 0;
+  font-size: 0.8rem;
+  color: #6b6459;
+  font-style: italic;
+}
+
+.achievement-categories {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.achievement-category {
+  border-radius: 10px;
+  background: rgba(17, 24, 39, 0.45);
+  overflow: hidden;
+}
+
+.achievement-category.is-off {
+  opacity: 0.4;
+}
+
+.achievement-category-header {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  padding: 0.5rem 0.7rem;
+  border: none;
+  background: transparent;
+  text-align: left;
+}
+
+.achievement-category-icon {
+  font-size: 0.9rem;
+}
+
+.achievement-category-name {
+  font-weight: 700;
+  font-size: 0.82rem;
+  color: #e8e0d0;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.achievement-category-count {
+  font-size: 0.68rem;
+  color: #8b8477;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 999px;
+  padding: 0.05rem 0.45rem;
+}
+
+.achievement-category-total {
+  margin-left: auto;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #e9c46a;
+  font-variant-numeric: tabular-nums;
+}
+
+.achievement-items {
+  display: grid;
+  gap: 0.1rem;
+  padding: 0 0.7rem 0.55rem 2.15rem;
+}
+
+.achievement-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  justify-content: space-between;
+  padding: 0.2rem 0;
+}
+
+.achievement-item-label {
+  font-size: 0.84rem;
+  color: #d8d1c2;
+}
+
+.achievement-item-label.is-private {
+  color: #8b8477;
+  font-style: italic;
+}
+
+.achievement-item-delta {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #c9b978;
+  font-variant-numeric: tabular-nums;
+}
+
+.achievement-habits {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.achievement-section-label {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #8b8477;
+}
+
+/* Todo edit modal visibility toggle */
+.todo-edit-visibility-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.todo-edit-visibility-row .visibility-toggle {
+  white-space: nowrap;
 }
 
 /* Encourage / celebrate buttons */

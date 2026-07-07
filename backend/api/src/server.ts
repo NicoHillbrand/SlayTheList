@@ -60,6 +60,8 @@ import {
   awardGold,
   awardTodoGold,
   deductGold,
+  listGoldActivityDays,
+  type GoldActivityContext,
   saveAccountabilityState,
   setZoneRequirements,
   updateBlock,
@@ -71,6 +73,7 @@ import {
   getBaseState,
   saveBaseState,
   purchaseBaseItem,
+  awardBaseCurrency,
   getProgression,
   checkAndAwardDiamonds,
 } from "./store.js";
@@ -447,6 +450,16 @@ app.patch("/api/todos/:id", (req, res) => {
   const pushCount = req.body?.pushCount;
   const deadlineAt = req.body?.deadlineAt;
   const deadlineTime = req.body?.deadlineTime;
+  const visibility = req.body?.visibility;
+  const parsedVisibility =
+    visibility === undefined
+      ? undefined
+      : visibility === "visible" || visibility === "private"
+        ? visibility
+        : null;
+  if (parsedVisibility === null) {
+    return badRequest(res, "visibility must be 'visible' or 'private'");
+  }
   const parsedStatus = status === undefined ? undefined : status === "active" || status === "done" ? status : null;
   if (parsedStatus === null) {
     return badRequest(res, "status must be active or done");
@@ -491,7 +504,8 @@ app.patch("/api/todos/:id", (req, res) => {
     parsedIndent === undefined &&
     parsedArchived === undefined &&
     parsedPushCount === undefined &&
-    parsedDeadline.value === undefined
+    parsedDeadline.value === undefined &&
+    parsedVisibility === undefined
   ) {
     return badRequest(res, "no valid todo fields provided");
   }
@@ -503,6 +517,7 @@ app.patch("/api/todos/:id", (req, res) => {
     deadlineAt: parsedDeadline.value,
     archivedAt: parsedArchived === undefined ? undefined : parsedArchived ? new Date().toISOString() : null,
     pushCount: parsedPushCount,
+    visibility: parsedVisibility,
   });
   if (!updated) {
     return res.status(404).json({ error: "todo not found" });
@@ -552,15 +567,66 @@ app.put("/api/gold-state", (req, res) => {
   triggerCloudSnapshotSync();
 });
 
+const GOLD_ACTIVITY_SOURCES = new Set(["todo", "habit", "encouragement", "manual", "spend", "prediction"]);
+
+function parseActivity(raw: unknown): GoldActivityContext | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const obj = raw as Record<string, unknown>;
+  const sourceType = obj.sourceType;
+  if (typeof sourceType !== "string" || !GOLD_ACTIVITY_SOURCES.has(sourceType)) return undefined;
+  return {
+    sourceType: sourceType as GoldActivityContext["sourceType"],
+    sourceId: typeof obj.sourceId === "string" ? obj.sourceId : null,
+    label: typeof obj.label === "string" ? obj.label.slice(0, 500) : "",
+  };
+}
+
+// Map a friendly category name (as shown in the achievement view) to a ledger
+// source type. Unknown / missing categories fall back to "manual" (the "Other"
+// bucket in the UI).
+function categoryToSourceType(category: unknown): GoldActivityContext["sourceType"] {
+  const c = typeof category === "string" ? category.trim().toLowerCase() : "";
+  if (c === "tasks" || c === "task" || c === "todo" || c === "todos") return "todo";
+  if (c === "habits" || c === "habit") return "habit";
+  if (c === "encouragements" || c === "encouragement" || c === "encourage") return "encouragement";
+  if (c === "predictions" || c === "prediction") return "prediction";
+  return "manual";
+}
+
+// Build a log entry from the external-agent submission fields (title/category/
+// source/timestamp). Returns undefined when no title is given, so bare balance
+// bumps don't produce a log entry.
+function parseAgentActivity(body: Record<string, unknown> | undefined): GoldActivityContext | undefined {
+  const title = body?.title;
+  if (typeof title !== "string" || !title.trim()) return undefined;
+  const timestamp = typeof body?.timestamp === "string" ? body.timestamp : null;
+  return {
+    sourceType: categoryToSourceType(body?.category),
+    label: title.trim().slice(0, 500),
+    source: typeof body?.source === "string" ? body.source.slice(0, 120) : null,
+    at: timestamp,
+  };
+}
+
 app.post("/api/gold/award", (req, res) => {
   const amount = req.body?.amount;
   const withSound = req.body?.withSound === true;
   if (typeof amount !== "number" || !Number.isInteger(amount) || amount < 0) {
     return badRequest(res, "amount must be a non-negative integer");
   }
-  ok(res, awardGold(amount));
+  // Precedence: an explicit internal `activity` object, else agent
+  // title/category fields, else nothing (balance-only).
+  const activity = parseActivity(req.body?.activity) ?? parseAgentActivity(req.body);
+  ok(res, awardGold(amount, undefined, activity));
   if (withSound) broadcastPlaySound("gold");
   triggerCloudSnapshotSync();
+});
+
+app.get("/api/gold/activity", (req, res) => {
+  const rawLimit = req.query?.days;
+  const parsed = typeof rawLimit === "string" ? Number.parseInt(rawLimit, 10) : NaN;
+  const days = Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 365) : 30;
+  ok(res, { days: listGoldActivityDays(days) });
 });
 
 app.post("/api/gold/deduct", (req, res) => {
@@ -569,7 +635,7 @@ app.post("/api/gold/deduct", (req, res) => {
   if (typeof amount !== "number" || !Number.isInteger(amount) || amount < 0) {
     return badRequest(res, "amount must be a non-negative integer");
   }
-  ok(res, deductGold(amount));
+  ok(res, deductGold(amount, undefined, parseActivity(req.body?.activity)));
   if (withSound) broadcastPlaySound("gold");
   triggerCloudSnapshotSync();
 });
@@ -590,7 +656,12 @@ app.post("/api/gold/award-todo", (req, res) => {
   if (typeof amount !== "number" || !Number.isInteger(amount) || amount < 0) {
     return badRequest(res, "amount must be a non-negative integer");
   }
-  const result = awardTodoGold(todoId.trim(), amount);
+  const activity = parseActivity(req.body?.activity) ?? {
+    sourceType: "todo" as const,
+    sourceId: todoId.trim(),
+    label: "",
+  };
+  const result = awardTodoGold(todoId.trim(), amount, undefined, activity);
   ok(res, result);
   triggerCloudSnapshotSync();
 });
@@ -1465,6 +1536,20 @@ app.post("/api/base-shop/purchase", (req, res) => {
 
 app.post("/api/base-diamonds/check", (_req, res) => {
   ok(res, checkAndAwardDiamonds());
+});
+
+// Award premium currency (diamonds/emeralds) — e.g. arena run rewards.
+// Gold is intentionally rejected: gold is minted by productivity only.
+app.post("/api/base-currencies/award", (req, res) => {
+  const currency = req.body?.currency;
+  const amount = req.body?.amount;
+  if (currency !== "diamonds" && currency !== "emeralds") {
+    return badRequest(res, "currency must be 'diamonds' or 'emeralds'");
+  }
+  if (typeof amount !== "number" || !Number.isInteger(amount) || amount < 0) {
+    return badRequest(res, "amount must be a non-negative integer");
+  }
+  ok(res, awardBaseCurrency(currency, amount));
 });
 
 app.get("/api/overlay-state", (_req, res) => {
