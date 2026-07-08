@@ -15,6 +15,7 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@slaythelist/combat-engine": "0.1.0",
     "@slaythelist/contracts": "0.1.0",
+    "@slaythelist/defense-engine": "0.1.0",
     "html-to-image": "^1.11.13",
     "next": "^15.2.0",
     "phaser": "^3.90.0",

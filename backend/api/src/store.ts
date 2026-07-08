@@ -1,6 +1,17 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import {
+  DEFAULT_PARAMS as DEFENSE_BASE_PARAMS,
+  advance as advanceDefense,
+  buyUpgrade as buyDefenseSlot,
+  createDefenseState,
+  emptyMeta as emptyDefenseMeta,
+  upgradeCost as defenseUpgradeCost,
+  type DefenseEvent,
+  type DefenseParams,
+  type DefenseState,
+} from "@slaythelist/defense-engine";
 import { db, referenceImagesDir } from "./db.js";
 import type {
   AccountabilityState,
@@ -1386,4 +1397,169 @@ export function getProgression(): Progression {
     totalPredictions: predictions.length,
     totalReflections: reflections.length,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Lane defense (Stage 1) — the headless sim from @slaythelist/defense-engine
+// persisted as a singleton per mode. id=1: real (upgrades spend real gold).
+// id=2: sandbox playtest (practice wallet, time-skip allowed, never touches
+// real gold). Every read lazily fast-forwards the sim to now.
+// ---------------------------------------------------------------------------
+
+const DEFENSE_SANDBOX_START_WALLET = 500;
+const DEFENSE_DEATH_MODE_KEY = "defense.deathMode";
+
+export type DefenseDeathMode = "knockback" | "reset";
+
+export function getDefenseDeathMode(): DefenseDeathMode {
+  return getSetting(DEFENSE_DEATH_MODE_KEY) === "knockback" ? "knockback" : "reset";
+}
+
+export function setDefenseDeathMode(mode: DefenseDeathMode): DefenseDeathMode {
+  setSetting(DEFENSE_DEATH_MODE_KEY, mode);
+  return mode;
+}
+
+/** Engine params with the user-configurable collapse behaviour applied. */
+function defenseParams(): DefenseParams {
+  return { ...DEFENSE_BASE_PARAMS, deathMode: getDefenseDeathMode() };
+}
+
+export interface DefenseSnapshot {
+  state: DefenseState;
+  /** Spendable gold: real balance, or the sandbox practice wallet. */
+  wallet: number;
+  sandbox: boolean;
+  /** Collapse behaviour currently in effect (applies to real and sandbox). */
+  deathMode: DefenseDeathMode;
+  /** Events produced by the fast-forward that served this snapshot. */
+  events: DefenseEvent[];
+}
+
+type DefenseRow = { state_json: string; sandbox_wallet: number };
+
+function defenseRowId(sandbox: boolean): number {
+  return sandbox ? 2 : 1;
+}
+
+function loadDefenseRow(
+  sandbox: boolean,
+  params: DefenseParams,
+): { state: DefenseState; sandboxWallet: number } {
+  const row = db
+    .prepare("SELECT state_json, sandbox_wallet FROM defense_state WHERE id = ?")
+    .get(defenseRowId(sandbox)) as DefenseRow | undefined;
+  if (row) {
+    const parsed = JSON.parse(row.state_json) as Partial<DefenseState> & { version?: number };
+    if (parsed.version === 3) {
+      return { state: parsed as DefenseState, sandboxWallet: row.sandbox_wallet };
+    }
+    // Older engine shape (v1 front-based, v2 100-HP scale): start a fresh run
+    // but keep the accumulated meta progression.
+    const meta =
+      parsed.meta && typeof parsed.meta.bestTier === "number" ? parsed.meta : emptyDefenseMeta();
+    return {
+      state: createDefenseState(Date.now(), params, meta),
+      sandboxWallet: row.sandbox_wallet,
+    };
+  }
+  return {
+    state: createDefenseState(Date.now(), params),
+    sandboxWallet: sandbox ? DEFENSE_SANDBOX_START_WALLET : 0,
+  };
+}
+
+function saveDefenseRow(sandbox: boolean, state: DefenseState, sandboxWallet: number): void {
+  db.prepare(
+    `INSERT INTO defense_state (id, state_json, sandbox_wallet, updated_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       state_json = excluded.state_json,
+       sandbox_wallet = excluded.sandbox_wallet,
+       updated_at = excluded.updated_at`,
+  ).run(defenseRowId(sandbox), JSON.stringify(state), sandboxWallet, new Date().toISOString());
+}
+
+function toDefenseSnapshot(
+  sandbox: boolean,
+  state: DefenseState,
+  sandboxWallet: number,
+  events: DefenseEvent[],
+): DefenseSnapshot {
+  return {
+    state,
+    wallet: sandbox ? Math.floor(sandboxWallet) : getGoldState().gold,
+    sandbox,
+    deathMode: getDefenseDeathMode(),
+    events,
+  };
+}
+
+export function getDefenseSnapshot(sandbox: boolean): DefenseSnapshot {
+  const params = defenseParams();
+  const { state, sandboxWallet } = loadDefenseRow(sandbox, params);
+  const { state: advanced, events } = advanceDefense(state, Date.now(), params);
+  // Save unconditionally: loadDefenseRow may have migrated an old-version row.
+  saveDefenseRow(sandbox, advanced, sandboxWallet);
+  return toDefenseSnapshot(sandbox, advanced, sandboxWallet, events);
+}
+
+export function buyDefenseUpgrade(sandbox: boolean, slotIndex: number): DefenseSnapshot {
+  const params = defenseParams();
+  const { state, sandboxWallet } = loadDefenseRow(sandbox, params);
+  const { state: advanced, events } = advanceDefense(state, Date.now(), params);
+  if (slotIndex < 0 || slotIndex >= advanced.slots.length) {
+    throw new Error(`slotIndex must be 0..${advanced.slots.length - 1}`);
+  }
+  const cost = defenseUpgradeCost(advanced, slotIndex, params);
+
+  let wallet = sandboxWallet;
+  if (sandbox) {
+    if (wallet < cost) throw new Error("not enough gold");
+    wallet -= cost;
+  } else {
+    // Throws "not enough gold" without deducting when the balance is short.
+    spendGold(cost, undefined, {
+      sourceType: "spend",
+      label: `Defense: tower ${slotIndex + 1} upgrade`,
+      private: true,
+    });
+  }
+
+  const bought = buyDefenseSlot(advanced, slotIndex, params);
+  saveDefenseRow(sandbox, bought.state, wallet);
+  return toDefenseSnapshot(sandbox, bought.state, wallet, events);
+}
+
+export type DefenseSandboxAction =
+  | { action: "skip"; hours: number }
+  | { action: "grant"; amount: number }
+  | { action: "reset" };
+
+/** Sandbox-only controls for playtesting: time travel, free gold, restart. */
+export function runDefenseSandboxAction(input: DefenseSandboxAction): DefenseSnapshot {
+  const params = defenseParams();
+  const { state, sandboxWallet } = loadDefenseRow(true, params);
+  let next = state;
+  let wallet = sandboxWallet;
+
+  if (input.action === "skip") {
+    const ms = Math.round(input.hours * 3_600_000);
+    // Pretend the elapsed time already passed: shift the sim's clock into the
+    // past, then the regular fast-forward below simulates the gap.
+    next = {
+      ...state,
+      lastTickMs: state.lastTickMs - ms,
+      runStartedMs: state.runStartedMs - ms,
+    };
+  } else if (input.action === "grant") {
+    wallet += input.amount;
+  } else {
+    next = createDefenseState(Date.now(), params);
+    wallet = DEFENSE_SANDBOX_START_WALLET;
+  }
+
+  const { state: advanced, events } = advanceDefense(next, Date.now(), params);
+  saveDefenseRow(true, advanced, wallet);
+  return toDefenseSnapshot(true, advanced, wallet, events);
 }

@@ -3871,7 +3871,7 @@ export default function Page() {
                 <button type="button" className="goals-subtab" onClick={() => setActiveTab("social")}>
                   Social
                 </button>
-                <button type="button" className="goals-subtab" onClick={() => window.location.href = "/base"}>
+                <button type="button" className="goals-subtab" onClick={() => window.location.href = "/defense"}>
                   Base
                 </button>
               </nav>
@@ -4071,7 +4071,7 @@ export default function Page() {
                 <button type="button" className="goals-subtab" onClick={() => setActiveTab("social")}>
                   Social
                 </button>
-                <button type="button" className="goals-subtab" onClick={() => window.location.href = "/base"}>
+                <button type="button" className="goals-subtab" onClick={() => window.location.href = "/defense"}>
                   Base
                 </button>
               </nav>
@@ -4538,7 +4538,7 @@ export default function Page() {
                 <button type="button" className="goals-subtab" onClick={() => setActiveTab("social")}>
                   Social
                 </button>
-                <button type="button" className="goals-subtab" onClick={() => window.location.href = "/base"}>
+                <button type="button" className="goals-subtab" onClick={() => window.location.href = "/defense"}>
                   Base
                 </button>
               </nav>
@@ -5104,7 +5104,7 @@ export default function Page() {
                 <button type="button" className="goals-subtab" onClick={() => setActiveTab("social")}>
                   Social
                 </button>
-                <button type="button" className="goals-subtab" onClick={() => window.location.href = "/base"}>
+                <button type="button" className="goals-subtab" onClick={() => window.location.href = "/defense"}>
                   Base
                 </button>
               </nav>
@@ -6215,7 +6215,7 @@ export default function Page() {
                 <button type="button" className="goals-subtab active" onClick={() => setActiveTab("social")}>
                   Social
                 </button>
-                <button type="button" className="goals-subtab" onClick={() => window.location.href = "/base"}>
+                <button type="button" className="goals-subtab" onClick={() => window.location.href = "/defense"}>
                   Base
                 </button>
               </nav>

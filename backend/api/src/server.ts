@@ -76,6 +76,10 @@ import {
   awardBaseCurrency,
   getProgression,
   checkAndAwardDiamonds,
+  getDefenseSnapshot,
+  buyDefenseUpgrade,
+  runDefenseSandboxAction,
+  setDefenseDeathMode,
 } from "./store.js";
 import { referenceImagesDir } from "./db.js";
 import { testDetection, clearRefPixelCache, getDetectionRefs, DETECTION_COMPARE_SIZE, DETECTION_TEMPLATE_WIDTH, DETECTION_TEMPLATE_HEIGHT } from "./image-match.js";
@@ -1550,6 +1554,63 @@ app.post("/api/base-currencies/award", (req, res) => {
     return badRequest(res, "amount must be a non-negative integer");
   }
   ok(res, awardBaseCurrency(currency, amount));
+});
+
+// ---------------------------------------------------------------------------
+// Lane defense (Stage 1)
+// ---------------------------------------------------------------------------
+
+const isDefenseSandbox = (value: unknown) => value === true || value === "1" || value === "true";
+
+app.get("/api/defense-state", (req, res) => {
+  ok(res, getDefenseSnapshot(isDefenseSandbox(req.query.sandbox)));
+});
+
+app.post("/api/defense/upgrade", (req, res) => {
+  const slotIndex = req.body?.slotIndex;
+  if (typeof slotIndex !== "number" || !Number.isInteger(slotIndex)) {
+    return badRequest(res, "slotIndex must be an integer");
+  }
+  try {
+    ok(res, buyDefenseUpgrade(isDefenseSandbox(req.body?.sandbox), slotIndex));
+  } catch (err) {
+    badRequest(res, err instanceof Error ? err.message : "upgrade failed");
+  }
+});
+
+// Collapse behaviour A/B toggle ("knockback" | "reset") — applies to both the
+// real battle and the sandbox.
+app.post("/api/defense/config", (req, res) => {
+  const mode = req.body?.deathMode;
+  if (mode !== "knockback" && mode !== "reset") {
+    return badRequest(res, "deathMode must be 'knockback' or 'reset'");
+  }
+  setDefenseDeathMode(mode);
+  ok(res, getDefenseSnapshot(isDefenseSandbox(req.body?.sandbox)));
+});
+
+// Sandbox-only playtest controls: skip time, grant practice gold, reset.
+// Never touches the real defense run or real gold.
+app.post("/api/defense/sandbox", (req, res) => {
+  const action = req.body?.action;
+  if (action === "skip") {
+    const hours = req.body?.hours;
+    if (typeof hours !== "number" || !(hours > 0) || hours > 24 * 30) {
+      return badRequest(res, "hours must be a positive number (max 720)");
+    }
+    return ok(res, runDefenseSandboxAction({ action: "skip", hours }));
+  }
+  if (action === "grant") {
+    const amount = req.body?.amount;
+    if (typeof amount !== "number" || !Number.isInteger(amount) || amount <= 0 || amount > 1_000_000) {
+      return badRequest(res, "amount must be a positive integer (max 1000000)");
+    }
+    return ok(res, runDefenseSandboxAction({ action: "grant", amount }));
+  }
+  if (action === "reset") {
+    return ok(res, runDefenseSandboxAction({ action: "reset" }));
+  }
+  badRequest(res, "action must be 'skip', 'grant', or 'reset'");
 });
 
 app.get("/api/overlay-state", (_req, res) => {

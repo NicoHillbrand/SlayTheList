@@ -273,6 +273,13 @@ CREATE TABLE IF NOT EXISTS base_state (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS defense_state (
+  id INTEGER PRIMARY KEY CHECK(id IN (1, 2)),
+  state_json TEXT NOT NULL,
+  sandbox_wallet REAL NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS cloud_connection_state (
   id INTEGER PRIMARY KEY CHECK(id = 1),
   cloud_base_url TEXT,
