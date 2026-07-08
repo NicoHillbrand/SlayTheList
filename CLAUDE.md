@@ -22,6 +22,8 @@ Individual rows with full CRUD:
 | `award_gold` | Add gold. Requires `amount` (non-negative integer). Optional: `title` — records a named achievement in the daily/shareable log (omit for a silent balance-only bump); `category` — `"Tasks"` \| `"Habits"` \| `"Encouragements"` (unknown/missing → `"Other"`); `source` — which agent submitted it (e.g. `"claude-code"`); `timestamp` — ISO 8601 to backdate; `with_sound: true` plays the gold coin sound in the overlay (best-effort — needs the API server running). |
 | `spend_gold` | Deduct gold (clamps at zero, never negative). Requires `amount`. Optional `with_sound` like above. |
 
+**Default for agents awarding gold from chat: always pass `title` saying why the gold was awarded** (what was accomplished), plus the fitting `category` and your `source` (e.g. `"claude-code"`). Only omit `title` when the user explicitly wants a silent balance-only bump.
+
 ### Habits, Predictions, Reflections
 These are stored as JSON arrays. The pattern for any modification is **read → modify → write**:
 1. Call `list_habits` / `list_predictions` / `list_reflections` to get the current array.
