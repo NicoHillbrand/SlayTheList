@@ -13,6 +13,7 @@ import {
   type DefenseState,
 } from "@slaythelist/defense-engine";
 import { CoinIcon } from "../../lib/combat/icons";
+import { setMuted, sfx } from "../../lib/combat/sfx";
 import { LaneTheater } from "./LaneTheater";
 import {
   buyUpgrade,
@@ -26,6 +27,9 @@ import styles from "./defense.module.css";
 
 const P = DEFAULT_PARAMS;
 const POLL_MS = 15_000;
+const MUTE_KEY = "slaythelist.defense.muted";
+/** Only sound events that just happened — not stale ones from offline catch-up. */
+const FRESH_EVENT_MS = 5 * 60_000;
 
 function clamp(n: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, n));
@@ -119,6 +123,7 @@ export default function DefensePage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [sandbox, setSandbox] = useState(false);
+  const [soundOn, setSoundOn] = useState(true);
   const [displayHp, setDisplayHp] = useState<number | null>(null);
   const sandboxRef = useRef(false);
   const snapRef = useRef<DefenseSnapshot | null>(null);
@@ -129,6 +134,12 @@ export default function DefensePage() {
     setSnap(next);
     setDisplayHp(next.state.baseHp);
     setError(null);
+    const cutoff = Date.now() - FRESH_EVENT_MS;
+    if (next.events.some((e) => e.type === "baseDestroyed" && e.atMs > cutoff)) {
+      sfx.defeat();
+    } else if (next.events.some((e) => e.type === "tierUp" && e.atMs > cutoff)) {
+      sfx.fanfare();
+    }
     const message = eventNotice(next.events, next.deathMode);
     if (message) {
       setNotice(message);
@@ -152,6 +163,9 @@ export default function DefensePage() {
     const fromUrl = new URLSearchParams(window.location.search).get("sandbox") === "1";
     sandboxRef.current = fromUrl;
     setSandbox(fromUrl);
+    const storedMute = window.localStorage.getItem(MUTE_KEY) === "1";
+    setSoundOn(!storedMute);
+    setMuted(storedMute);
     void refresh(fromUrl);
 
     const interval = setInterval(() => void refresh(), POLL_MS);
@@ -176,6 +190,14 @@ export default function DefensePage() {
     };
   }, [refresh]);
 
+  function toggleSound() {
+    const next = !soundOn;
+    setSoundOn(next);
+    setMuted(!next);
+    window.localStorage.setItem(MUTE_KEY, next ? "0" : "1");
+    if (next) sfx.buff();
+  }
+
   function toggleSandbox() {
     const next = !sandboxRef.current;
     sandboxRef.current = next;
@@ -199,7 +221,11 @@ export default function DefensePage() {
   }
 
   const buy = (slotIndex: number) =>
-    runAction(() => buyUpgrade(sandboxRef.current, slotIndex));
+    runAction(async () => {
+      const result = await buyUpgrade(sandboxRef.current, slotIndex);
+      sfx.buff();
+      return result;
+    });
   const doSandbox = (action: SandboxAction) => runAction(() => sandboxAction(action));
 
   if (!snap) {
@@ -242,6 +268,9 @@ export default function DefensePage() {
           </span>
         </div>
         <div className={styles.topRight}>
+          <button type="button" className={styles.sandboxToggle} onClick={toggleSound}>
+            {soundOn ? "Sound: on" : "Sound: off"}
+          </button>
           <button
             type="button"
             className={`${styles.sandboxToggle} ${sandbox ? styles.sandboxOn : ""}`}
