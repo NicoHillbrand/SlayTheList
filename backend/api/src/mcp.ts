@@ -175,14 +175,16 @@ server.tool(
       .describe("If true, play the gold coin sound in the overlay UI. Defaults to false."),
   },
   async ({ amount, title, category, source, timestamp, with_sound = false }) => {
-    const activity = title && title.trim()
-      ? {
-          sourceType: mcpCategoryToSourceType(category),
-          label: title.trim().slice(0, 500),
-          source: source ?? null,
-          at: timestamp ?? null,
-        }
-      : undefined;
+    // Claude's awards always attach a log item. With a title it's shown; without
+    // one it's recorded privately (rolls into "Private items" in shared views).
+    const hasTitle = !!(title && title.trim());
+    const activity = {
+      sourceType: hasTitle ? mcpCategoryToSourceType(category) : ("manual" as const),
+      label: hasTitle ? title!.trim().slice(0, 500) : "",
+      source: source ?? null,
+      at: timestamp ?? null,
+      private: !hasTitle,
+    };
     const state = awardGold(amount, undefined, activity);
     if (with_sound) await fireSoundEvent("gold");
     return { content: [{ type: "text" as const, text: JSON.stringify(state, null, 2) }] };

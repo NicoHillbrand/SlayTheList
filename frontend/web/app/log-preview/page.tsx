@@ -7,8 +7,9 @@
 //
 // Not linked from anywhere in the app — visit /log-preview directly.
 
-import type { Habit, SharedDailyLogDay } from "@slaythelist/contracts";
-import { AchievementSummary } from "../daily-log";
+import { useState } from "react";
+import type { Habit, Prediction, SharedDailyLogDay } from "@slaythelist/contracts";
+import { AchievementSummary, PeriodSelector, defaultLogPeriod } from "../daily-log";
 
 function dayKey(offset: number) {
   const d = new Date();
@@ -17,6 +18,11 @@ function dayKey(offset: number) {
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
+}
+
+// ms timestamp at midday `offset` days ago (for prediction resolvedAt).
+function at(offset: number) {
+  return new Date(`${dayKey(offset)}T12:00:00`).getTime();
 }
 
 function check(offsets: number[]) {
@@ -55,8 +61,6 @@ const SAMPLE_LOG: SharedDailyLogDay[] = [
       { delta: 8, sourceType: "habit", label: "3h deep work (4-day streak)", private: false },
       { delta: 5, sourceType: "habit", label: "No phone after 22:30", private: false },
       { delta: 3, sourceType: "todo", label: null, private: true },
-      { delta: 2, sourceType: "encouragement", label: "Encouraged @sam", private: false },
-      { delta: -2, sourceType: "spend", label: "Unlocked a zone", private: false },
     ],
   },
   {
@@ -70,10 +74,56 @@ const SAMPLE_LOG: SharedDailyLogDay[] = [
   },
 ];
 
+// Resolved, staked predictions spread across the week (enough to draw a
+// calibration curve in the week view).
+const SAMPLE_PREDICTIONS: Prediction[] = [
+  { id: "p1", title: "Answer grant application emails", confidence: 95, outcome: "hit", createdAt: at(1), resolvedAt: at(0), stake: 10, payout: 20 },
+  { id: "p2", title: "No buying sweets today", confidence: 75, outcome: "miss", createdAt: at(1), resolvedAt: at(0), stake: 10, payout: 0 },
+  { id: "p3", title: "Finish the design doc", confidence: 60, outcome: "hit", createdAt: at(2), resolvedAt: at(1), stake: 5, payout: 7 },
+  { id: "p4", title: "Ship before standup", confidence: 80, outcome: "hit", createdAt: at(3), resolvedAt: at(1), stake: 8, payout: 13 },
+  { id: "p5", title: "Reply to Felix by noon", confidence: 90, outcome: "miss", createdAt: at(3), resolvedAt: at(2), stake: 6, payout: 0 },
+  { id: "p6", title: "Run 5k", confidence: 65, outcome: "hit", createdAt: at(4), resolvedAt: at(3), stake: 4, payout: 6 },
+  { id: "p7", title: "Inbox zero", confidence: 55, outcome: "miss", createdAt: at(5), resolvedAt: at(4), stake: 3, payout: 2 },
+  // Still-pending bets (show on the day they were made).
+  { id: "p8", title: "Finish the grant draft today", confidence: 70, outcome: "pending", createdAt: at(0), resolvedAt: null, stake: 8 },
+  { id: "p9", title: "Gym before noon", confidence: 60, outcome: "pending", createdAt: at(1), resolvedAt: null },
+];
+
+// Mirrors the social-tab layout: the period selector sits in the header row
+// (left of "View base"), and the card below reflects the selected period.
+function PreviewProfile({ label, compact }: { label: string; compact?: boolean }) {
+  const [period, setPeriod] = useState<string>(defaultLogPeriod());
+  return (
+    <div style={{ flex: compact ? "1 1 360px" : "1 1 480px", maxWidth: compact ? 400 : 540 }}>
+      <p className="settings-hint" style={{ marginBottom: "0.5rem" }}>{label}</p>
+      <div className="social-profile-content">
+        <div className="social-profile-top">
+          <h4>@marcus_hillbrand</h4>
+          <span className="social-gold-value">145 gold</span>
+          <div className="social-profile-top-actions">
+            <PeriodSelector selected={period} onSelect={setPeriod} />
+            <a className="achievement-period-pill" href="#" style={{ textDecoration: "none" }}>
+              View base
+            </a>
+          </div>
+        </div>
+        <AchievementSummary
+          days={SAMPLE_LOG}
+          habits={SAMPLE_HABITS}
+          predictions={SAMPLE_PREDICTIONS}
+          selected={period}
+          compact={compact}
+        />
+      </div>
+    </div>
+  );
+}
+
 export default function LogPreviewPage() {
   return (
-    <div style={{ padding: "1.5rem", maxWidth: 520, margin: "0 auto" }}>
-      <AchievementSummary days={SAMPLE_LOG} habits={SAMPLE_HABITS} username="marcus_hillbrand" gold={324} />
+    <div style={{ padding: "1.5rem", display: "flex", gap: "2rem", flexWrap: "wrap", justifyContent: "center" }}>
+      <PreviewProfile label="Full (future dedicated page)" />
+      <PreviewProfile label="Compact (social tab)" compact />
     </div>
   );
 }

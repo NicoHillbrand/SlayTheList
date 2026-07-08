@@ -214,6 +214,8 @@ const SPLIT_DAILY_BY_PRIORITY_STORAGE_KEY = "slaythelist.splitDailyByPriority";
 const PRIORITY_DIVIDER_ID = "__priority_divider__";
 const DEFAULT_TODO_DURATION_MINUTES = 5;
 const DEFAULT_PREDICTION_CONFIDENCE = 95;
+const DEFAULT_PREDICTION_STAKE = 5;
+const PREDICTION_STAKE_STEP = 5;
 
 // Payout for a staked prediction: baseline-relative quadratic scoring.
 // Break-even at 50% confidence, up to 2× the stake back when confident and
@@ -552,8 +554,14 @@ function fallbackSubtasksForTodo(todo: Todo): string[] {
   ];
 }
 
+// Local YYYY-MM-DD. Must NOT go through toISOString() (UTC): in UTC+ timezones
+// that shifts local-midnight dates to the previous day, so habit checks landed
+// under the wrong date key (off-by-one vs the daily log and gold ledger).
 function getDateKey(date: Date) {
-  return date.toISOString().slice(0, 10);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function parseDateKey(dateKey: string) {
@@ -964,7 +972,7 @@ export default function Page() {
   const [predictions, setPredictions] = useState<Prediction[]>([]);
   const [newPredictionTitle, setNewPredictionTitle] = useState("");
   const [newPredictionConfidence, setNewPredictionConfidence] = useState(DEFAULT_PREDICTION_CONFIDENCE);
-  const [newPredictionStake, setNewPredictionStake] = useState(0);
+  const [newPredictionStake, setNewPredictionStake] = useState(DEFAULT_PREDICTION_STAKE);
   const [goalPredictionConfidences, setGoalPredictionConfidences] = useState<Record<string, number>>({});
   const [goalPredictionStakes, setGoalPredictionStakes] = useState<Record<string, number>>({});
   const [murphyOpen, setMurphyOpen] = useState(false);
@@ -3358,7 +3366,7 @@ export default function Page() {
     if (stake > 0) stakePredictionGold(id, title, confidence, stake);
     setNewPredictionTitle("");
     setNewPredictionConfidence(DEFAULT_PREDICTION_CONFIDENCE);
-    setNewPredictionStake(0);
+    setNewPredictionStake(DEFAULT_PREDICTION_STAKE);
   }
 
   function setPredictionOutcome(predictionId: string, outcome: PredictionOutcome) {
@@ -3425,7 +3433,7 @@ export default function Page() {
     const goalTitle = todo.title.trim();
     if (!goalTitle) return;
     const confidence = Math.max(1, Math.min(99, goalPredictionConfidences[todo.id] ?? DEFAULT_PREDICTION_CONFIDENCE));
-    const stake = Math.min(Math.max(0, Math.floor(goalPredictionStakes[todo.id] ?? 0)), gold);
+    const stake = Math.min(Math.max(0, Math.floor(goalPredictionStakes[todo.id] ?? DEFAULT_PREDICTION_STAKE)), gold);
     const id = crypto.randomUUID();
     setPredictions((prev) => [
       ...prev,
@@ -3441,7 +3449,7 @@ export default function Page() {
     ]);
     if (stake > 0) stakePredictionGold(id, goalTitle, confidence, stake);
     setGoalPredictionConfidences((prev) => ({ ...prev, [todo.id]: DEFAULT_PREDICTION_CONFIDENCE }));
-    setGoalPredictionStakes((prev) => ({ ...prev, [todo.id]: 0 }));
+    setGoalPredictionStakes((prev) => ({ ...prev, [todo.id]: DEFAULT_PREDICTION_STAKE }));
   }
 
   function addMurphyPrediction(targetTitle?: string) {
@@ -4563,32 +4571,62 @@ export default function Page() {
                   onChange={(event) => setNewPredictionTitle(event.target.value)}
                   placeholder="Add a prediction..."
                 />
-                <input
-                  type="number"
-                  min={1}
-                  max={99}
-                  value={newPredictionConfidence}
-                  onChange={(event) => {
-                    const numeric = Number(event.target.value);
-                    setNewPredictionConfidence(
-                      Number.isFinite(numeric) ? numeric : DEFAULT_PREDICTION_CONFIDENCE,
-                    );
-                  }}
-                />
-                <input
-                  type="number"
-                  className="prediction-stake-add"
-                  min={0}
-                  max={gold}
-                  placeholder="🪙 0"
-                  value={newPredictionStake || ""}
-                  onChange={(event) => {
-                    const numeric = Number(event.target.value);
-                    setNewPredictionStake(Number.isFinite(numeric) ? Math.max(0, Math.floor(numeric)) : 0);
-                  }}
+                <div className="prediction-affix" title="How likely is this? (%)">
+                  <input
+                    type="number"
+                    min={1}
+                    max={99}
+                    value={newPredictionConfidence}
+                    onChange={(event) => {
+                      const numeric = Number(event.target.value);
+                      setNewPredictionConfidence(
+                        Number.isFinite(numeric) ? numeric : DEFAULT_PREDICTION_CONFIDENCE,
+                      );
+                    }}
+                    aria-label="Prediction confidence"
+                  />
+                  <span className="prediction-affix-symbol" aria-hidden="true">%</span>
+                </div>
+                <div
+                  className="prediction-affix"
                   title={`Gold to stake (optional). Break-even at 50%, up to 2× back when you're confident and right. You have ${gold}.`}
-                  aria-label="Gold to stake"
-                />
+                >
+                  <span className="prediction-affix-symbol prediction-affix-coin" aria-hidden="true">🪙</span>
+                  <input
+                    type="number"
+                    className="prediction-stake-add"
+                    min={0}
+                    max={gold}
+                    step={PREDICTION_STAKE_STEP}
+                    placeholder="0"
+                    value={newPredictionStake || ""}
+                    onChange={(event) => {
+                      const numeric = Number(event.target.value);
+                      setNewPredictionStake(Number.isFinite(numeric) ? Math.max(0, Math.floor(numeric)) : 0);
+                    }}
+                    aria-label="Gold to stake"
+                  />
+                  <span className="prediction-stake-stepper">
+                    <button
+                      type="button"
+                      tabIndex={-1}
+                      aria-label="Increase stake to the next multiple of 5"
+                      onClick={() =>
+                        setNewPredictionStake((cur) => Math.min(Math.floor(gold), (Math.floor(cur / 5) + 1) * 5))
+                      }
+                    >
+                      ▴
+                    </button>
+                    <button
+                      type="button"
+                      tabIndex={-1}
+                      aria-label="Decrease stake to the previous multiple of 5"
+                      onClick={() => setNewPredictionStake((cur) => Math.max(0, (Math.ceil(cur / 5) - 1) * 5))}
+                    >
+                      ▾
+                    </button>
+                  </span>
+                </div>
                 <button type="button" onClick={addPrediction}>Add</button>
               </div>
             </div>
@@ -4641,6 +4679,17 @@ export default function Page() {
                             aria-label="Prediction title"
                           />
                           <div className="goal-actions prediction-actions">
+                            <span
+                              className="prediction-created-date"
+                              title={new Date(prediction.createdAt).toLocaleDateString(undefined, {
+                                weekday: "short",
+                                year: "numeric",
+                                month: "short",
+                                day: "numeric",
+                              })}
+                            >
+                              {labelForDay(prediction.createdAt)}
+                            </span>
                             <button
                               type="button"
                               className="prediction-visibility-toggle"
@@ -4661,23 +4710,25 @@ export default function Page() {
                               🪙{prediction.stake}
                             </span>
                           ) : null}
-                          <input
-                            type="number"
-                            className="prediction-confidence prediction-confidence-input"
-                            min={1}
-                            max={99}
-                            value={prediction.confidence}
-                            disabled={Boolean(prediction.stake)}
-                            onChange={(e) =>
-                              updatePredictionConfidence(
-                                prediction.id,
-                                Math.max(1, Math.min(99, Number(e.target.value))),
-                              )
-                            }
-                            title={prediction.stake ? "Confidence locked — gold is staked on this" : "Probability %"}
-                            aria-label="Prediction confidence"
-                          />
-                          <span className="prediction-confidence-label">%</span>
+                          <span className="prediction-confidence-wrap">
+                            <input
+                              type="number"
+                              className="prediction-confidence prediction-confidence-input"
+                              min={1}
+                              max={99}
+                              value={prediction.confidence}
+                              disabled={Boolean(prediction.stake)}
+                              onChange={(e) =>
+                                updatePredictionConfidence(
+                                  prediction.id,
+                                  Math.max(1, Math.min(99, Number(e.target.value))),
+                                )
+                              }
+                              title={prediction.stake ? "Confidence locked — gold is staked on this" : "Probability %"}
+                              aria-label="Prediction confidence"
+                            />
+                            <span className="prediction-confidence-label">%</span>
+                          </span>
                         </div>
                       </li>,
                     );
@@ -4716,8 +4767,9 @@ export default function Page() {
                             className="prediction-stake-add"
                             min={0}
                             max={gold}
+                            step={PREDICTION_STAKE_STEP}
                             placeholder="🪙 0"
-                            value={goalPredictionStakes[todo.id] || ""}
+                            value={(goalPredictionStakes[todo.id] ?? DEFAULT_PREDICTION_STAKE) || ""}
                             onChange={(event) => {
                               const numeric = Number(event.target.value);
                               setGoalPredictionStakes((prev) => ({

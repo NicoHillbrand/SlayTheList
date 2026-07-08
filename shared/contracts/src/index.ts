@@ -139,6 +139,9 @@ export const goldActivityEntrySchema = z.object({
   sourceType: goldActivitySourceSchema,
   sourceId: z.string().nullable(),
   label: z.string(), // e.g. todo title or habit name at time of the action
+  // When true, the entry is hidden from shared views (rolled into "Private
+  // items"). Used e.g. for untitled agent awards.
+  private: z.boolean().default(false),
 });
 export type GoldActivityEntry = z.infer<typeof goldActivityEntrySchema>;
 

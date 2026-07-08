@@ -117,7 +117,8 @@ CREATE TABLE IF NOT EXISTS gold_activity (
   source_type TEXT NOT NULL,
   source_id TEXT,
   label TEXT NOT NULL DEFAULT '',
-  source TEXT
+  source TEXT,
+  private INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_gold_activity_user_date
@@ -535,6 +536,13 @@ ensureSocialSettingsColumn("user_social_settings", "daily_log_visibility", "TEXT
     .prepare("SELECT 1 FROM pragma_table_info('gold_activity') WHERE name = 'source' LIMIT 1")
     .get() as { 1: number } | undefined;
   if (!existing) db.exec("ALTER TABLE gold_activity ADD COLUMN source TEXT;");
+}
+// gold_activity: add private flag (hidden from shared views, e.g. untitled awards)
+{
+  const existing = db
+    .prepare("SELECT 1 FROM pragma_table_info('gold_activity') WHERE name = 'private' LIMIT 1")
+    .get() as { 1: number } | undefined;
+  if (!existing) db.exec("ALTER TABLE gold_activity ADD COLUMN private INTEGER NOT NULL DEFAULT 0;");
 }
 
 ensureBaseStateColumn("diamonds", "INTEGER NOT NULL DEFAULT 0");

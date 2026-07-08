@@ -274,7 +274,9 @@ export function buildSharedDailyLog(days = SHARED_DAILY_LOG_DAYS): SharedDailyLo
     date: day.date,
     total: day.total,
     entries: day.entries.map((entry) => {
-      let isPrivate = false;
+      // Honor an explicitly-private ledger row (e.g. untitled agent awards),
+      // then also privatize based on the current source item's visibility.
+      let isPrivate = entry.private === true;
       if (entry.sourceType === "todo" && entry.sourceId) {
         isPrivate = todoVisibility.get(entry.sourceId) === "private";
       } else if (entry.sourceType === "habit" && entry.sourceId) {

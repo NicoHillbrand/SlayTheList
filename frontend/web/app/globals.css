@@ -631,10 +631,6 @@ body.desktop-app main {
   font-size: 0.72rem;
 }
 
-.habits-table .is-today {
-  background: rgba(231, 223, 203, 0.06);
-}
-
 .habit-row:hover,
 .habit-row.editing,
 .habit-side-row:hover,
@@ -1022,14 +1018,22 @@ body.desktop-app main {
   outline: none;
 }
 
+.prediction-confidence-wrap {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
 .prediction-confidence-input {
-  width: 46px;
+  width: 34px;
   background: transparent;
   border: 1px solid transparent;
   border-radius: 6px;
   text-align: right;
-  padding: 0.1rem 0.25rem;
-  margin-left: 0.45rem;
+  font: inherit;
+  font-size: 0.92rem;
+  font-weight: 600;
+  padding: 0.1rem 0.1rem;
   transition: background 0.15s ease, border-color 0.15s ease;
   -moz-appearance: textfield;
 }
@@ -1055,7 +1059,7 @@ body.desktop-app main {
   color: #bbb4a4;
   font-size: 0.92rem;
   font-weight: 600;
-  margin-left: 0.15rem;
+  margin-left: 0.05rem;
   flex-shrink: 0;
 }
 
@@ -1065,8 +1069,91 @@ body.desktop-app main {
   cursor: default;
 }
 
-.prediction-stake-add {
-  width: 5rem;
+.prediction-add .prediction-affix {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 8px;
+  border: 1px solid rgba(173, 142, 84, 0.4);
+  background: rgba(8, 14, 25, 0.9);
+  padding: 0 0.5rem;
+}
+
+/* Hover-revealed ±5 stepper for the stake input. Absolutely positioned so
+   appearing doesn't shift the row layout. */
+.prediction-stake-stepper {
+  position: absolute;
+  right: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease-in-out;
+}
+
+.prediction-affix:hover .prediction-stake-stepper,
+.prediction-affix:focus-within .prediction-stake-stepper {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.prediction-stake-stepper button {
+  background: none;
+  border: none;
+  padding: 1px 6px;
+  line-height: 0.8;
+  font-size: 0.78rem;
+  color: #9f9888;
+  cursor: pointer;
+}
+
+.prediction-stake-stepper button:hover {
+  color: #e8c86a;
+}
+
+.prediction-add .prediction-affix:focus-within {
+  border-color: rgba(173, 142, 84, 0.7);
+}
+
+.prediction-add .prediction-affix input {
+  flex: 0 0 auto;
+  width: 2.1rem;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  padding: 0.5rem 0;
+  text-align: right;
+  font: inherit;
+  -moz-appearance: textfield;
+}
+
+.prediction-add .prediction-affix input:focus {
+  outline: none;
+}
+
+.prediction-add .prediction-affix input::-webkit-inner-spin-button,
+.prediction-add .prediction-affix input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.prediction-add .prediction-affix .prediction-stake-add {
+  text-align: left;
+}
+
+.prediction-affix-symbol {
+  color: #9f9888;
+  font-size: 0.88rem;
+  flex-shrink: 0;
+  margin-left: 0.15rem;
+}
+
+.prediction-affix-coin {
+  margin-left: 0;
+  margin-right: 0.25rem;
+  font-size: 0.8rem;
 }
 
 .prediction-stake-chip {
@@ -1128,6 +1215,18 @@ body.desktop-app main {
 }
 
 .goal-row:hover .prediction-visibility-toggle {
+  opacity: 0.8;
+}
+
+.prediction-created-date {
+  color: #8e887d;
+  font-size: 0.76rem;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 120ms ease-in-out;
+}
+
+.goal-row:hover .prediction-created-date {
   opacity: 0.8;
 }
 
@@ -2056,6 +2155,15 @@ body.desktop-app main {
   margin: 0;
 }
 
+.social-profile-top-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .social-profile-section {
   display: grid;
   gap: 0.5rem;
@@ -2340,24 +2448,19 @@ body.desktop-app main {
   font-weight: 700;
 }
 
-/* Bonus habits: a labeled divider row + subtler, gold-tinted styling */
+/* Bonus habits: just a quiet labeled divider — same cell styling as the rest */
 .social-habit-grid-section td {
   text-align: left;
-  padding: 0.45rem 0.3rem 0.2rem;
-  font-size: 0.66rem;
-  font-weight: 700;
+  padding: 0.5rem 0.3rem 0.2rem;
+  font-size: 0.64rem;
+  font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: #c9a94a;
-  border-top: 1px solid rgba(233, 196, 106, 0.18);
+  color: #6b6459;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
 }
 
-.social-habit-grid tr.is-bonus .social-habit-grid-name {
-  color: #c9b98a;
-}
-
-.social-habit-grid-mark.bonus.done {
-  background: rgba(233, 196, 106, 0.18);
+.social-habit-grid-day.is-today .social-habit-grid-day-label {
   color: #e9c46a;
 }
 
@@ -2472,6 +2575,65 @@ body.desktop-app main {
   border: 1px solid rgba(233, 196, 106, 0.18);
 }
 
+/* Compact variant — same content, tighter type/spacing for the social tab */
+.achievement-card.compact {
+  gap: 0.6rem;
+  padding: 0.85rem;
+  border-radius: 12px;
+}
+.achievement-card.compact .achievement-range-label {
+  font-size: 1.05rem;
+}
+.achievement-card.compact .achievement-total-value {
+  font-size: 1.45rem;
+}
+.achievement-card.compact .achievement-total-unit {
+  font-size: 0.62rem;
+}
+.achievement-card.compact .achievement-header {
+  padding-bottom: 0.5rem;
+}
+.achievement-card.compact .achievement-period-pill {
+  min-width: 2.6rem;
+  padding: 0.22rem 0.45rem;
+}
+.achievement-card.compact .achievement-pill-label {
+  font-size: 0.7rem;
+}
+.achievement-card.compact .achievement-days {
+  gap: 0.65rem;
+}
+.achievement-card.compact .achievement-categories {
+  gap: 0.45rem;
+}
+.achievement-card.compact .achievement-category-header {
+  padding: 0.4rem 0.55rem;
+}
+.achievement-card.compact .achievement-category-name {
+  font-size: 0.76rem;
+}
+.achievement-card.compact .achievement-items {
+  padding: 0 0.55rem 0.45rem 1.9rem;
+}
+.achievement-card.compact .achievement-item-label,
+.achievement-card.compact .achievement-item-delta {
+  font-size: 0.78rem;
+}
+.achievement-card.compact .achievement-filter-chip {
+  font-size: 0.68rem;
+  padding: 0.18rem 0.5rem;
+}
+.achievement-card.compact .social-habit-grid {
+  font-size: 0.72rem;
+}
+.achievement-card.compact .social-habit-grid-mark {
+  width: 1.15rem;
+  height: 1.15rem;
+}
+.achievement-card.compact .achievement-calibration-svg {
+  width: 200px;
+}
+
 .achievement-range-toggle {
   display: inline-flex;
   gap: 0.25rem;
@@ -2532,7 +2694,9 @@ body.desktop-app main {
 
 .achievement-total {
   display: grid;
-  justify-items: end;
+  /* Center the number over the "GOLD EARNED" label (the label is the widest
+     item, so it still defines the block's right edge in the header). */
+  justify-items: center;
   line-height: 1;
 }
 
@@ -2547,6 +2711,8 @@ body.desktop-app main {
   font-size: 0.7rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
+  /* Cancel the trailing letter-space so the label's visual edge is the "D" */
+  margin-right: -0.06em;
   color: #8b8477;
 }
 
@@ -2625,6 +2791,207 @@ body.desktop-app main {
   font-size: 0.8rem;
   color: #6b6459;
   font-style: italic;
+}
+
+/* Period selector: Today · Yesterday · Week + Older dropdown */
+.achievement-selector {
+  display: flex;
+  align-items: stretch;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.achievement-period-pill {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.05rem;
+  min-width: 3rem;
+  padding: 0.2rem 0.55rem;
+  font-family: inherit;
+  font-size: 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  background: rgba(17, 24, 39, 0.5);
+  color: #c9c2b4;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  white-space: nowrap;
+}
+
+.achievement-period-pill:hover {
+  border-color: rgba(233, 196, 106, 0.35);
+}
+
+/* PNG-export button: same family as the period pills, but quieter — it's a
+   utility, not a period choice, so it never shows an active state. */
+.achievement-png-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2rem;
+  padding: 0.2rem 0.5rem;
+  font-family: inherit;
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  background: rgba(17, 24, 39, 0.5);
+  color: #8b8477;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+  white-space: nowrap;
+}
+
+.achievement-png-btn:hover {
+  border-color: rgba(233, 196, 106, 0.35);
+  color: #c9c2b4;
+}
+
+.achievement-png-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.achievement-period-pill.active {
+  background: rgba(233, 196, 106, 0.16);
+  border-color: rgba(233, 196, 106, 0.55);
+  color: #e9c46a;
+}
+
+.achievement-day-dropdown {
+  align-self: stretch;
+  max-width: 7rem;
+  padding: 0.2rem 0.35rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  background: rgba(17, 24, 39, 0.5);
+  color: #c9c2b4;
+  font-family: inherit;
+  font-size: 0.75rem;
+  text-align: center;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  /* The ▾ placeholder is the arrow; hide the native one */
+  appearance: none;
+  /* Render the native option popup in dark mode instead of OS light */
+  color-scheme: dark;
+}
+
+/* Idle (no range picked): collapse to a narrow ▾ chip. A select's intrinsic
+   width fits its widest option, so it must be forced narrow here. */
+.achievement-day-dropdown:not(.active) {
+  width: 2rem;
+}
+
+.achievement-day-dropdown option {
+  background: #141b2a;
+  color: #e0d7c2;
+}
+
+.achievement-day-dropdown.active {
+  background: rgba(233, 196, 106, 0.16);
+  border-color: rgba(233, 196, 106, 0.55);
+  color: #e9c46a;
+}
+
+.achievement-pill-label {
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
+.achievement-pill-sub {
+  font-size: 0.6rem;
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Resolved-prediction rows inside the day/week log */
+.achievement-item.prediction {
+  gap: 0.5rem;
+}
+
+.achievement-pred-outcome {
+  min-width: 1rem;
+  text-align: center;
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+
+.achievement-pred-outcome.hit {
+  color: #6ee7b7;
+}
+
+.achievement-pred-outcome.miss {
+  color: #fda4af;
+}
+
+.achievement-pred-confidence {
+  font-size: 0.72rem;
+  color: #8b8477;
+  font-variant-numeric: tabular-nums;
+}
+
+.achievement-pred-outcome.pending {
+  color: #8b8477;
+}
+
+.achievement-pred-pending {
+  font-size: 0.68rem;
+  color: #8b8477;
+  font-style: italic;
+  font-variant-numeric: tabular-nums;
+}
+
+.achievement-pred-made {
+  font-size: 0.68rem;
+  color: #8b8477;
+  font-style: italic;
+  white-space: nowrap;
+  margin-left: 0.4rem;
+}
+
+.achievement-item.prediction .achievement-item-label {
+  flex: 1;
+}
+
+.achievement-category-total.negative,
+.achievement-item-delta.negative {
+  color: #fda4af;
+}
+
+/* Calibration chart */
+.achievement-calibration {
+  display: grid;
+  gap: 0.35rem;
+  justify-items: start;
+}
+
+.achievement-calibration-svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.achievement-calibration-svg .cal-axis {
+  stroke: rgba(255, 255, 255, 0.18);
+  stroke-width: 1;
+}
+
+.achievement-calibration-svg .cal-diagonal {
+  stroke: rgba(139, 132, 119, 0.55);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.achievement-calibration-svg .cal-point {
+  fill: #e9c46a;
+  fill-opacity: 0.85;
+}
+
+.achievement-calibration-svg .cal-label {
+  fill: #6b6459;
+  font-size: 9px;
 }
 
 .achievement-categories {

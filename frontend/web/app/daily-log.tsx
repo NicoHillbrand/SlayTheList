@@ -1,37 +1,89 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import type { GoldActivitySource, Habit, SharedDailyLogDay, SharedDailyLogEntry } from "@slaythelist/contracts";
+import { useMemo, useState, type ReactNode } from "react";
+import { toBlob } from "html-to-image";
+import type { Habit, Prediction, SharedDailyLogDay, SharedDailyLogEntry } from "@slaythelist/contracts";
 
-// The most recent `n` days as {key: YYYY-MM-DD, label, subLabel}, oldest → newest.
-export function lastNDays(n: number) {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+// Fixed English locale (day-before-month) so dates don't follow the OS/browser
+// locale — and so server and client render identically (no hydration mismatch).
+const DATE_LOCALE = "en-GB";
+
+// ---------------------------------------------------------------------------
+// Date helpers
+// ---------------------------------------------------------------------------
+
+// Local YYYY-MM-DD (matches the backend ledger's localDateKey), so labels stay
+// correct across timezone offsets.
+function localDayKey(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+// Key for `offset` days ago (0 = today).
+function keyDaysAgo(offset: number) {
+  const d = new Date();
+  d.setDate(d.getDate() - offset);
+  return localDayKey(d);
+}
+
+export function dailyLogDayLabel(dateKey: string) {
+  const date = new Date(`${dateKey}T00:00:00`);
+  const todayKey = keyDaysAgo(0);
+  const yesterdayKey = keyDaysAgo(1);
+  if (dateKey === todayKey) return "Today";
+  if (dateKey === yesterdayKey) return "Yesterday";
+  return date.toLocaleDateString(DATE_LOCALE, { weekday: "long", month: "long", day: "numeric" });
+}
+
+// The `n` days ending on `endKey`, oldest → newest, for the habit grid columns.
+function daysEndingKey(endKey: string, n: number) {
+  const end = new Date(`${endKey}T00:00:00`);
+  const todayKey = keyDaysAgo(0);
   return Array.from({ length: n }).map((_, index) => {
-    const date = new Date(today);
-    date.setDate(today.getDate() - (n - 1 - index));
+    const date = new Date(end);
+    date.setDate(end.getDate() - (n - 1 - index));
+    const key = localDayKey(date);
     return {
-      key: date.toISOString().slice(0, 10),
-      label: index === n - 1 ? "Today" : date.toLocaleDateString(undefined, { weekday: "short" }),
+      key,
+      label: key === todayKey ? "Today" : date.toLocaleDateString(DATE_LOCALE, { weekday: "short" }),
       subLabel: `${date.getMonth() + 1}/${date.getDate()}`,
     };
   });
 }
 
-// Read-only 7-day checkmark grid for a shared profile's habits. Regular habits
-// and bonus habits are shown as two labeled sections.
-export function HabitCheckGrid({ habits }: { habits: Habit[] }) {
-  const days = useMemo(() => lastNDays(7), []);
-  // Showcase only active habits (core + bonus); "idea"/archived habits would
-  // otherwise appear as empty rows.
-  const rows = habits.filter((habit) => (habit.status ?? "active") === "active");
-  if (rows.length === 0) return null;
-  const coreRows = rows.filter((h) => !h.bonus);
-  const bonusRows = rows.filter((h) => h.bonus);
-  const colSpan = days.length + 1;
+// ---------------------------------------------------------------------------
+// Habit grid — read-only 7-day checkmarks, ending on `endKey` (default today).
+// Bonus habits get their own labeled section but share the regular styling.
+// ---------------------------------------------------------------------------
 
-  const renderRow = (habit: Habit, bonus: boolean) => (
-    <tr key={habit.id} className={bonus ? "is-bonus" : ""}>
+export function HabitCheckGrid({
+  habits,
+  endKey,
+  columns = 7,
+}: {
+  habits: Habit[];
+  endKey?: string;
+  columns?: number;
+}) {
+  const end = endKey ?? keyDaysAgo(0);
+  // Never let the grid grow past a week — it stays screenshot-friendly.
+  const n = Math.max(1, Math.min(columns, 7));
+  const days = useMemo(() => daysEndingKey(end, n), [end, n]);
+  const rows = habits.filter((habit) => (habit.status ?? "active") === "active");
+  // Core habits always show. Bonus habits only show if they were actually done
+  // at least once in the visible window (no point listing dormant bonus habits).
+  const windowKeys = new Set(days.map((d) => d.key));
+  const doneInWindow = (h: Habit) => h.checks.some((c) => c.done && windowKeys.has(c.date));
+  const coreRows = rows.filter((h) => !h.bonus);
+  const bonusRows = rows.filter((h) => h.bonus && doneInWindow(h));
+  if (coreRows.length === 0 && bonusRows.length === 0) return null;
+  const colSpan = days.length + 1;
+  const todayKey = keyDaysAgo(0);
+
+  const renderRow = (habit: Habit) => (
+    <tr key={habit.id}>
       <td className="social-habit-grid-name" title={habit.name}>
         {habit.name}
       </td>
@@ -39,9 +91,7 @@ export function HabitCheckGrid({ habits }: { habits: Habit[] }) {
         const done = habit.checks.some((check) => check.date === day.key && check.done);
         return (
           <td key={`${habit.id}:${day.key}`} className="social-habit-grid-cell">
-            <span className={`social-habit-grid-mark ${done ? "done" : ""} ${bonus ? "bonus" : ""}`}>
-              {done ? "✓" : "·"}
-            </span>
+            <span className={`social-habit-grid-mark ${done ? "done" : ""}`}>{done ? "✓" : "·"}</span>
           </td>
         );
       })}
@@ -55,7 +105,10 @@ export function HabitCheckGrid({ habits }: { habits: Habit[] }) {
           <tr>
             <th className="social-habit-grid-name" />
             {days.map((day) => (
-              <th key={day.key} className="social-habit-grid-day">
+              <th
+                key={day.key}
+                className={`social-habit-grid-day ${day.key === todayKey ? "is-today" : ""}`}
+              >
                 <span className="social-habit-grid-day-label">{day.label}</span>
                 <span className="social-habit-grid-day-sub">{day.subLabel}</span>
               </th>
@@ -63,13 +116,13 @@ export function HabitCheckGrid({ habits }: { habits: Habit[] }) {
           </tr>
         </thead>
         <tbody>
-          {coreRows.map((habit) => renderRow(habit, false))}
+          {coreRows.map(renderRow)}
           {bonusRows.length > 0 && (
             <>
               <tr className="social-habit-grid-section">
-                <td colSpan={colSpan}>★ Bonus</td>
+                <td colSpan={colSpan}>Bonus</td>
               </tr>
-              {bonusRows.map((habit) => renderRow(habit, true))}
+              {bonusRows.map(renderRow)}
             </>
           )}
         </tbody>
@@ -78,360 +131,480 @@ export function HabitCheckGrid({ habits }: { habits: Habit[] }) {
   );
 }
 
-const DAILY_LOG_ICONS: Record<GoldActivitySource, string> = {
-  todo: "✓",
-  habit: "🔥",
-  encouragement: "💬",
-  manual: "✨",
-  spend: "🛒",
-  prediction: "🎯",
-};
-
-// Local YYYY-MM-DD (matches the backend ledger's localDateKey), so the
-// "Today"/"Yesterday" labels stay correct across timezone offsets.
-function localDayKey(date: Date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-export function dailyLogDayLabel(dateKey: string) {
-  const date = new Date(`${dateKey}T00:00:00`);
-  const todayKey = localDayKey(new Date());
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
-  const yesterdayKey = localDayKey(yesterday);
-  if (dateKey === todayKey) return "Today";
-  if (dateKey === yesterdayKey) return "Yesterday";
-  return date.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
-}
-
-function privateEntryLabel(source: GoldActivitySource) {
-  switch (source) {
-    case "todo":
-      return "Completed a private task";
-    case "habit":
-      return "Checked a private habit";
-    case "prediction":
-      return "Gold staked on a private prediction";
-    default:
-      return "Private activity";
-  }
-}
-
-function fallbackEntryLabel(source: GoldActivitySource) {
-  switch (source) {
-    case "todo":
-      return "Completed a task";
-    case "habit":
-      return "Checked a habit";
-    case "encouragement":
-      return "Encouraged a friend";
-    case "spend":
-      return "Spent gold";
-    case "prediction":
-      return "Prediction stake";
-    default:
-      return "Earned gold";
-  }
-}
-
-export function DailyLogDay({ day }: { day: SharedDailyLogDay }) {
-  return (
-    <div className="social-log-day">
-      <div className="social-log-day-header">
-        <span className="social-log-day-label">{dailyLogDayLabel(day.date)}</span>
-        <span className={`social-log-day-total ${day.total < 0 ? "negative" : ""}`}>
-          {day.total >= 0 ? "+" : ""}
-          {day.total} gold
-        </span>
-      </div>
-      <div className="social-log-entries">
-        {day.entries.map((entry, index) => (
-          <div key={`${day.date}:${index}`} className="social-log-entry">
-            <span className="social-log-entry-icon">{DAILY_LOG_ICONS[entry.sourceType] ?? "•"}</span>
-            <span className={`social-log-entry-label ${entry.private ? "is-private" : ""}`}>
-              {entry.private ? privateEntryLabel(entry.sourceType) : entry.label || fallbackEntryLabel(entry.sourceType)}
-            </span>
-            <span className={`social-log-entry-delta ${entry.delta < 0 ? "negative" : ""}`}>
-              {entry.delta >= 0 ? "+" : ""}
-              {entry.delta}
-            </span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 // ---------------------------------------------------------------------------
-// Shareable achievement summary — a clean, screenshot-friendly overview of the
-// last 1–3 days of gold-earning achievements, grouped by category per day, plus
-// the habit grid.
+// Gold ledger → category groups. Predictions are handled separately (below),
+// so prediction/spend/encouragement ledger entries never appear here.
 // ---------------------------------------------------------------------------
 
-type CategoryDef = {
-  key: string;
-  label: string;
-  icon: string;
-  match: (entry: SharedDailyLogEntry) => boolean;
-};
-
-// Named categories derived from the entry source. Everything non-private that
-// doesn't match one of these (e.g. agent-submitted "manual" achievements) falls
-// into "Other", alongside a single rolled-up row for private items.
-const CATEGORIES: CategoryDef[] = [
-  { key: "tasks", label: "Tasks", icon: "✓", match: (e) => e.sourceType === "todo" && !e.private },
-  { key: "habits", label: "Habits", icon: "🔥", match: (e) => e.sourceType === "habit" && !e.private },
-  {
-    key: "predictions",
-    label: "Predictions",
-    icon: "🎯",
-    match: (e) => e.sourceType === "prediction" && !e.private && e.delta > 0,
-  },
-];
-
-// Entries never shown in the achievement view (not "achievements"). Negative
-// prediction entries are the stakes placed at bet time — the resolution entry
-// already carries the net result in its label, so showing the stake too would
-// double-count the loss side.
 function isExcluded(entry: SharedDailyLogEntry) {
   return (
     entry.sourceType === "spend" ||
     entry.sourceType === "encouragement" ||
-    (entry.sourceType === "prediction" && entry.delta <= 0)
+    entry.sourceType === "prediction"
   );
-}
-
-function localKey(offsetDays: number) {
-  const d = new Date();
-  d.setDate(d.getDate() - offsetDays);
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
 }
 
 function sumDelta(entries: SharedDailyLogEntry[]) {
   return entries.reduce((total, entry) => total + entry.delta, 0);
 }
 
-const OTHER_CHIP = { key: "other", label: "Other", icon: "•" };
-
-type DayModel = {
-  key: string;
-  groups: { key: string; label: string; icon: string; items: SharedDailyLogEntry[]; subtotal: number }[];
-  otherTitled: SharedDailyLogEntry[];
+type DayGold = {
+  // Todos + agent/manual awards, shown with labels.
+  tasks: SharedDailyLogEntry[];
+  habits: SharedDailyLogEntry[];
+  // Private items (any source) — rolled into a single labelless row under Tasks.
   privateEntries: SharedDailyLogEntry[];
 };
 
-function buildDayModel(key: string, entries: SharedDailyLogEntry[]): DayModel {
-  const groups = CATEGORIES.map((cat) => {
-    const items = entries.filter(cat.match);
-    return { key: cat.key, label: cat.label, icon: cat.icon, items, subtotal: sumDelta(items) };
-  }).filter((g) => g.items.length > 0);
-
-  // "Other" = non-private entries that matched no named category (e.g. agent
-  // "manual" submissions), shown with their titles, plus one rolled-up row for
-  // all private items (no titles).
-  const namedMatch = (e: SharedDailyLogEntry) => CATEGORIES.some((c) => c.match(e));
-  const otherTitled = entries.filter((e) => !e.private && !isExcluded(e) && !namedMatch(e));
+function buildDayGold(entries: SharedDailyLogEntry[]): DayGold {
+  const tasks = entries.filter((e) => (e.sourceType === "todo" || e.sourceType === "manual") && !e.private);
+  const habits = entries.filter((e) => e.sourceType === "habit" && !e.private);
   const privateEntries = entries.filter((e) => e.private && !isExcluded(e));
-  return { key, groups, otherTitled, privateEntries };
+  return { tasks, habits, privateEntries };
 }
 
-export function AchievementSummary({
-  days,
-  habits,
-  username,
-  gold,
-  showHabits = true,
-}: {
-  days: SharedDailyLogDay[];
-  habits: Habit[];
-  username?: string;
-  gold?: number;
-  showHabits?: boolean;
-}) {
-  const [numDays, setNumDays] = useState(2);
-  const [hidden, setHidden] = useState<Set<string>>(new Set());
+// ---------------------------------------------------------------------------
+// Predictions
+// ---------------------------------------------------------------------------
 
-  const dayByKey = useMemo(() => new Map(days.map((d) => [d.date, d])), [days]);
-  // Most recent day first: today, yesterday, day-before.
-  const perDay = Array.from({ length: numDays }, (_, i) => {
-    const key = localKey(i);
-    return buildDayModel(key, dayByKey.get(key)?.entries ?? []);
+// Net gold from a resolved staked prediction (payout minus what was staked).
+// Unstaked predictions net zero.
+function predictionNet(p: Prediction) {
+  if (p.stake == null || p.payout == null) return 0;
+  return p.payout - p.stake;
+}
+
+function predictionResolvedKey(p: Prediction): string | null {
+  if (p.outcome === "pending" || p.resolvedAt == null) return null;
+  return localDayKey(new Date(p.resolvedAt));
+}
+
+function PredictionsSection({ predictions }: { predictions: Prediction[] }) {
+  if (predictions.length === 0) return null;
+  // Resolved first (by recency of resolution), then still-pending.
+  const ordered = [...predictions].sort((a, b) => {
+    const ap = a.outcome === "pending" ? 1 : 0;
+    const bp = b.outcome === "pending" ? 1 : 0;
+    return ap - bp;
   });
-
-  const toggle = (key: string) =>
-    setHidden((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-
-  // Category filter chips: only categories that appear somewhere in the range.
-  const presentKeys = new Set<string>();
-  perDay.forEach((d) => d.groups.forEach((g) => presentKeys.add(g.key)));
-  const otherPresent = perDay.some((d) => d.otherTitled.length > 0 || d.privateEntries.length > 0);
-  const chips = [
-    ...CATEGORIES.filter((c) => presentKeys.has(c.key)),
-    ...(otherPresent ? [OTHER_CHIP] : []),
-  ];
-
-  const otherTotalFor = (d: DayModel) => sumDelta(d.otherTitled) + sumDelta(d.privateEntries);
-  const daySubtotal = (d: DayModel) =>
-    d.groups.filter((g) => !hidden.has(g.key)).reduce((s, g) => s + g.subtotal, 0) +
-    (!hidden.has("other") ? otherTotalFor(d) : 0);
-  const grandTotal = perDay.reduce((s, d) => s + daySubtotal(d), 0);
-
-  const rangeLabel = numDays === 1 ? "Last day" : `Last ${numDays} days`;
-
+  const total = predictions.reduce((s, p) => s + predictionNet(p), 0);
+  const staked = predictions.some((p) => p.stake != null && p.outcome !== "pending");
   return (
-    <div className="achievement-card">
-      <div className="achievement-range-toggle">
-        <span className="achievement-range-prefix">Last</span>
-        {[1, 2, 3].map((n) => (
-          <button
-            key={n}
-            type="button"
-            className={`achievement-range-btn ${numDays === n ? "active" : ""}`}
-            onClick={() => setNumDays(n)}
-          >
-            {n}
-          </button>
-        ))}
-        <span className="achievement-range-prefix">{numDays === 1 ? "day" : "days"}</span>
+    <div className="achievement-category">
+      <div className="achievement-category-header">
+        <span className="achievement-category-icon">🎯</span>
+        <span className="achievement-category-name">Predictions</span>
+        <span className="achievement-category-count">{predictions.length}</span>
+        {staked && (
+          <span className={`achievement-category-total ${total < 0 ? "negative" : ""}`}>
+            {total >= 0 ? "+" : ""}
+            {total}
+          </span>
+        )}
       </div>
-
-      <div className="achievement-header">
-        <div className="achievement-header-text">
-          {username && <span className="achievement-user">@{username}</span>}
-          <span className="achievement-range-label">{rangeLabel}</span>
-        </div>
-        <div className="achievement-total">
-          <span className="achievement-total-value">{grandTotal}</span>
-          <span className="achievement-total-unit">gold earned</span>
-        </div>
-      </div>
-
-      {chips.length > 0 && (
-        <div className="achievement-filters">
-          {chips.map((chip) => (
-            <button
-              key={chip.key}
-              type="button"
-              className={`achievement-filter-chip ${hidden.has(chip.key) ? "is-off" : ""}`}
-              onClick={() => toggle(chip.key)}
-            >
-              <span className="achievement-filter-icon">{chip.icon}</span>
-              {chip.label}
-            </button>
-          ))}
-        </div>
-      )}
-
-      <div className="achievement-days">
-        {perDay.map((d) => {
-          const visibleGroups = d.groups.filter((g) => !hidden.has(g.key));
-          const showOther = !hidden.has("other") && (d.otherTitled.length > 0 || d.privateEntries.length > 0);
-          const empty = visibleGroups.length === 0 && !showOther;
+      <div className="achievement-items">
+        {ordered.map((p) => {
+          const pending = p.outcome === "pending";
+          const hit = p.outcome === "hit";
+          const net = predictionNet(p);
+          const outcomeClass = pending ? "pending" : hit ? "hit" : "miss";
+          const outcomeMark = pending ? "•" : hit ? "✓" : "✗";
+          // Rows appear under their resolution day (or creation day while
+          // pending) — flag ones made on an earlier day so carried-over
+          // predictions are distinguishable from same-day ones.
+          const madeKey = localDayKey(new Date(p.createdAt));
+          const appearKey = predictionResolvedKey(p) ?? madeKey;
+          const madeLabel =
+            madeKey === appearKey
+              ? null
+              : new Date(p.createdAt).toLocaleDateString(DATE_LOCALE, { month: "short", day: "numeric" });
           return (
-            <div key={d.key} className="achievement-day">
-              <div className="achievement-day-header">
-                <span className="achievement-day-label">{dailyLogDayLabel(d.key)}</span>
-                <span className="achievement-day-total">+{daySubtotal(d)}</span>
-              </div>
-
-              {empty ? (
-                <p className="achievement-empty">Nothing logged.</p>
+            <div key={p.id} className="achievement-item prediction">
+              <span className={`achievement-pred-outcome ${outcomeClass}`}>{outcomeMark}</span>
+              <span className="achievement-item-label">
+                {p.title}
+                {madeLabel && <span className="achievement-pred-made">(Made {madeLabel})</span>}
+              </span>
+              <span className="achievement-pred-confidence">{p.confidence}%</span>
+              {pending ? (
+                p.stake != null && <span className="achievement-pred-pending">{p.stake} staked</span>
               ) : (
-                <div className="achievement-categories">
-                  {visibleGroups.map((group) => (
-                    <div key={group.key} className="achievement-category">
-                      <div className="achievement-category-header">
-                        <span className="achievement-category-icon">{group.icon}</span>
-                        <span className="achievement-category-name">{group.label}</span>
-                        <span className="achievement-category-count">{group.items.length}</span>
-                        <span className="achievement-category-total">+{group.subtotal}</span>
-                      </div>
-                      <div className="achievement-items">
-                        {group.items.map((entry, index) => (
-                          <div key={`${group.key}:${index}`} className="achievement-item">
-                            <span className="achievement-item-label">{entry.label || `${group.label} item`}</span>
-                            <span className="achievement-item-delta">+{entry.delta}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-
-                  {showOther && (
-                    <div className="achievement-category">
-                      <div className="achievement-category-header">
-                        <span className="achievement-category-icon">{OTHER_CHIP.icon}</span>
-                        <span className="achievement-category-name">Other</span>
-                        <span className="achievement-category-count">
-                          {d.otherTitled.length + d.privateEntries.length}
-                        </span>
-                        <span className="achievement-category-total">+{otherTotalFor(d)}</span>
-                      </div>
-                      <div className="achievement-items">
-                        {d.otherTitled.map((entry, index) => (
-                          <div key={`other:${index}`} className="achievement-item">
-                            <span className="achievement-item-label">{entry.label || "Achievement"}</span>
-                            <span className="achievement-item-delta">+{entry.delta}</span>
-                          </div>
-                        ))}
-                        {d.privateEntries.length > 0 && (
-                          <div className="achievement-item">
-                            <span className="achievement-item-label is-private">
-                              Private items{d.privateEntries.length > 1 ? ` (${d.privateEntries.length})` : ""}
-                            </span>
-                            <span className="achievement-item-delta">+{sumDelta(d.privateEntries)}</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
+                p.stake != null && (
+                  <span className={`achievement-item-delta ${net < 0 ? "negative" : ""}`}>
+                    {net >= 0 ? "+" : ""}
+                    {net}
+                  </span>
+                )
               )}
             </div>
           );
         })}
       </div>
-
-      {showHabits && habits.length > 0 && (
-        <div className="achievement-habits">
-          <p className="achievement-section-label">Habits this week</p>
-          <HabitCheckGrid habits={habits} />
-        </div>
-      )}
     </div>
   );
 }
 
-// Renders the full "Daily log" timeline (recent days open, older collapsed).
-export function DailyLogTimeline({ days }: { days: SharedDailyLogDay[] }) {
-  if (days.length === 0) {
-    return <p className="settings-hint">No gold earned yet.</p>;
+// ---------------------------------------------------------------------------
+// Calibration chart — reliability curve from resolved predictions.
+// ---------------------------------------------------------------------------
+
+function CalibrationChart({ predictions }: { predictions: Prediction[] }) {
+  const resolved = predictions.filter((p) => p.outcome !== "pending");
+  if (resolved.length < 3) return null;
+
+  const W = 240;
+  const H = 200;
+  const pad = 30;
+  const sx = (v: number) => pad + (v / 100) * (W - 2 * pad);
+  const sy = (v: number) => H - pad - (v / 100) * (H - 2 * pad);
+
+  const buckets = new Map<number, { sum: number; hit: number; n: number }>();
+  for (const p of resolved) {
+    const b = Math.min(90, Math.floor(p.confidence / 10) * 10);
+    const cur = buckets.get(b) ?? { sum: 0, hit: 0, n: 0 };
+    cur.sum += p.confidence;
+    cur.hit += p.outcome === "hit" ? 1 : 0;
+    cur.n += 1;
+    buckets.set(b, cur);
   }
-  const recent = days.slice(0, 2);
-  const older = days.slice(2);
+  const points = [...buckets.values()].map((b) => ({
+    x: b.sum / b.n,
+    y: (b.hit / b.n) * 100,
+    n: b.n,
+  }));
+
   return (
-    <div className="social-log-timeline">
-      {recent.map((day) => (
-        <DailyLogDay key={day.date} day={day} />
-      ))}
-      {older.length > 0 && (
-        <details className="social-log-past">
-          <summary className="social-day-label">Previous days</summary>
-          {older.map((day) => (
-            <DailyLogDay key={day.date} day={day} />
+    <div className="achievement-calibration">
+      <p className="achievement-section-label">Calibration ({resolved.length} resolved)</p>
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        width={W}
+        height={H}
+        preserveAspectRatio="xMidYMid meet"
+        className="achievement-calibration-svg"
+        role="img"
+        aria-label="Calibration curve"
+      >
+        {/* frame */}
+        <line x1={pad} y1={sy(0)} x2={W - pad} y2={sy(0)} className="cal-axis" />
+        <line x1={pad} y1={sy(0)} x2={pad} y2={sy(100)} className="cal-axis" />
+        {/* perfect-calibration diagonal */}
+        <line x1={sx(0)} y1={sy(0)} x2={sx(100)} y2={sy(100)} className="cal-diagonal" />
+        {/* points */}
+        {points.map((pt, i) => (
+          <circle key={i} cx={sx(pt.x)} cy={sy(pt.y)} r={3 + Math.min(4, pt.n)} className="cal-point" />
+        ))}
+        <text x={W - pad} y={sy(0) + 16} className="cal-label" textAnchor="end">
+          confidence →
+        </text>
+        <text x={pad - 6} y={sy(100) - 2} className="cal-label" textAnchor="start">
+          hit rate ↑
+        </text>
+      </svg>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Category rendering (shared by day + week views)
+// ---------------------------------------------------------------------------
+
+function CategoryBlock({
+  icon,
+  label,
+  count,
+  total,
+  showItems,
+  children,
+}: {
+  icon: string;
+  label: string;
+  count: number;
+  total: number;
+  showItems: boolean;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="achievement-category">
+      <div className="achievement-category-header">
+        <span className="achievement-category-icon">{icon}</span>
+        <span className="achievement-category-name">{label}</span>
+        <span className="achievement-category-count">{count}</span>
+        <span className="achievement-category-total">+{total}</span>
+      </div>
+      {showItems && <div className="achievement-items">{children}</div>}
+    </div>
+  );
+}
+
+// Tasks folds in agent/manual awards and a single rolled-up "Private items" row.
+// Habits is its own block. (Predictions render separately.)
+function GoldCategories({ gold, showItems }: { gold: DayGold; showItems: boolean }) {
+  const privateTotal = sumDelta(gold.privateEntries);
+  const taskTotal = sumDelta(gold.tasks) + privateTotal;
+  const showTasks = gold.tasks.length > 0 || gold.privateEntries.length > 0;
+  return (
+    <>
+      {showTasks && (
+        <CategoryBlock
+          icon="✓"
+          label="Tasks"
+          count={gold.tasks.length + gold.privateEntries.length}
+          total={taskTotal}
+          showItems={showItems}
+        >
+          {gold.tasks.map((entry, index) => (
+            <div key={`task:${index}`} className="achievement-item">
+              <span className="achievement-item-label">{entry.label || "Task"}</span>
+              <span className="achievement-item-delta">+{entry.delta}</span>
+            </div>
           ))}
-        </details>
+          {gold.privateEntries.length > 0 && (
+            <div className="achievement-item">
+              <span className="achievement-item-label is-private">
+                Private items{gold.privateEntries.length > 1 ? ` (${gold.privateEntries.length})` : ""}
+              </span>
+              <span className="achievement-item-delta">+{privateTotal}</span>
+            </div>
+          )}
+        </CategoryBlock>
+      )}
+      {gold.habits.length > 0 && (
+        <CategoryBlock
+          icon="🔥"
+          label="Habits"
+          count={gold.habits.length}
+          total={sumDelta(gold.habits)}
+          showItems={showItems}
+        >
+          {gold.habits.map((entry, index) => (
+            <div key={`habit:${index}`} className="achievement-item">
+              <span className="achievement-item-label">{entry.label || "Habit"}</span>
+              <span className="achievement-item-delta">+{entry.delta}</span>
+            </div>
+          ))}
+        </CategoryBlock>
+      )}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Shareable achievement summary
+// ---------------------------------------------------------------------------
+
+const OLDER_DAY_COUNT = 12;
+
+// Default period shown when a profile first opens (today).
+export function defaultLogPeriod() {
+  return keyDaysAgo(0);
+}
+
+// Copy the log card next to `button` to the clipboard as a PNG. The card is
+// looked up through the shared .social-profile-content wrapper, so the button
+// works wherever PeriodSelector renders (social modal, log preview).
+async function copyLogPng(button: HTMLElement) {
+  const card =
+    button.closest(".social-profile-content")?.querySelector<HTMLElement>(".achievement-card") ??
+    document.querySelector<HTMLElement>(".achievement-card");
+  if (!card) return;
+  // Fill the rounded-corner cutouts with the app's page color — transparent
+  // corners read as white when pasted into light-background apps.
+  const blob = await toBlob(card, { pixelRatio: 2, backgroundColor: "#0a101b" });
+  if (!blob) throw new Error("PNG render failed");
+  await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+}
+
+// Period selector — lives in the profile header, not the card. Today and
+// Yesterday are single days; picking an older day summarizes the span from that
+// day through today.
+export function PeriodSelector({
+  selected,
+  onSelect,
+}: {
+  selected: string;
+  onSelect: (value: string) => void;
+}) {
+  const todayKey = keyDaysAgo(0);
+  const yesterdayKey = keyDaysAgo(1);
+  const isRange = selected.startsWith("range:");
+  const rangeN = isRange ? Math.max(1, parseInt(selected.slice(6), 10) || 7) : 0;
+  const [copyState, setCopyState] = useState<"idle" | "busy" | "copied">("idle");
+  return (
+    <div className="achievement-selector">
+      <button
+        type="button"
+        className="achievement-png-btn"
+        title="Copy this log to the clipboard as an image"
+        aria-label="Copy this log to the clipboard as an image"
+        disabled={copyState === "busy"}
+        onClick={(event) => {
+          const el = event.currentTarget;
+          setCopyState("busy");
+          void copyLogPng(el)
+            .then(() => {
+              setCopyState("copied");
+              setTimeout(() => setCopyState("idle"), 1500);
+            })
+            .catch(() => setCopyState("idle"));
+        }}
+      >
+        {copyState === "busy" ? (
+          "…"
+        ) : copyState === "copied" ? (
+          "✓"
+        ) : (
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <rect x="9" y="9" width="12" height="12" rx="2" ry="2" />
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+          </svg>
+        )}
+      </button>
+      <button
+        type="button"
+        className={`achievement-period-pill ${selected === todayKey ? "active" : ""}`}
+        onClick={() => onSelect(todayKey)}
+      >
+        Today
+      </button>
+      <button
+        type="button"
+        className={`achievement-period-pill ${selected === yesterdayKey ? "active" : ""}`}
+        onClick={() => onSelect(yesterdayKey)}
+      >
+        Yesterday
+      </button>
+      <select
+        className={`achievement-day-dropdown ${isRange ? "active" : ""}`}
+        value={isRange ? String(rangeN) : ""}
+        title="Summarize from an older day through today"
+        onChange={(e) => {
+          if (e.target.value) onSelect(`range:${e.target.value}`);
+        }}
+      >
+        {/* Hidden placeholder: the closed control shows just ▾ until a range is picked */}
+        <option value="" hidden>
+          ▾
+        </option>
+        {Array.from({ length: OLDER_DAY_COUNT }, (_, i) => i + 2).map((offset) => {
+          const date = new Date(`${keyDaysAgo(offset)}T00:00:00`);
+          // Span from that day through today = offset + 1 days. Label it as the
+          // range "Today – <start day>" so it's clear it summarizes up to today.
+          return (
+            <option key={offset} value={offset + 1}>
+              Today – {date.toLocaleDateString(DATE_LOCALE, { month: "short", day: "numeric" })}
+            </option>
+          );
+        })}
+      </select>
+    </div>
+  );
+}
+
+export function AchievementSummary({
+  days,
+  habits,
+  predictions = [],
+  selected,
+  username,
+  showHabits = true,
+  compact = false,
+}: {
+  days: SharedDailyLogDay[];
+  habits: Habit[];
+  predictions?: Prediction[];
+  // Controlled period: a YYYY-MM-DD key (single day) or "range:N" (last N days).
+  selected: string;
+  username?: string;
+  showHabits?: boolean;
+  // Tighter type/spacing for the in-modal social tab (all features kept).
+  compact?: boolean;
+}) {
+  const goldByKey = useMemo(() => new Map(days.map((d) => [d.date, d])), [days]);
+  const resolvedPreds = useMemo(
+    () => predictions.filter((p) => p.outcome !== "pending" && p.resolvedAt != null),
+    [predictions],
+  );
+  // Resolved predictions key off their resolution day; pending ones off the day
+  // they were made — so a bet shows up the day you place it, then again resolved.
+  const predsByKey = useMemo(() => {
+    const map = new Map<string, Prediction[]>();
+    const add = (key: string | null, p: Prediction) => {
+      if (!key) return;
+      const list = map.get(key) ?? [];
+      list.push(p);
+      map.set(key, list);
+    };
+    for (const p of resolvedPreds) add(predictionResolvedKey(p), p);
+    for (const p of predictions) {
+      if (p.outcome === "pending") add(localDayKey(new Date(p.createdAt)), p);
+    }
+    return map;
+  }, [predictions, resolvedPreds]);
+
+  const isRange = selected.startsWith("range:");
+  const rangeN = isRange ? Math.max(1, parseInt(selected.slice(6), 10) || 7) : 0;
+  const scopeKeys = isRange ? Array.from({ length: rangeN }, (_, i) => keyDaysAgo(i)) : [selected];
+
+  // Aggregate gold + predictions over the scope.
+  const scopeEntries = scopeKeys.flatMap((k) => goldByKey.get(k)?.entries ?? []);
+  const gold = buildDayGold(scopeEntries);
+  const scopePreds = scopeKeys.flatMap((k) => predsByKey.get(k) ?? []);
+
+  const goldTotal = sumDelta(gold.tasks) + sumDelta(gold.habits) + sumDelta(gold.privateEntries);
+  const predTotal = scopePreds.reduce((s, p) => s + predictionNet(p), 0);
+  const total = goldTotal + predTotal;
+
+  const showPredictions = scopePreds.length > 0;
+  const nothing =
+    gold.tasks.length === 0 && gold.habits.length === 0 && gold.privateEntries.length === 0 && scopePreds.length === 0;
+  // Single-day heading shows the actual date (weekday + day + month, no year)
+  // rather than "Today"/"Yesterday".
+  const heading = isRange
+    ? `Last ${rangeN} days`
+    : new Date(`${selected}T00:00:00`).toLocaleDateString(DATE_LOCALE, {
+        weekday: "long",
+        month: "long",
+        day: "numeric",
+      });
+
+  return (
+    <div className={`achievement-card ${compact ? "compact" : ""}`}>
+      {/* Header */}
+      <div className="achievement-header">
+        <div className="achievement-header-text">
+          {username && <span className="achievement-user">@{username}</span>}
+          <span className="achievement-range-label">{heading}</span>
+        </div>
+        <div className="achievement-total">
+          <span className="achievement-total-value">{total}</span>
+          <span className="achievement-total-unit">gold earned</span>
+        </div>
+      </div>
+
+      {/* Body */}
+      {nothing ? (
+        <p className="achievement-empty">Nothing logged {isRange ? "in this range" : "on this day"}.</p>
+      ) : (
+        <div className="achievement-categories">
+          <GoldCategories gold={gold} showItems />
+          {showPredictions && <PredictionsSection predictions={scopePreds} />}
+        </div>
+      )}
+
+      {/* Calibration chart intentionally hidden for now — may return, likely at
+          the end of the card once the styling fits. (CalibrationChart kept.) */}
+
+      {/* Habits — capped at 7 columns so it never grows large */}
+      {showHabits && habits.length > 0 && (
+        <div className="achievement-habits">
+          <p className="achievement-section-label">Habits</p>
+          <HabitCheckGrid
+            habits={habits}
+            endKey={isRange ? undefined : selected}
+            columns={isRange ? Math.min(rangeN, 7) : 7}
+          />
+        </div>
       )}
     </div>
   );

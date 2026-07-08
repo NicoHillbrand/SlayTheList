@@ -34,7 +34,7 @@ import {
   syncCloudSnapshot,
   updateCloudUsername,
 } from "../lib/api";
-import { AchievementSummary } from "./daily-log";
+import { AchievementSummary, PeriodSelector, defaultLogPeriod } from "./daily-log";
 
 type Props = {
   open?: boolean;
@@ -57,6 +57,28 @@ const DEFAULT_SETTINGS: SocialSettings = {
 function toErrorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
   return "Something went wrong";
+}
+
+// Stale-while-revalidate cache for shared profiles: the last-seen profile is
+// shown instantly on open (own profile especially — the data barely changes
+// between visits) while the fresh copy loads in the background.
+const PROFILE_CACHE_PREFIX = "slaythelist:social-profile:";
+
+function readCachedProfile(username: string): SharedProfile | null {
+  try {
+    const raw = localStorage.getItem(PROFILE_CACHE_PREFIX + username.toLowerCase());
+    return raw ? (JSON.parse(raw) as SharedProfile) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedProfile(username: string, profile: SharedProfile) {
+  try {
+    localStorage.setItem(PROFILE_CACHE_PREFIX + username.toLowerCase(), JSON.stringify(profile));
+  } catch {
+    // Quota/serialization failures just mean no cache — never block the UI.
+  }
 }
 
 const FRIEND_ORDER_KEY = "slaythelist.friendOrder";
@@ -169,6 +191,7 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
   const [error, setError] = useState<string | null>(null);
   const [encouragedIds, setEncouragedIds] = useState<Set<string>>(new Set());
   const [encouragementsRemaining, setEncouragementsRemaining] = useState<number | null>(null);
+  const [logPeriod, setLogPeriod] = useState<string>(defaultLogPeriod());
   const [draggingFriendId, setDraggingFriendId] = useState<string | null>(null);
   const closeSettings = onCloseSettings ?? (() => {});
 
@@ -180,11 +203,19 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
     setUsernameDraft(nextStatus.user?.username ?? "");
 
     if (nextStatus.connected) {
+      // Default to your own profile right away — your username comes from the
+      // local status call, so selection (and the cached profile render) never
+      // waits on the cloud friends fetch below.
+      if (nextStatus.user?.username) {
+        const ownUsername = nextStatus.user.username;
+        setSelectedUsername((current) => current ?? ownUsername);
+      }
       const [friendsResponse, requestsResponse] = await Promise.all([listCloudFriends(), listCloudFriendRequests()]);
       const orderedFriends = applyFriendOrder(friendsResponse.items);
       setFriends(orderedFriends);
       setIncomingRequests(requestsResponse.incoming);
       setOutgoingRequests(requestsResponse.outgoing);
+      // Fall back to the top friend if the account somehow has no username yet.
       if (orderedFriends.length > 0) {
         setSelectedUsername((current) => current ?? orderedFriends[0].username);
       }
@@ -256,6 +287,14 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
       return;
     }
     let cancelled = false;
+    // Render the cached copy immediately (or clear a previous user's profile),
+    // then revalidate from the cloud in the background.
+    const cached = readCachedProfile(selectedUsername);
+    setSelectedProfile(cached);
+    if (cached) {
+      setEncouragedIds(new Set(cached.encouragedEntryIds ?? []));
+      setEncouragementsRemaining(cached.encouragementsRemainingToday ?? null);
+    }
     setBusyAction(`profile:${selectedUsername}`);
     void getCloudSharedProfile(selectedUsername)
       .then((profile) => {
@@ -264,6 +303,7 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
           setEncouragedIds(new Set(profile.encouragedEntryIds ?? []));
           setEncouragementsRemaining(profile.encouragementsRemainingToday ?? null);
         }
+        writeCachedProfile(selectedUsername, profile);
       })
       .catch((nextError) => {
         if (!cancelled) setError(toErrorMessage(nextError));
@@ -526,75 +566,47 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
           </div>
         ) : (
           <div className="social-profile-content">
-            <div className="social-profile-top">
-              <h4>@{selectedProfile.user.username}</h4>
-              {selectedProfile.gold.canView && (
-                <span className="social-gold-value">{selectedProfile.gold.state?.gold ?? 0} gold</span>
-              )}
-              {selectedProfile.base?.canView && (
-                <a
-                  className="social-action-btn"
-                  href={`/base/view/${encodeURIComponent(selectedProfile.user.username)}`}
-                  style={{ marginLeft: "auto", textDecoration: "none" }}
-                >
-                  View base
-                </a>
-              )}
-            </div>
-
-            {selectedProfile.habits.canView || selectedProfile.dailyLog?.canView ? (
-              <AchievementSummary
-                days={selectedProfile.dailyLog?.canView ? selectedProfile.dailyLog.days : []}
-                habits={selectedProfile.habits.canView ? selectedProfile.habits.items : []}
-                showHabits={selectedProfile.habits.canView}
-              />
-            ) : (
-              <p className="settings-hint">Nothing shared.</p>
-            )}
-
-            <section className="social-profile-section">
-              <h5>Predictions <span className="settings-hint">(last 7 days)</span></h5>
-              {!selectedProfile.predictions.canView ? (
-                <p className="settings-hint">Hidden</p>
-              ) : (() => {
-                const days = recentPredictionsByDay(selectedProfile.predictions.items);
-                if (days.length === 0) return <p className="settings-hint">No predictions in the last week.</p>;
-                const todayLabel = new Date().toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
-                const yesterday = new Date();
-                yesterday.setDate(yesterday.getDate() - 1);
-                const yesterdayLabel = yesterday.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
-                const recentLabels = new Set([todayLabel, yesterdayLabel]);
-                const todayDays = days.filter((d) => recentLabels.has(d.label));
-                const pastDays = days.filter((d) => !recentLabels.has(d.label));
-
-                const renderDayItems = (day: { label: string; items: Prediction[] }) => (
-                  <div key={day.label} className="social-predictions-day">
-                    <p className="social-day-label">{day.label}</p>
-                    <div className="social-predictions-day-items">
-                      {day.items.map((prediction) => (
-                        <div key={prediction.id} className="social-prediction-row">
-                          <span className={outcomeClass(prediction.outcome)}>{outcomeIcon(prediction.outcome)}</span>
-                          <span className="social-prediction-title">{prediction.title}</span>
-                          <span className="social-prediction-confidence">{prediction.confidence}%</span>
-                        </div>
-                      ))}
+            {(() => {
+              const hasLog =
+                selectedProfile.habits.canView ||
+                selectedProfile.dailyLog?.canView ||
+                selectedProfile.predictions.canView;
+              return (
+                <>
+                  <div className="social-profile-top">
+                    <h4>@{selectedProfile.user.username}</h4>
+                    {selectedProfile.gold.canView && (
+                      <span className="social-gold-value">{selectedProfile.gold.state?.gold ?? 0} gold</span>
+                    )}
+                    <div className="social-profile-top-actions">
+                      {hasLog && <PeriodSelector selected={logPeriod} onSelect={setLogPeriod} />}
+                      {selectedProfile.base?.canView && (
+                        <a
+                          className="achievement-period-pill"
+                          href={`/base/view/${encodeURIComponent(selectedProfile.user.username)}`}
+                          style={{ textDecoration: "none" }}
+                        >
+                          View base
+                        </a>
+                      )}
                     </div>
                   </div>
-                );
 
-                return (
-                  <div className="social-predictions-timeline">
-                    {todayDays.map(renderDayItems)}
-                    {pastDays.length > 0 && (
-                      <details className="social-predictions-past">
-                        <summary className="social-day-label">Previous days</summary>
-                        {pastDays.map(renderDayItems)}
-                      </details>
-                    )}
-                  </div>
-                );
-              })()}
-            </section>
+                  {hasLog ? (
+                    <AchievementSummary
+                      days={selectedProfile.dailyLog?.canView ? selectedProfile.dailyLog.days : []}
+                      habits={selectedProfile.habits.canView ? selectedProfile.habits.items : []}
+                      predictions={selectedProfile.predictions.canView ? selectedProfile.predictions.items : []}
+                      selected={logPeriod}
+                      showHabits={selectedProfile.habits.canView}
+                      compact
+                    />
+                  ) : (
+                    <p className="settings-hint">Nothing shared.</p>
+                  )}
+                </>
+              );
+            })()}
 
           </div>
         )}
@@ -734,9 +746,9 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
                 type="button"
                 className="social-friend-item-name"
                 onClick={() => setSelectedUsername(status.user!.username)}
-                title="Preview what friends see on your profile"
+                title="Your profile as friends see it"
               >
-                @{status.user.username} <span className="settings-hint">(preview)</span>
+                @{status.user.username}
               </button>
             </div>
           </div>

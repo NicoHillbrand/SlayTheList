@@ -593,6 +593,8 @@ export interface GoldActivityContext {
   source?: string | null;
   // ISO timestamp to backdate the entry; defaults to now.
   at?: string | null;
+  // Hidden from shared views (rolled into "Private items").
+  private?: boolean;
 }
 
 function localDateKey(iso: string): string {
@@ -611,8 +613,8 @@ export function recordGoldActivity(
   if (!Number.isFinite(delta) || delta === 0) return;
   const at = context.at && !Number.isNaN(Date.parse(context.at)) ? new Date(context.at).toISOString() : new Date().toISOString();
   db.prepare(
-    `INSERT INTO gold_activity (id, user_id, date, created_at, delta, source_type, source_id, label, source)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO gold_activity (id, user_id, date, created_at, delta, source_type, source_id, label, source, private)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     randomUUID(),
     userId ?? "local",
@@ -623,6 +625,7 @@ export function recordGoldActivity(
     context.sourceId ?? null,
     context.label ?? "",
     context.source ?? null,
+    context.private ? 1 : 0,
   );
 }
 
@@ -634,12 +637,13 @@ type GoldActivityRow = {
   source_type: string;
   source_id: string | null;
   label: string | null;
+  private: number | null;
 };
 
 export function listGoldActivityDays(days = 30, userId?: string): GoldActivityDay[] {
   const rows = db
     .prepare(
-      `SELECT id, date, created_at, delta, source_type, source_id, label
+      `SELECT id, date, created_at, delta, source_type, source_id, label, private
        FROM gold_activity
        WHERE user_id = ?
        ORDER BY created_at DESC`,
@@ -662,6 +666,7 @@ export function listGoldActivityDays(days = 30, userId?: string): GoldActivityDa
       sourceType: (row.source_type as GoldActivitySource) ?? "manual",
       sourceId: row.source_id,
       label: row.label ?? "",
+      private: !!row.private,
     });
   }
   return [...byDay.values()]
