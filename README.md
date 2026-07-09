@@ -20,7 +20,7 @@ SlayTheList combines a todo app with a local API and a desktop launcher. The cur
 ## Quick start
 
 1. Install dependencies (first time only):
-   - Windows: `install.bat` (console) or `install-wizard.bat` (GUI wizard)
+   - Windows: `install.bat` (GUI setup wizard)
    - macOS / Linux: `./install.sh`
 2. Launch:
    - Windows: double-click `update.bat` to auto-update and launch (recommended for testers — a GUI wizard pulls the latest version, rebuilds only what changed, then launches), or `start.bat` (GUI mode selector) / `start.bat browser` to launch without updating
@@ -39,7 +39,7 @@ Each platform has a launcher script at the repo root:
 | Platform | Script | Notes |
 |----------|--------|-------|
 | Windows | `start.bat` | No argument → GUI mode selector; accepts `browser`, `desktop`, `stop` |
-| macOS | `start.command` | Double-click in Finder or run from terminal |
+| macOS | `start.command` | Double-click in Finder — thin wrapper around `start.sh` |
 | Linux | `start.sh` | Run from terminal; accepts `stop` to kill running processes |
 
 All launchers automatically stop previous SlayTheList instances before starting.

@@ -1,6 +1,7 @@
 #!/bin/bash
 # ============================================
-#   SlayTheList — Linux Launcher
+#   SlayTheList — Linux / macOS Launcher
+#   (start.command delegates here on macOS)
 # ============================================
 
 set -e
@@ -142,9 +143,13 @@ else
   for i in $(seq 1 45); do
     if curl -sf "$APP_URL" &>/dev/null; then
       success "App is up!"
-      xdg-open "$APP_URL" 2>/dev/null \
-        || sensible-browser "$APP_URL" 2>/dev/null \
-        || echo "Open $APP_URL in your browser."
+      if [ "$(uname -s)" = "Darwin" ]; then
+        open "$APP_URL"
+      else
+        xdg-open "$APP_URL" 2>/dev/null \
+          || sensible-browser "$APP_URL" 2>/dev/null \
+          || echo "Open $APP_URL in your browser."
+      fi
       break
     fi
     if ! kill -0 $API_PID 2>/dev/null || ! kill -0 $WEB_PID 2>/dev/null; then
