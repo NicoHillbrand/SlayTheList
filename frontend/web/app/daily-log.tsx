@@ -136,6 +136,12 @@ export function HabitCheckGrid({
 // so prediction/spend/encouragement ledger entries never appear here.
 // ---------------------------------------------------------------------------
 
+// Log entries as this component consumes them: the privacy-applied shared shape,
+// optionally enriched with the local ledger's `id` + `date` (present when the
+// viewer is looking at their own log), which enables moving entries between days.
+export type DailyLogEntry = SharedDailyLogEntry & { id?: string; date?: string };
+export type DailyLogDay = { date: string; total: number; entries: DailyLogEntry[] };
+
 function isExcluded(entry: SharedDailyLogEntry) {
   return (
     entry.sourceType === "spend" ||
@@ -150,13 +156,13 @@ function sumDelta(entries: SharedDailyLogEntry[]) {
 
 type DayGold = {
   // Todos + agent/manual awards, shown with labels.
-  tasks: SharedDailyLogEntry[];
-  habits: SharedDailyLogEntry[];
+  tasks: DailyLogEntry[];
+  habits: DailyLogEntry[];
   // Private items (any source) — rolled into a single labelless row under Tasks.
-  privateEntries: SharedDailyLogEntry[];
+  privateEntries: DailyLogEntry[];
 };
 
-function buildDayGold(entries: SharedDailyLogEntry[]): DayGold {
+function buildDayGold(entries: DailyLogEntry[]): DayGold {
   const tasks = entries.filter((e) => (e.sourceType === "todo" || e.sourceType === "manual") && !e.private);
   const habits = entries.filter((e) => e.sourceType === "habit" && !e.private);
   const privateEntries = entries.filter((e) => e.private && !isExcluded(e));
@@ -337,9 +343,45 @@ function CategoryBlock({
   );
 }
 
+// Hover-revealed date field on a log row — pick the day the thing was actually
+// done and the entry moves there. Only rendered on your own log (entries carry
+// the local ledger id) when an onMoveEntry handler is wired up.
+function EntryDatePicker({
+  entry,
+  onMoveEntry,
+}: {
+  entry: DailyLogEntry;
+  onMoveEntry?: (entryId: string, date: string) => void;
+}) {
+  if (!onMoveEntry || !entry.id || !entry.date) return null;
+  const id = entry.id;
+  return (
+    <input
+      type="date"
+      className="achievement-item-date"
+      title="Move this entry to the day you actually did it"
+      aria-label={`Change date for "${entry.label || "entry"}"`}
+      value={entry.date}
+      max={keyDaysAgo(0)}
+      onChange={(event) => {
+        const next = event.target.value;
+        if (next && next !== entry.date) onMoveEntry(id, next);
+      }}
+    />
+  );
+}
+
 // Tasks folds in agent/manual awards and a single rolled-up "Private items" row.
 // Habits is its own block. (Predictions render separately.)
-function GoldCategories({ gold, showItems }: { gold: DayGold; showItems: boolean }) {
+function GoldCategories({
+  gold,
+  showItems,
+  onMoveEntry,
+}: {
+  gold: DayGold;
+  showItems: boolean;
+  onMoveEntry?: (entryId: string, date: string) => void;
+}) {
   const privateTotal = sumDelta(gold.privateEntries);
   const taskTotal = sumDelta(gold.tasks) + privateTotal;
   const showTasks = gold.tasks.length > 0 || gold.privateEntries.length > 0;
@@ -356,6 +398,7 @@ function GoldCategories({ gold, showItems }: { gold: DayGold; showItems: boolean
           {gold.tasks.map((entry, index) => (
             <div key={`task:${index}`} className="achievement-item">
               <span className="achievement-item-label">{entry.label || "Task"}</span>
+              <EntryDatePicker entry={entry} onMoveEntry={onMoveEntry} />
               <span className="achievement-item-delta">+{entry.delta}</span>
             </div>
           ))}
@@ -380,6 +423,7 @@ function GoldCategories({ gold, showItems }: { gold: DayGold; showItems: boolean
           {gold.habits.map((entry, index) => (
             <div key={`habit:${index}`} className="achievement-item">
               <span className="achievement-item-label">{entry.label || "Habit"}</span>
+              <EntryDatePicker entry={entry} onMoveEntry={onMoveEntry} />
               <span className="achievement-item-delta">+{entry.delta}</span>
             </div>
           ))}
@@ -509,8 +553,9 @@ export function AchievementSummary({
   username,
   showHabits = true,
   compact = false,
+  onMoveEntry,
 }: {
-  days: SharedDailyLogDay[];
+  days: DailyLogDay[];
   habits: Habit[];
   predictions?: Prediction[];
   // Controlled period: a YYYY-MM-DD key (single day) or "range:N" (last N days).
@@ -519,6 +564,8 @@ export function AchievementSummary({
   showHabits?: boolean;
   // Tighter type/spacing for the in-modal social tab (all features kept).
   compact?: boolean;
+  // Own-log only: move a ledger entry to a different day (hover date picker).
+  onMoveEntry?: (entryId: string, date: string) => void;
 }) {
   const goldByKey = useMemo(() => new Map(days.map((d) => [d.date, d])), [days]);
   const resolvedPreds = useMemo(
@@ -587,7 +634,7 @@ export function AchievementSummary({
         <p className="achievement-empty">Nothing logged {isRange ? "in this range" : "on this day"}.</p>
       ) : (
         <div className="achievement-categories">
-          <GoldCategories gold={gold} showItems />
+          <GoldCategories gold={gold} showItems onMoveEntry={onMoveEntry} />
           {showPredictions && <PredictionsSection predictions={scopePreds} />}
         </div>
       )}

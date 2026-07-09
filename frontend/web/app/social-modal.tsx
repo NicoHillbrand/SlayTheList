@@ -9,6 +9,7 @@ import type {
   FriendRequest,
   FriendSearchResult,
   FriendSummary,
+  GoldActivityDay,
   Prediction,
   SharedProfile,
   SocialSettings,
@@ -24,6 +25,8 @@ import {
   getCloudSocialSettings,
   listCloudFriendRequests,
   listCloudFriends,
+  listGoldActivity,
+  updateGoldActivityDate,
   pollCloudConnect,
   saveCloudSocialSettings,
   searchCloudSocialUsers,
@@ -185,6 +188,7 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
   const [searchResults, setSearchResults] = useState<FriendSearchResult[]>([]);
   const [selectedUsername, setSelectedUsername] = useState<string | null>(null);
   const [selectedProfile, setSelectedProfile] = useState<SharedProfile | null>(null);
+  const [ownLogDays, setOwnLogDays] = useState<GoldActivityDay[] | null>(null);
   const [usernameDraft, setUsernameDraft] = useState("");
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -315,6 +319,41 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
       cancelled = true;
     };
   }, [isVisible, selectedUsername, status?.connected]);
+
+  // Own profile: pull the log from the local ledger instead of the cloud
+  // snapshot — local entries carry ids, which enables moving an entry to the
+  // day it actually happened (hover date picker on log rows).
+  const isSelfProfile = !!selectedUsername && selectedUsername === status?.user?.username;
+
+  useEffect(() => {
+    if (!isVisible || !isSelfProfile) {
+      setOwnLogDays(null);
+      return;
+    }
+    let cancelled = false;
+    void listGoldActivity(30)
+      .then((result) => {
+        if (!cancelled) setOwnLogDays(result.days);
+      })
+      .catch(() => {
+        // Fall back to the cloud snapshot (read-only) if the local API is down.
+        if (!cancelled) setOwnLogDays(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isVisible, isSelfProfile]);
+
+  async function handleMoveLogEntry(entryId: string, date: string) {
+    setError(null);
+    try {
+      await updateGoldActivityDate(entryId, date);
+      const result = await listGoldActivity(30);
+      setOwnLogDays(result.days);
+    } catch (nextError) {
+      setError(toErrorMessage(nextError));
+    }
+  }
 
   const outgoingByUsername = useMemo(
     () => new Map(outgoingRequests.map((request) => [request.receiver.username.toLowerCase(), request])),
@@ -594,12 +633,19 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
 
                   {hasLog ? (
                     <AchievementSummary
-                      days={selectedProfile.dailyLog?.canView ? selectedProfile.dailyLog.days : []}
+                      days={
+                        isSelfProfile && ownLogDays
+                          ? ownLogDays
+                          : selectedProfile.dailyLog?.canView
+                            ? selectedProfile.dailyLog.days
+                            : []
+                      }
                       habits={selectedProfile.habits.canView ? selectedProfile.habits.items : []}
                       predictions={selectedProfile.predictions.canView ? selectedProfile.predictions.items : []}
                       selected={logPeriod}
                       showHabits={selectedProfile.habits.canView}
                       compact
+                      onMoveEntry={isSelfProfile && ownLogDays ? handleMoveLogEntry : undefined}
                     />
                   ) : (
                     <p className="settings-hint">Nothing shared.</p>

@@ -3079,6 +3079,35 @@ body.desktop-app main {
   font-variant-numeric: tabular-nums;
 }
 
+/* Hover-revealed date field on own-log rows: pick the day the entry actually
+   happened. Reserves its space while invisible so rows don't shift on hover. */
+.achievement-item-date {
+  font: inherit;
+  font-size: 0.68rem;
+  color: #8b8477;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 4px;
+  padding: 0 0.3rem;
+  margin-left: auto;
+  color-scheme: dark;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+.achievement-item:hover .achievement-item-date,
+.achievement-item-date:focus,
+.achievement-item-date:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.achievement-item-date::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: 0.6;
+}
+
 .achievement-habits {
   display: grid;
   gap: 0.4rem;

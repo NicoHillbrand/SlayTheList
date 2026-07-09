@@ -685,6 +685,16 @@ export function listGoldActivityDays(days = 30, userId?: string): GoldActivityDa
     .slice(0, Math.max(0, days));
 }
 
+// Move a ledger entry to a different day (e.g. a todo marked done today that
+// was actually finished yesterday). Only the grouping `date` changes —
+// `created_at` stays as the moment the entry was recorded.
+export function updateGoldActivityDate(id: string, date: string, userId?: string): boolean {
+  const result = db
+    .prepare("UPDATE gold_activity SET date = ? WHERE id = ? AND user_id = ?")
+    .run(date, id, userId ?? "local");
+  return result.changes > 0;
+}
+
 export function awardGold(amount: number, userId?: string, activity?: GoldActivityContext): GoldState {
   const delta = Math.max(0, Math.floor(amount));
   const current = getGoldState(userId);

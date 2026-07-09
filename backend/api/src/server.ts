@@ -61,6 +61,7 @@ import {
   awardTodoGold,
   deductGold,
   listGoldActivityDays,
+  updateGoldActivityDate,
   type GoldActivityContext,
   saveAccountabilityState,
   setZoneRequirements,
@@ -631,6 +632,19 @@ app.get("/api/gold/activity", (req, res) => {
   const parsed = typeof rawLimit === "string" ? Number.parseInt(rawLimit, 10) : NaN;
   const days = Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 365) : 30;
   ok(res, { days: listGoldActivityDays(days) });
+});
+
+// Move a ledger entry to a different day (the day the thing actually happened).
+app.patch("/api/gold/activity/:id", (req, res) => {
+  const date = req.body?.date;
+  if (typeof date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(`${date}T00:00:00`))) {
+    return badRequest(res, "date must be a YYYY-MM-DD string");
+  }
+  if (!updateGoldActivityDate(req.params.id, date)) {
+    return res.status(404).json({ error: "activity entry not found" });
+  }
+  ok(res, { updated: true, id: req.params.id, date });
+  triggerCloudSnapshotSync();
 });
 
 app.post("/api/gold/deduct", (req, res) => {

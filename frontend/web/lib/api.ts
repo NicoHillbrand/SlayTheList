@@ -393,6 +393,17 @@ export async function listGoldActivity(days = 30) {
   return request<{ days: GoldActivityDay[] }>(`/api/gold/activity?days=${days}`);
 }
 
+// Move a ledger entry to a different day (the day it actually happened).
+export async function updateGoldActivityDate(id: string, date: string) {
+  return request<{ updated: boolean; id: string; date: string }>(
+    `/api/gold/activity/${encodeURIComponent(id)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ date }),
+    },
+  );
+}
+
 export async function listHabits() {
   return request<{ items: Habit[] }>("/api/habits");
 }
