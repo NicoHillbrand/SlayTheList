@@ -2,7 +2,7 @@
 setlocal ENABLEDELAYEDEXPANSION
 
 set "ROOT=%~dp0"
-cd /d "%ROOT%"
+cd /d "%ROOT%app"
 
 echo ============================================
 echo   SlayTheList — Windows Installer

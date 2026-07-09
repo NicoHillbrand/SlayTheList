@@ -1,8 +1,14 @@
 # SlayTheList
 
-SlayTheList combines a todo app with a local API and a desktop launcher. The current cross-platform focus is the `frontend/web` + `backend/api` stack; the game overlay is available on Windows (.NET) and Linux (Python).
+SlayTheList combines a todo app with a local API and a desktop launcher. The current cross-platform focus is the `app/frontend/web` + `app/backend/api` stack; the game overlay is available on Windows (.NET) and Linux (Python).
 
-## Packages
+## Layout
+
+- `app/`: all code — the npm monorepo root. Run npm commands from here.
+- `workspace/`: personal-agent home. Open this folder in Claude Code to talk to your agent (todos, habits, predictions via MCP). Its contents are private by default; only structure and templates are tracked.
+- Launchers and installers stay at the repo top level (see below).
+
+## Packages (inside `app/`)
 
 - `frontend/web`: Next.js app for todo management and lock-zone editing
 - `backend/api`: Express + WebSocket API for todo persistence and local app services
@@ -20,7 +26,7 @@ SlayTheList combines a todo app with a local API and a desktop launcher. The cur
    - Windows: double-click `update.bat` to auto-update and launch (recommended for testers — a GUI wizard pulls the latest version, rebuilds only what changed, then launches), or `start.bat` (GUI mode selector) / `start.bat browser` to launch without updating
    - macOS: double-click `start.command`
    - Linux: `./start.sh`
-3. Or run manually:
+3. Or run manually (from `app/`):
    - Desktop app: `npm run desktop:dev`
    - Browser workflow: `npm run dev:api` and `npm run dev:web`
 
@@ -57,7 +63,7 @@ If you want to run the services directly in the browser:
 2. Start the web app:
    - `npm run dev:web`
 
-`npm run dev:web` now syncs blocked overlay images into `frontend/web/public/blocked-overlays` automatically.
+`npm run dev:web` now syncs blocked overlay images into `app/frontend/web/public/blocked-overlays` automatically.
 
 ## Packaged desktop build
 
@@ -75,8 +81,8 @@ See `docs/desktop-launcher.md` for details.
 
 The overlay agent blocks game windows until todos are completed. It is optional and platform-specific:
 
-- **Windows:** `desktop/overlay-agent/` — .NET 8 WPF, self-contained (no .NET install needed). Launches automatically in browser mode if a built exe is found.
-- **Linux:** `desktop/overlay-agent-linux/` — Python 3 + tkinter. Launches automatically if its venv is set up via `./install.sh`.
+- **Windows:** `app/desktop/overlay-agent/` — .NET 8 WPF, self-contained (no .NET install needed). Launches automatically in browser mode if a built exe is found.
+- **Linux:** `app/desktop/overlay-agent-linux/` — Python 3 + tkinter. Launches automatically if its venv is set up via `./install.sh`.
 
 ## API usage from CLI/agents
 

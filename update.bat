@@ -19,5 +19,5 @@ REM Strip the trailing backslash: passing "...\path\" makes the closing \" an
 REM escaped quote, which mangles the -Root argument (same fix as launcher.vbs).
 set "ROOTNB=%ROOT:~0,-1%"
 
-start "" powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%ROOT%scripts\setup-wizard.ps1" -Mode Update -Root "%ROOTNB%"
+start "" powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%ROOT%app\scripts\setup-wizard.ps1" -Mode Update -Root "%ROOTNB%\app"
 exit /b 0

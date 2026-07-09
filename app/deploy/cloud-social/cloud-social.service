@@ -5,7 +5,7 @@ After=network.target
 [Service]
 Type=simple
 User=slaythelist
-WorkingDirectory=/opt/slaythelist
+WorkingDirectory=/opt/slaythelist/app
 EnvironmentFile=/etc/slaythelist/cloud-social.env
 ExecStart=/usr/bin/npm --workspace @slaythelist/cloud-social run start
 Restart=always

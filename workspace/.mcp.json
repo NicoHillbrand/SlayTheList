@@ -4,7 +4,7 @@
       "type": "stdio",
       "command": "npx",
       "args": ["tsx", "src/mcp.ts"],
-      "cwd": "app/backend/api"
+      "cwd": "../app/backend/api"
     }
   }
 }

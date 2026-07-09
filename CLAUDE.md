@@ -2,6 +2,22 @@
 
 Personal productivity overlay app. An MCP server is configured at `.mcp.json` that gives Claude direct read/write access to the user's todos, habits, predictions, and reflections.
 
+## Repo Layout
+
+```
+SlayTheList/
+├── app/          # all code: npm monorepo root (backend/, frontend/, shared/,
+│                 # desktop/, scripts/, deploy/, assets/, docs/, FEATURE-IDEAS.md)
+├── workspace/    # personal-agent home — open THIS folder in Claude Code for
+│                 # agent sessions; has its own CLAUDE.md (modes, logging) and a
+│                 # private-by-default gitignore
+├── start.bat / start.sh / start.command   # launchers (entry points stay top-level)
+├── update.bat / install*.bat|sh           # updater / installers
+└── CLAUDE.md / README.md / .mcp.json
+```
+
+Run npm commands from `app/` (e.g. `cd app; npm run dev:web`). The top-level scripts redirect into `app/` themselves.
+
 ## MCP Tools
 
 ### Todos
@@ -135,7 +151,7 @@ The `.mcp.json` in this repo uses relative paths:
       "type": "stdio",
       "command": "npx",
       "args": ["tsx", "src/mcp.ts"],
-      "cwd": "backend/api"
+      "cwd": "app/backend/api"
     }
   }
 }
@@ -149,10 +165,10 @@ Use absolute paths to the `tsx` binary and `mcp.ts` entry point, and **set `SLAY
 {
   "mcpServers": {
     "slaythelist": {
-      "command": "/absolute/path/to/SlayTheList/node_modules/.bin/tsx",
-      "args": ["/absolute/path/to/SlayTheList/backend/api/src/mcp.ts"],
+      "command": "/absolute/path/to/SlayTheList/app/node_modules/.bin/tsx",
+      "args": ["/absolute/path/to/SlayTheList/app/backend/api/src/mcp.ts"],
       "env": {
-        "SLAYTHELIST_DATA_DIR": "/absolute/path/to/SlayTheList/backend/api/data"
+        "SLAYTHELIST_DATA_DIR": "/absolute/path/to/SlayTheList/app/backend/api/data"
       }
     }
   }
@@ -167,5 +183,5 @@ At the start of each conversation, check the current time. If it is before noon 
 
 ## Notes
 
-- The local API server (`backend/api`) must be running for overlay/game features but is **not** required for MCP — the MCP server connects directly to the SQLite database.
+- The local API server (`app/backend/api`) must be running for overlay/game features but is **not** required for MCP — the MCP server connects directly to the SQLite database.
 - If the data directory is non-default (e.g. you pass `--data-dir` or set `SLAYTHELIST_DATA_DIR` when running the API), set the same env var in `.mcp.json` so the MCP server reads the same database.

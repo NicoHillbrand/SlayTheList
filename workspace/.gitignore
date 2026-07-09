@@ -1,0 +1,22 @@
+# The agent workspace is PRIVATE BY DEFAULT.
+# Everything is ignored unless explicitly whitelisted below — so personal
+# content (filled-in documents, logs, archives) can never end up on GitHub.
+*
+
+# --- Tracked structure & templates -----------------------------------------
+!.gitignore
+!CLAUDE.md
+!.mcp.json
+
+!documents/
+documents/*
+!documents/templates/
+!documents/templates/**
+
+!logs/
+logs/*
+!logs/README.md
+
+!archive/
+archive/*
+!archive/README.md

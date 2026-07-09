@@ -11,8 +11,9 @@ Else
   mode = "browser"
 End If
 
-' Root is the parent of the scripts\ folder that holds this script.
-rootDir = fso.GetParentFolderName(fso.GetParentFolderName(WScript.ScriptFullName))
+' This script lives in app\scripts\; start.bat lives at the repo root, which
+' is the parent of the app\ folder.
+rootDir = fso.GetParentFolderName(fso.GetParentFolderName(fso.GetParentFolderName(WScript.ScriptFullName)))
 batPath = rootDir & "\start.bat"
 
 q = Chr(34)

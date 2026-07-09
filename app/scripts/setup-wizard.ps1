@@ -24,6 +24,9 @@ if (-not $Root) { $Root = (Split-Path -Parent $PSScriptRoot) }
 $Root = $Root.Trim().Trim('"').TrimEnd('\')
 if (-not (Test-Path -LiteralPath $Root)) { $Root = (Split-Path -Parent $PSScriptRoot) }
 $Root = (Resolve-Path -LiteralPath $Root).Path.TrimEnd('\')
+# $Root is the app\ folder (npm monorepo root). The repo root — home of .git
+# and the start.bat / update.bat entry points — is its parent.
+$RepoRoot = Split-Path -Parent $Root
 
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName PresentationCore
@@ -198,11 +201,11 @@ $worker = {
   # so npm install can't fail on locked native modules (better-sqlite3 / sharp)
   # and the overlay .exe isn't locked while dotnet republishes it.
   function Stop-RunningApp {
-    $startBat = Join-Path $Root "start.bat"
+    $startBat = Join-Path $RepoRoot "start.bat"
     Log "> start.bat stop"
     try {
       if (Test-Path -LiteralPath $startBat) {
-        Start-Process -FilePath $startBat -ArgumentList "stop" -WorkingDirectory $Root -WindowStyle Hidden -Wait
+        Start-Process -FilePath $startBat -ArgumentList "stop" -WorkingDirectory $RepoRoot -WindowStyle Hidden -Wait
       } else {
         Log "[--] start.bat not found at $startBat"
       }
@@ -231,9 +234,9 @@ $worker = {
         $sync.Status = "This folder isn't set up for updates (git not installed). Ask Nico for help."
         $sync.Outcome = "fail"; $sync.Done = $true; return
       }
-      if (-not (Test-Path -LiteralPath (Join-Path $Root ".git"))) {
+      if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot ".git"))) {
         Fail "check" "not a git checkout"
-        Log "[!!] $Root is not a git checkout."
+        Log "[!!] $RepoRoot is not a git checkout."
         $sync.Status = "This folder isn't a git checkout. Re-download SlayTheList or ask Nico."
         $sync.Outcome = "fail"; $sync.Done = $true; return
       }
@@ -305,7 +308,7 @@ $worker = {
 
         # ---- 5. Rebuild overlay agent (only if its sources changed) -------
         $overlayChanged = $false
-        foreach ($f in $changed) { if ($f -match "^desktop/overlay-agent/") { $overlayChanged = $true; break } }
+        foreach ($f in $changed) { if ($f -match "^app/desktop/overlay-agent/") { $overlayChanged = $true; break } }
         if ($overlayChanged -and (Has "dotnet")) {
           Begin "overlay"
           $sync.Status = "Rebuilding the overlay agent..."
@@ -327,9 +330,9 @@ $worker = {
 
       # ---- 6. Launch (always, unless a fatal failure already returned) -----
       Begin "launch"
-      $startBat = Join-Path $Root "start.bat"
+      $startBat = Join-Path $RepoRoot "start.bat"
       Log "> start.bat browser"
-      Start-Process -FilePath $startBat -ArgumentList "browser" -WorkingDirectory $Root -WindowStyle Hidden
+      Start-Process -FilePath $startBat -ArgumentList "browser" -WorkingDirectory $RepoRoot -WindowStyle Hidden
       Ok "launch" "launched"
       $sync.Launch = $true
       $sync.Done = $true
@@ -445,6 +448,7 @@ $rs.ThreadOptions = "ReuseThread"
 $rs.Open()
 $rs.SessionStateProxy.SetVariable("sync", $sync)
 $rs.SessionStateProxy.SetVariable("Root", $Root)
+$rs.SessionStateProxy.SetVariable("RepoRoot", $RepoRoot)
 $ps = [powershell]::Create()
 $ps.Runspace = $rs
 [void]$ps.AddScript($worker.ToString())
@@ -460,7 +464,7 @@ $dotFor = @{ Pending = $cGray; Running = $cGold; Done = $cGreen; Warn = $cOrange
 
 function Launch-App {
   try {
-    Start-Process -FilePath (Join-Path $Root "start.bat") -ArgumentList "browser" -WorkingDirectory $Root -WindowStyle Hidden
+    Start-Process -FilePath (Join-Path $RepoRoot "start.bat") -ArgumentList "browser" -WorkingDirectory $RepoRoot -WindowStyle Hidden
   } catch {}
 }
 

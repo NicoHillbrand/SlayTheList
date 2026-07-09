@@ -16,10 +16,17 @@ paths when SSHed in**, not the ones in [deploy/cloud-social/cloud-social.service
 |---|---|
 | Service unit | `/etc/systemd/system/cloud-social.service` |
 | `User=` | `nico` |
-| `WorkingDirectory=` | `/home/nico/apps/SlayTheList` |
+| `WorkingDirectory=` | `/home/nico/apps/SlayTheList/app` |
 | `EnvironmentFile=` | `/etc/slaythelist/cloud-social.env` |
 | `CLOUD_SOCIAL_DATA_DIR` | `/home/nico/apps/SlayTheList/data/cloud-social` |
 | Listen port | `8790` (Caddy reverse-proxies from `slaythelist.nicohillbrand.com`) |
+
+> **Repo restructure (2026-07):** all code moved into the `app/` subfolder.
+> The first deploy that pulls the restructure must also update the live unit's
+> `WorkingDirectory=` to `/home/nico/apps/SlayTheList/app` (`sudo systemctl
+> edit cloud-social` or edit the unit file, then `daemon-reload`), and npm
+> commands now run from `~/apps/SlayTheList/app`. `CLOUD_SOCIAL_DATA_DIR`
+> stays where it is — it lives outside `app/`.
 
 The repo's `deploy/cloud-social/cloud-social.service` template still says
 `User=slaythelist` / `/opt/slaythelist`. Don't copy it over the live unit —
@@ -34,6 +41,7 @@ cd ~/apps/SlayTheList
 git fetch origin
 git reset --hard origin/main      # pull may fail if VPS history diverged; reset is safe
                                    # because data lives outside the repo
+cd app
 npm install                        # only if package.json changed
 npm run build                      # rebuilds contracts → api → cloud-social → web
 
@@ -122,10 +130,10 @@ Clone or update the repo to:
 
 - `/opt/slaythelist`
 
-Then install and build:
+Then install and build (the npm monorepo lives in the `app/` subfolder):
 
 ```bash
-cd /opt/slaythelist
+cd /opt/slaythelist/app
 npm install
 npm run build
 ```

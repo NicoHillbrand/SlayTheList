@@ -1481,11 +1481,12 @@ function runAutostartManage(
   return new Promise((resolve, reject) => {
     const repo = findRepoRoot();
     if (!repo) return reject(new Error("This install isn't a git checkout."));
-    const script = path.join(repo, "scripts", "autostart-manage.ps1");
+    const app = path.join(repo, "app");
+    const script = path.join(app, "scripts", "autostart-manage.ps1");
     if (!existsSync(script)) return reject(new Error("autostart-manage.ps1 not found."));
     execFile(
       "powershell",
-      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-Action", action, "-Root", repo],
+      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-Action", action, "-Root", app],
       { timeout: 15_000, windowsHide: true },
       (err, stdout) => {
         if (err) return reject(err);

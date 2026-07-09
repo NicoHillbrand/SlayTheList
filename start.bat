@@ -2,6 +2,7 @@
 setlocal ENABLEDELAYEDEXPANSION
 
 set "ROOT=%~dp0"
+set "APP=%ROOT%app\"
 cd /d "%ROOT%"
 set "MODE=%~1"
 
@@ -11,17 +12,17 @@ if /I "%MODE%"=="desktop"  goto desktop
 if /I "%MODE%"=="stop"     goto stop
 
 REM -- GUI launcher (no console flash) --------------------------------------
-cscript //nologo "%ROOT%scripts\launcher.vbs" "%ROOT%"
+cscript //nologo "%APP%scripts\launcher.vbs" "%ROOT%app"
 exit /b 0
 
 REM -- Preflight checks ------------------------------------------------------
 :preflight
-if not exist "%ROOT%node_modules" (
+if not exist "%APP%node_modules" (
   echo Dependencies not found. Run install.bat first.
   pause
   exit /b 1
 )
-if not exist "%ROOT%shared\contracts\dist" (
+if not exist "%APP%shared\contracts\dist" (
   echo Contracts not built. Run install.bat first.
   pause
   exit /b 1
@@ -74,10 +75,10 @@ REM Auto-stop any previous instance
 call :kill_previous
 
 REM Sync overlay assets
-if not exist "%ROOT%frontend\web\public\blocked-overlays" mkdir "%ROOT%frontend\web\public\blocked-overlays"
+if not exist "%APP%frontend\web\public\blocked-overlays" mkdir "%APP%frontend\web\public\blocked-overlays"
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$src = Join-Path '%ROOT%' 'assets\blocked-overlays'; " ^
-  "$dst = Join-Path '%ROOT%' 'frontend\web\public\blocked-overlays'; " ^
+  "$src = Join-Path '%APP%' 'assets\blocked-overlays'; " ^
+  "$dst = Join-Path '%APP%' 'frontend\web\public\blocked-overlays'; " ^
   "if (Test-Path $src) { Get-ChildItem -Path $src -File -ErrorAction SilentlyContinue | Where-Object { @('.png','.jpg','.jpeg','.webp','.gif') -contains $_.Extension.ToLowerInvariant() } | ForEach-Object { Copy-Item $_.FullName -Destination (Join-Path $dst $_.Name) -Force } }" >nul 2>&1
 
 REM Find available web port
@@ -88,19 +89,19 @@ if not "%WEB_PORT%"=="4000" echo Port 4000 is busy — using port %WEB_PORT%.
 
 REM Launch API + Web (hidden shells)
 powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command ^
-  "Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-Command','Set-Location -LiteralPath ''%ROOT%''; npm run dev:api'"
+  "Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-Command','Set-Location -LiteralPath ''%APP%''; npm run dev:api'"
 powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command ^
-  "Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-Command','Set-Location -LiteralPath ''%ROOT%''; $env:PORT=''%WEB_PORT%''; npm run dev:web'"
+  "Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-Command','Set-Location -LiteralPath ''%APP%''; $env:PORT=''%WEB_PORT%''; npm run dev:web'"
 
 REM Launch overlay if available
 set "HAS_OVERLAY=0"
 set "OVERLAY_EXE="
-if exist "%ROOT%desktop\overlay-agent\SlayTheList.OverlayAgent\bin\Release\net8.0-windows\win-x64\publish\SlayTheList.OverlayAgent.exe" (
-  set "OVERLAY_EXE=%ROOT%desktop\overlay-agent\SlayTheList.OverlayAgent\bin\Release\net8.0-windows\win-x64\publish\SlayTheList.OverlayAgent.exe"
-) else if exist "%ROOT%desktop\overlay-agent\SlayTheList.OverlayAgent\bin\Release\net8.0-windows\SlayTheList.OverlayAgent.exe" (
-  set "OVERLAY_EXE=%ROOT%desktop\overlay-agent\SlayTheList.OverlayAgent\bin\Release\net8.0-windows\SlayTheList.OverlayAgent.exe"
-) else if exist "%ROOT%desktop\overlay-agent\SlayTheList.OverlayAgent\bin\Debug\net8.0-windows\SlayTheList.OverlayAgent.exe" (
-  set "OVERLAY_EXE=%ROOT%desktop\overlay-agent\SlayTheList.OverlayAgent\bin\Debug\net8.0-windows\SlayTheList.OverlayAgent.exe"
+if exist "%APP%desktop\overlay-agent\SlayTheList.OverlayAgent\bin\Release\net8.0-windows\win-x64\publish\SlayTheList.OverlayAgent.exe" (
+  set "OVERLAY_EXE=%APP%desktop\overlay-agent\SlayTheList.OverlayAgent\bin\Release\net8.0-windows\win-x64\publish\SlayTheList.OverlayAgent.exe"
+) else if exist "%APP%desktop\overlay-agent\SlayTheList.OverlayAgent\bin\Release\net8.0-windows\SlayTheList.OverlayAgent.exe" (
+  set "OVERLAY_EXE=%APP%desktop\overlay-agent\SlayTheList.OverlayAgent\bin\Release\net8.0-windows\SlayTheList.OverlayAgent.exe"
+) else if exist "%APP%desktop\overlay-agent\SlayTheList.OverlayAgent\bin\Debug\net8.0-windows\SlayTheList.OverlayAgent.exe" (
+  set "OVERLAY_EXE=%APP%desktop\overlay-agent\SlayTheList.OverlayAgent\bin\Debug\net8.0-windows\SlayTheList.OverlayAgent.exe"
 )
 
 if defined OVERLAY_EXE (
@@ -111,7 +112,7 @@ if defined OVERLAY_EXE (
 REM Launch startup status GUI
 set "GUI_OVERLAY_FLAG="
 if "%HAS_OVERLAY%"=="1" set "GUI_OVERLAY_FLAG=-HasOverlay"
-start "" powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\startup-status.ps1" -WebPort %WEB_PORT% -ApiPort 8788 %GUI_OVERLAY_FLAG%
+start "" powershell -NoProfile -ExecutionPolicy Bypass -File "%APP%scripts\startup-status.ps1" -WebPort %WEB_PORT% -ApiPort 8788 %GUI_OVERLAY_FLAG%
 
 REM Open browser after a short delay (ping works in hidden consoles, timeout does not)
 ping 127.0.0.1 -n 4 >nul
@@ -127,6 +128,6 @@ REM Auto-stop any previous instance
 call :kill_previous
 
 echo Starting desktop mode...
-start "" powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "Set-Location -LiteralPath '%ROOT%'; npm run desktop:dev"
+start "" powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "Set-Location -LiteralPath '%APP%'; npm run desktop:dev"
 echo Desktop app is launching — the window will appear when ready.
 exit /b 0
