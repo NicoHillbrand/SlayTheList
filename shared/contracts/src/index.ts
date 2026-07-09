@@ -67,6 +67,17 @@ export const predictionSchema = z.object({
 });
 export type Prediction = z.infer<typeof predictionSchema>;
 
+// Payout for a staked prediction: baseline-relative quadratic scoring.
+// Break-even at 50% confidence, up to 2× the stake back when confident and
+// right, clamped at 0 so the maximum loss is the stake. Honest confidence
+// maximizes expected gold (mildly overconfidence-tolerant above ~71% only
+// because of the clamp).
+export function predictionStakePayout(stake: number, confidence: number, outcome: "hit" | "miss"): number {
+  const f = confidence / 100;
+  const o = outcome === "hit" ? 1 : 0;
+  return Math.round(stake * Math.max(0, 2 - 4 * (f - o) ** 2));
+}
+
 export const walkthroughSchema = z.object({
   id: z.string(),
   date: z.string(), // YYYY-MM-DD

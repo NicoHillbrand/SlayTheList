@@ -35,7 +35,7 @@ These are stored as JSON arrays. The pattern for any modification is **read → 
 | `list_habits` | Returns all habits. |
 | `set_habits` | Replaces full habits array. |
 | `list_predictions` | Returns all predictions. |
-| `set_predictions` | Replaces full predictions array. |
+| `set_predictions` | Replaces full predictions array. Stake-aware — see below. |
 | `list_reflections` | Returns reflections, newest first. Optional `limit` (default 30). |
 | `set_reflections` | Replaces full reflections array. |
 
@@ -79,11 +79,24 @@ These are stored as JSON arrays. The pattern for any modification is **read → 
   "createdAt": 1700000000000,
   "resolvedAt": 1700000000000,
   "murphy": false,
-  "targetTitle": "string | undefined"
+  "targetTitle": "string | undefined",
+  "stake": 5,
+  "payout": 8
 }
 ```
 
 `murphy: true` marks a prediction as a Murphy-Jitsu failure-mode prediction (what might go wrong). `targetTitle` links it to a specific goal by title when it's a per-goal failure mode. Regular predictions omit both fields.
+
+`stake` (optional, gold) escrows gold on a prediction. `set_predictions` handles the gold movements server-side, mirroring the app UI:
+
+- **Adding `stake` to a new/pending prediction** deducts that much gold immediately (clamped to the current balance) and writes a "Staked N on …" ledger entry. Do not deduct gold yourself.
+- **While a stake is pending**, `confidence` and `stake` are locked — changes to them are ignored.
+- **Resolving a staked prediction** (`outcome` pending → `hit`/`miss`) computes `payout` server-side and awards it. Never set `payout` yourself on a live resolution — it is overwritten. Scoring is quadratic: break-even at 50% confidence, up to 2× the stake back when confident and right, down to 0 when confidently wrong.
+- **Resolved staked predictions are frozen** — outcome/stake/payout/confidence can't be changed afterwards.
+- **Removing a pending staked prediction** from the array refunds the stake silently (no ledger entry).
+- **History backfill**: a prediction written already-resolved with both `stake` and `payout` is stored as-is with no gold movement.
+
+The tool result reports `staked`, `paidOut`, `refunded`, and the resulting `gold` balance.
 
 ### ReflectionEntry
 ```json

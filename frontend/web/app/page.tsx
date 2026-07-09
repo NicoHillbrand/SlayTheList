@@ -43,6 +43,7 @@ import type {
   Todo,
   Walkthrough,
 } from "@slaythelist/contracts";
+import { predictionStakePayout } from "@slaythelist/contracts";
 import {
   createGameState as createGameStateApi,
   createTodo,
@@ -217,16 +218,6 @@ const DEFAULT_PREDICTION_CONFIDENCE = 95;
 const DEFAULT_PREDICTION_STAKE = 5;
 const PREDICTION_STAKE_STEP = 5;
 
-// Payout for a staked prediction: baseline-relative quadratic scoring.
-// Break-even at 50% confidence, up to 2× the stake back when confident and
-// right, clamped at 0 so the maximum loss is the stake. Honest confidence
-// maximizes expected gold (mildly overconfidence-tolerant above ~71% only
-// because of the clamp).
-function predictionStakePayout(stake: number, confidence: number, outcome: "hit" | "miss"): number {
-  const f = confidence / 100;
-  const o = outcome === "hit" ? 1 : 0;
-  return Math.round(stake * Math.max(0, 2 - 4 * (f - o) ** 2));
-}
 const CALIBRATION_CHART_WIDTH = 320;
 const CALIBRATION_CHART_HEIGHT = 190;
 const CALIBRATION_CHART_PADDING = { top: 16, right: 18, bottom: 28, left: 34 };

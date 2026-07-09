@@ -1,7 +1,13 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { habitSchema, predictionSchema, reflectionEntrySchema, walkthroughSchema } from "@slaythelist/contracts";
+import {
+  habitSchema,
+  predictionSchema,
+  predictionStakePayout,
+  reflectionEntrySchema,
+  walkthroughSchema,
+} from "@slaythelist/contracts";
 import {
   listTodos,
   createTodo,
@@ -274,14 +280,103 @@ server.tool(
 
 server.tool(
   "set_predictions",
-  "Replace the full predictions array. Read the current state with list_predictions first, modify the array, then call this to save.",
+  "Replace the full predictions array. Read the current state with list_predictions first, modify the array, then call this to save. " +
+    "Stakes are handled like the app UI: adding `stake` to a new/pending prediction escrows that much gold from the balance (clamped to what's available, with a ledger entry); " +
+    "resolving a staked prediction to hit/miss computes the payout server-side (quadratic scoring, break-even at 50% confidence, up to 2× back) and awards it; " +
+    "removing a pending staked prediction refunds the stake silently. While a stake is pending, confidence and stake are locked; a resolved staked prediction's outcome/payout are frozen. " +
+    "Predictions written already-resolved with stake+payout are stored as-is with no gold movement (history backfill).",
   {
     predictions: z.array(predictionSchema).describe("The complete replacement predictions array."),
   },
   async ({ predictions }) => {
     const state = getAccountabilityState();
-    saveAccountabilityState({ ...state, predictions });
-    return { content: [{ type: "text" as const, text: JSON.stringify({ saved: true, count: predictions.length }) }] };
+    const prevById = new Map(state.predictions.map((p) => [p.id, p]));
+
+    let staked = 0;
+    let paidOut = 0;
+    let refunded = 0;
+
+    const next = predictions.map((incoming) => {
+      const before = prevById.get(incoming.id);
+      const p = { ...incoming };
+
+      // Resolved staked predictions are settled — outcome, payout, stake, and
+      // confidence are frozen so a re-resolve can't pay out twice.
+      if (before?.stake && before.outcome !== "pending") {
+        p.outcome = before.outcome;
+        p.stake = before.stake;
+        p.payout = before.payout;
+        p.confidence = before.confidence;
+        p.resolvedAt = before.resolvedAt;
+        return p;
+      }
+
+      // While a stake is pending, confidence is locked (it sets the payout)
+      // and the escrowed amount can't be edited.
+      if (before?.stake && before.outcome === "pending") {
+        p.confidence = before.confidence;
+        p.stake = before.stake;
+        if (p.outcome === "pending") {
+          delete p.payout;
+          return p;
+        }
+        // Pending → resolved: settle the stake.
+        const payout = predictionStakePayout(before.stake, before.confidence, p.outcome);
+        p.payout = payout;
+        if (p.resolvedAt == null) p.resolvedAt = Date.now();
+        if (payout > 0) {
+          const net = payout - before.stake;
+          const netLabel = `net ${net >= 0 ? "+" : "−"}${Math.abs(net)}`;
+          const label =
+            p.outcome === "hit"
+              ? `Called it: "${before.title}" (${before.confidence}%) — staked ${before.stake}, won ${payout} (${netLabel})`
+              : `Missed: "${before.title}" (${before.confidence}%) — staked ${before.stake}, got back ${payout} (${netLabel})`;
+          awardGold(payout, undefined, { sourceType: "prediction", sourceId: p.id, label });
+          paidOut += payout;
+        }
+        return p;
+      }
+
+      // New (or newly staked) pending prediction: escrow the stake now. Clamp
+      // to the balance so the record never claims more escrow than happened.
+      if (p.outcome === "pending" && (p.stake ?? 0) > 0) {
+        const stake = Math.min(Math.floor(p.stake!), getGoldState().gold);
+        if (stake <= 0) {
+          delete p.stake;
+        } else {
+          p.stake = stake;
+          deductGold(stake, undefined, {
+            sourceType: "prediction",
+            sourceId: p.id,
+            label: `Staked ${stake} on "${p.title}" (${p.confidence}%)`,
+          });
+          staked += stake;
+        }
+        delete p.payout;
+      }
+      return p;
+    });
+
+    // Pending staked predictions dropped from the array: refund balance-only
+    // (no ledger entry — a "+N refund" line would read as a gain for net-zero).
+    const nextIds = new Set(next.map((p) => p.id));
+    for (const before of state.predictions) {
+      if (!nextIds.has(before.id) && before.outcome === "pending" && (before.stake ?? 0) > 0) {
+        awardGold(before.stake!);
+        refunded += before.stake!;
+      }
+    }
+
+    saveAccountabilityState({ ...state, predictions: next });
+    const gold = getGoldState().gold;
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify({ saved: true, count: next.length, staked, paidOut, refunded, gold }),
+        },
+      ],
+    };
   },
 );
 
