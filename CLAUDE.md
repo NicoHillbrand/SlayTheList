@@ -1,190 +1,26 @@
 # SlayTheList
 
-Personal productivity overlay app. An MCP server is configured at `.mcp.json` that gives Claude direct read/write access to the user's todos, habits, predictions, and reflections.
+Personal productivity overlay app, plus a personal-agent workspace you talk to in Claude Code. An MCP server (`.mcp.json`) gives the agent direct read/write access to todos, habits, predictions, reflections, and gold.
 
-## Repo Layout
+## Where to open
+
+This file loads in every session under the repo (it is an ancestor), so it stays short on purpose. Open the folder that matches your task:
+
+- **Coding / app work:** open `app/`. It has its own `CLAUDE.md` with the repo layout, MCP tool contract, data shapes, and setup notes.
+- **Agent sessions (you or an end user):** open `workspace/`. It has its own `CLAUDE.md` with the interaction modes, logging, and gold conventions.
 
 ```
 SlayTheList/
-├── app/          # all code: npm monorepo root (backend/, frontend/, shared/,
-│                 # desktop/, scripts/, deploy/, assets/, docs/, FEATURE-IDEAS.md)
-├── workspace/    # personal-agent home — open THIS folder in Claude Code for
-│                 # agent sessions; has its own CLAUDE.md (modes, logging) and a
-│                 # private-by-default gitignore
-├── start.bat / start.sh / start.command   # launchers (entry points stay top-level)
-├── update.bat / install*.bat|sh           # updater / installers
-└── CLAUDE.md / README.md / .mcp.json
+├── app/          # all code + dev docs (open this for development)
+├── workspace/    # personal-agent home (open this for agent sessions)
+└── start.* / update.* / install.*   # launchers, updater, installers
 ```
 
-Run npm commands from `app/` (e.g. `cd app; npm run dev:web`). The top-level scripts redirect into `app/` themselves.
+## Workspace setup (bootstrap)
 
-## MCP Tools
+The workspace ships a tracked scaffold and keeps everything personal private:
 
-### Todos
-Individual rows with full CRUD:
+- `workspace/templates/` is the tracked base that receives upstream updates: the agent-behavior `CLAUDE.md` and document skeletons.
+- `workspace/CLAUDE.md` and `workspace/documents/` are the user's own copies, private and gitignored, so edits never conflict with updates.
 
-| Tool | Purpose |
-|------|---------|
-| `list_todos` | List todos. `status`: `"active"` (default) \| `"done"` \| `"all"`. `include_archived`: bool, default false. |
-| `create_todo` | Create a todo. Requires `title`. Optional: `context`, `deadline_at` (ISO 8601). |
-| `update_todo` | Patch a todo by `id`. Optional: `title`, `context`, `status`, `deadline_at` (null to clear). |
-| `delete_todo` | Permanently delete a todo by `id`. |
-
-### Gold
-
-| Tool | Purpose |
-|------|---------|
-| `get_gold` | Returns the current `GoldState` (`gold` balance + `rewardedTodoIds`). |
-| `award_gold` | Add gold. Requires `amount` (non-negative integer). Optional: `title` — records a named achievement in the daily/shareable log (omit for a silent balance-only bump); `category` — `"Tasks"` \| `"Habits"` \| `"Encouragements"` (unknown/missing → `"Other"`); `source` — which agent submitted it (e.g. `"claude-code"`); `timestamp` — ISO 8601 to backdate; `with_sound: true` plays the gold coin sound in the overlay (best-effort — needs the API server running). |
-| `spend_gold` | Deduct gold (clamps at zero, never negative). Requires `amount`. Optional `with_sound` like above. |
-
-**Default for agents awarding gold from chat: always pass `title` saying why the gold was awarded** (what was accomplished), plus the fitting `category` and your `source` (e.g. `"claude-code"`). Only omit `title` when the user explicitly wants a silent balance-only bump.
-
-### Habits, Predictions, Reflections
-These are stored as JSON arrays. The pattern for any modification is **read → modify → write**:
-1. Call `list_habits` / `list_predictions` / `list_reflections` to get the current array.
-2. Modify the array in memory (add, update, or remove items).
-3. Call `set_habits` / `set_predictions` / `set_reflections` with the full replacement array.
-
-| Tool | Purpose |
-|------|---------|
-| `list_habits` | Returns all habits. |
-| `set_habits` | Replaces full habits array. |
-| `list_predictions` | Returns all predictions. |
-| `set_predictions` | Replaces full predictions array. Stake-aware — see below. |
-| `list_reflections` | Returns reflections, newest first. Optional `limit` (default 30). |
-| `set_reflections` | Replaces full reflections array. |
-
-## Data Shapes
-
-### Todo
-```json
-{
-  "id": "uuid",
-  "title": "string",
-  "context": "string | undefined",
-  "status": "active | done",
-  "indent": 0,
-  "sortOrder": 0,
-  "deadlineAt": "ISO string | null",
-  "archivedAt": "ISO string | null",
-  "completedAt": "ISO string | null",
-  "createdAt": "ISO string",
-  "updatedAt": "ISO string"
-}
-```
-
-### Habit
-```json
-{
-  "id": "uuid",
-  "name": "string",
-  "status": "active | archived | idea",
-  "checks": [{ "date": "YYYY-MM-DD", "done": true }],
-  "createdAt": 1700000000000
-}
-```
-
-### Prediction
-```json
-{
-  "id": "uuid",
-  "title": "string",
-  "confidence": 75,
-  "outcome": "pending | hit | miss",
-  "createdAt": 1700000000000,
-  "resolvedAt": 1700000000000,
-  "murphy": false,
-  "targetTitle": "string | undefined",
-  "logDate": "YYYY-MM-DD | undefined",
-  "stake": 5,
-  "payout": 8
-}
-```
-
-`murphy: true` marks a prediction as a Murphy-Jitsu failure-mode prediction (what might go wrong). `targetTitle` links it to a specific goal by title when it's a per-goal failure mode. Regular predictions omit both fields.
-
-`logDate` (optional) overrides which day the prediction appears under in the daily log. Without it, resolved predictions group by their resolution day and pending ones by the day they were made. Set it to move a prediction to the day it actually belongs — never re-date `createdAt`/`resolvedAt` for that; those record when things really happened.
-
-`stake` (optional, gold) escrows gold on a prediction. `set_predictions` handles the gold movements server-side, mirroring the app UI:
-
-- **Adding `stake` to a new/pending prediction** deducts that much gold immediately (clamped to the current balance) and writes a "Staked N on …" ledger entry. Do not deduct gold yourself.
-- **While a stake is pending**, `confidence` and `stake` are locked — changes to them are ignored.
-- **Resolving a staked prediction** (`outcome` pending → `hit`/`miss`) computes `payout` server-side and awards it. Never set `payout` yourself on a live resolution — it is overwritten. Scoring is quadratic: break-even at 50% confidence, up to 2× the stake back when confident and right, down to 0 when confidently wrong.
-- **Resolved staked predictions are frozen** — outcome/stake/payout/confidence can't be changed afterwards.
-- **Removing a pending staked prediction** from the array refunds the stake silently (no ledger entry).
-- **History backfill**: a prediction written already-resolved with both `stake` and `payout` is stored as-is with no gold movement.
-
-The tool result reports `staked`, `paidOut`, `refunded`, and the resulting `gold` balance.
-
-### ReflectionEntry
-```json
-{
-  "id": "uuid",
-  "date": "YYYY-MM-DD",
-  "prompts": {
-    "wins": "string",
-    "challenges": "string",
-    "learnings": "string",
-    "tomorrow": "string",
-    "gratitude": "string"
-  },
-  "items": { "<key>": ["string"] },
-  "wins": "string",
-  "challenges": "string",
-  "notes": "string",
-  "tomorrow": "string",
-  "createdAt": 1700000000000,
-  "updatedAt": 1700000000000
-}
-```
-
-Note: `prompts` and `items` are optional legacy/extended fields. The top-level `wins`, `challenges`, `notes`, and `tomorrow` are always present.
-
-## MCP Setup
-
-### From within this repo
-
-The `.mcp.json` in this repo uses relative paths:
-
-```json
-{
-  "mcpServers": {
-    "slaythelist": {
-      "type": "stdio",
-      "command": "npx",
-      "args": ["tsx", "src/mcp.ts"],
-      "cwd": "app/backend/api"
-    }
-  }
-}
-```
-
-### From another project
-
-Use absolute paths to the `tsx` binary and `mcp.ts` entry point, and **set `SLAYTHELIST_DATA_DIR`** to point at the SlayTheList data directory. Without this, the MCP server defaults to `process.cwd()/data` — which will be the *calling* project's directory, not SlayTheList's, resulting in an empty database.
-
-```json
-{
-  "mcpServers": {
-    "slaythelist": {
-      "command": "/absolute/path/to/SlayTheList/app/node_modules/.bin/tsx",
-      "args": ["/absolute/path/to/SlayTheList/app/backend/api/src/mcp.ts"],
-      "env": {
-        "SLAYTHELIST_DATA_DIR": "/absolute/path/to/SlayTheList/app/backend/api/data"
-      }
-    }
-  }
-}
-```
-
-Restart Claude Code after adding/changing `.mcp.json`.
-
-## Morning startup routine
-
-At the start of each conversation, check the current time. If it is before noon (12:00), pull the user's pending predictions via `list_predictions` and offer to briefly talk through them — either to add new ones for the day or review existing ones. Also offer to run a quick Murphy-Jitsu check: ask what could go wrong today or what failure modes they'd predict for their key goals (create these as predictions with `murphy: true`, optionally with `targetTitle` set to the relevant goal). Keep it short: just mention you noticed it's still morning and ask if they want to run through predictions and/or Murphy-Jitsu.
-
-## Notes
-
-- The local API server (`app/backend/api`) must be running for overlay/game features but is **not** required for MCP — the MCP server connects directly to the SQLite database.
-- If the data directory is non-default (e.g. you pass `--data-dir` or set `SLAYTHELIST_DATA_DIR` when running the API), set the same env var in `.mcp.json` so the MCP server reads the same database.
+**Agent instruction:** when a session opens `workspace/` and `workspace/CLAUDE.md` is missing, the workspace isn't set up yet. Offer to bootstrap it: copy `templates/CLAUDE.md` to `workspace/CLAUDE.md`, then walk the user through `templates/` and copy the document skeletons they want into `documents/`, filling them in conversationally. To update later, `git pull` refreshes `templates/`; offer to fold new changes into the user's private copies without clobbering their edits.

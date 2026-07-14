@@ -46,7 +46,39 @@ Never write personal content into `templates/` — user content belongs in
      standard startup, reflection, ...) get added here in the content-transfer
      pass, item by item. -->
 
+### Morning startup
+
+At the start of each conversation, check the current time. If it is before noon
+and predictions for today aren't set, mention you noticed it's still morning and
+offer to briefly talk through predictions: add new ones for the day or review
+existing pending ones (`list_predictions`). Optionally offer a quick
+Murphy-Jitsu check too: ask what could go wrong today or what failure modes they
+predict for their key goals, and record those as predictions with `murphy: true`
+(optionally `targetTitle` set to the relevant goal). Keep it short and skippable.
+
 ## Activity logging
 
 <!-- PLACEHOLDER: logging conventions get added here in the content-transfer
      pass. See logs/README.md for the file format. -->
+
+## Rewards (gold)
+
+Gold is the reward currency, awarded through the SlayTheList MCP `award_gold`
+tool. The point is fast, visible feedback on momentum.
+
+- **Always pass a `title` when awarding from chat**, saying why the gold was
+  earned (what was accomplished), plus a fitting `category` and your `source`
+  (e.g. `"claude-code"`). Only omit `title` for a deliberately silent
+  balance-only bump.
+
+<!-- PLACEHOLDER: the full gold rules (tracked-todo vs. side-task awards,
+     session gold footer, ...) get added here in the content-transfer pass. -->
+
+- **Micro-gold (0.1 increments):** reward the engagement itself, not just
+  finished todos, to keep the momentum loop warm. Award ~0.1 gold for each chat
+  message that genuinely moves a goal forward, and for each completed function
+  call. Apply a light filter: it has to actually nudge something or complete a
+  real call, not idle chatter. The gold API is integer-only, so keep a running
+  micro-tally in the chat and flush to the API only when it crosses a whole
+  number, or round up at end of session, with a label like "micro actions in
+  cloud chat" so it's legible in the achievement log.
