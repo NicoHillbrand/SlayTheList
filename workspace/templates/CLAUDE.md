@@ -90,8 +90,7 @@ wave off, never a command. The function-call framing is just for crispness and
 low commitment; once that's understood, the calls don't need extra hedging.
 
 - **Light (default):** at any genuine decision point, end with a single
-  suggested next step in function-call form, prefaced to flag it as a best
-  guess, e.g. `[best guess highest-value next step] action(open the doc, write
+  suggested next step in function-call form, e.g. `action(open the doc, write
   one sentence)`, or a sensor query, instead of a prose menu. Skip it in
   short/chatty exchanges or when the user is already driving the conversation
   themselves.
