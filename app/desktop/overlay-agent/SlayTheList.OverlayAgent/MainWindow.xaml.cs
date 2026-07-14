@@ -55,6 +55,11 @@ public partial class MainWindow : Window
     private Window? _detectionIndicatorWindow;
     private string _lastRenderedZoneHash = "";
     private TextBlock? _detectionIndicatorText;
+    private Window? _goldIndicatorWindow;
+    private TextBlock? _goldIndicatorText;
+    private OverlayBarWindow? _overlayBarWindow;
+    private const int OverlayToggleHotkeyId = 0xB001;
+    private string _registeredHotkey = "";
 
     [DllImport("winmm.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool PlaySound(string? soundName, IntPtr moduleHandle, uint soundFlags);
@@ -72,6 +77,7 @@ public partial class MainWindow : Window
 
         LoadOverlayImagePaths();
         CreateDetectionIndicatorWindow();
+        CreateGoldIndicatorWindow();
         SizeChanged += (_, _) => { _lastRenderedZoneHash = ""; RenderLockedZones(); };
         SourceInitialized += (_, _) => AttachNoActivateWindowHook();
         Loaded += (_, _) =>
@@ -82,8 +88,14 @@ public partial class MainWindow : Window
         Closed += (_, _) =>
         {
             _windowSyncTimer.Stop();
+            if (_registeredHotkey.Length > 0 && _overlayWindowHandle != IntPtr.Zero)
+            {
+                NativeMethods.UnregisterHotKey(_overlayWindowHandle, OverlayToggleHotkeyId);
+            }
             _httpClient.Dispose();
             _detectionIndicatorWindow?.Close();
+            _goldIndicatorWindow?.Close();
+            _overlayBarWindow?.Close();
         };
     }
 
@@ -738,6 +750,78 @@ public partial class MainWindow : Window
     private void UpdateStatusText()
     {
         UpdateDetectionIndicator();
+        UpdateGoldIndicator();
+        UpdateBaseOverlay();
+        UpdateOverlayToggleHotkey();
+    }
+
+    /// <summary>Registers (or re-registers) the global hotkey that toggles the
+    /// overlay bar. Called whenever a new overlay state arrives; only acts when
+    /// the configured combo actually changed.</summary>
+    private void UpdateOverlayToggleHotkey()
+    {
+        var combo = _lastOverlayState?.OverlayToggleHotkey ?? "";
+        if (combo == _registeredHotkey || _overlayWindowHandle == IntPtr.Zero)
+        {
+            return;
+        }
+
+        if (_registeredHotkey.Length > 0)
+        {
+            NativeMethods.UnregisterHotKey(_overlayWindowHandle, OverlayToggleHotkeyId);
+        }
+        _registeredHotkey = combo;
+
+        var parsed = NativeMethods.ParseHotkey(combo);
+        if (parsed is not null)
+        {
+            NativeMethods.RegisterHotKey(
+                _overlayWindowHandle,
+                OverlayToggleHotkeyId,
+                parsed.Value.Modifiers | NativeMethods.ModNoRepeat,
+                parsed.Value.Vk);
+        }
+    }
+
+    /// <summary>Flips the showBaseOverlay setting through the local API, which
+    /// broadcasts a fresh overlay_state that shows/hides the bar. Keeping the
+    /// setting as the single source of truth keeps the web checkbox in sync.</summary>
+    private async void ToggleOverlayBar()
+    {
+        var next = _lastOverlayState?.ShowBaseOverlay == true ? "false" : "true";
+        try
+        {
+            using var content = new StringContent(
+                JsonSerializer.Serialize(new { value = next }), Encoding.UTF8, "application/json");
+            await _httpClient.PutAsync($"{_apiBaseUrl}/api/settings/showBaseOverlay", content);
+        }
+        catch
+        {
+            // API not reachable — nothing to toggle.
+        }
+    }
+
+    private void UpdateBaseOverlay()
+    {
+        var enabled = _lastOverlayState?.ShowBaseOverlay == true;
+
+        if (!enabled)
+        {
+            // Close (not hide) so WebView2 fully unloads while the feature is off.
+            if (_overlayBarWindow is not null)
+            {
+                _overlayBarWindow.Close();
+                _overlayBarWindow = null;
+            }
+            return;
+        }
+
+        if (_overlayBarWindow is null)
+        {
+            var webBaseUrl = Environment.GetEnvironmentVariable("SLAYTHELIST_WEB_URL") ?? "http://localhost:4000";
+            _overlayBarWindow = new OverlayBarWindow(webBaseUrl);
+            _overlayBarWindow.Show();
+        }
     }
 
     private void ShowTransientStatus(string text, int durationMs)
@@ -1006,6 +1090,73 @@ public partial class MainWindow : Window
             _detectionIndicatorWindow.Show();
     }
 
+    private void CreateGoldIndicatorWindow()
+    {
+        _goldIndicatorText = new TextBlock
+        {
+            Foreground = new SolidColorBrush(Color.FromArgb(255, 248, 223, 139)),
+            FontSize = 13,
+            FontWeight = FontWeights.SemiBold,
+            Text = "\U0001fa99 0 today",
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        var border = new Border
+        {
+            Padding = new Thickness(10, 6, 10, 6),
+            CornerRadius = new CornerRadius(6),
+            Background = new SolidColorBrush(Color.FromArgb(180, 17, 24, 38)),
+            BorderBrush = new SolidColorBrush(Color.FromArgb(120, 212, 170, 71)),
+            BorderThickness = new Thickness(1),
+            Child = _goldIndicatorText,
+            IsHitTestVisible = false,
+        };
+
+        _goldIndicatorWindow = new Window
+        {
+            WindowStyle = WindowStyle.None,
+            ResizeMode = ResizeMode.NoResize,
+            Topmost = true,
+            ShowActivated = false,
+            Focusable = false,
+            ShowInTaskbar = false,
+            AllowsTransparency = true,
+            Background = Brushes.Transparent,
+            SizeToContent = SizeToContent.WidthAndHeight,
+            Content = border,
+        };
+
+        _goldIndicatorWindow.SourceInitialized += (_, _) =>
+        {
+            var handle = new WindowInteropHelper(_goldIndicatorWindow).Handle;
+            NativeMethods.EnableNoActivate(handle);
+            NativeMethods.EnableClickThrough(handle);
+            NativeMethods.ExcludeFromCapture(handle);
+        };
+    }
+
+    private void UpdateGoldIndicator()
+    {
+        if (_goldIndicatorText is null || _goldIndicatorWindow is null)
+            return;
+
+        if (_lastOverlayState?.ShowGoldToday != true)
+        {
+            _goldIndicatorWindow.Hide();
+            return;
+        }
+
+        _goldIndicatorText.Text = $"\U0001fa99 {_lastOverlayState.GoldEarnedToday} today";
+
+        // Sit at the top-right, below the detection indicator when that is visible
+        var screenWidth = SystemParameters.PrimaryScreenWidth;
+        _goldIndicatorWindow.Left = screenWidth - 220;
+        _goldIndicatorWindow.Top = _detectionIndicatorWindow?.IsVisible == true ? 44 : 8;
+
+        if (!_goldIndicatorWindow.IsVisible)
+            _goldIndicatorWindow.Show();
+    }
+
     private void AttachNoActivateWindowHook()
     {
         _overlayWindowHandle = new WindowInteropHelper(this).Handle;
@@ -1023,6 +1174,13 @@ public partial class MainWindow : Window
         {
             handled = true;
             return (IntPtr)MaNoActivate;
+        }
+
+        if (msg == NativeMethods.WmHotkey && wParam.ToInt32() == OverlayToggleHotkeyId)
+        {
+            handled = true;
+            ToggleOverlayBar();
+            return IntPtr.Zero;
         }
 
         return IntPtr.Zero;

@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 import type {
   CloudConnectionStatus,
   EncouragementEntryType,
@@ -26,7 +27,9 @@ import {
   listCloudFriendRequests,
   listCloudFriends,
   listGoldActivity,
+  listPredictions,
   updateGoldActivityDate,
+  updatePrediction,
   pollCloudConnect,
   saveCloudSocialSettings,
   searchCloudSocialUsers,
@@ -38,6 +41,20 @@ import {
   updateCloudUsername,
 } from "../lib/api";
 import { AchievementSummary, PeriodSelector, defaultLogPeriod } from "./daily-log";
+
+// Read-only viewer for a friend's base (the lane defense). Client-only: the
+// theater animates with timers that must not run during SSR.
+const FriendBaseView = dynamic(
+  () => import("./base/FriendBaseView").then((m) => m.FriendBaseView),
+  {
+    ssr: false,
+    loading: () => (
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 120, color: "#888" }}>
+        Loading base...
+      </div>
+    ),
+  },
+);
 
 type Props = {
   open?: boolean;
@@ -60,6 +77,13 @@ const DEFAULT_SETTINGS: SocialSettings = {
 function toErrorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
   return "Something went wrong";
+}
+
+// Local predictions minus private ones — mirrors what the cloud snapshot
+// shares, so the self-profile card looks the same either way.
+async function listShareablePredictions() {
+  const result = await listPredictions();
+  return result.items.filter((p) => p.visibility !== "private");
 }
 
 // Stale-while-revalidate cache for shared profiles: the last-seen profile is
@@ -189,6 +213,13 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
   const [selectedUsername, setSelectedUsername] = useState<string | null>(null);
   const [selectedProfile, setSelectedProfile] = useState<SharedProfile | null>(null);
   const [ownLogDays, setOwnLogDays] = useState<GoldActivityDay[] | null>(null);
+  const [ownPredictions, setOwnPredictions] = useState<Prediction[] | null>(null);
+  const [baseOpen, setBaseOpen] = useState(false);
+
+  // Collapse the inline base viewer whenever the selected profile changes.
+  useEffect(() => {
+    setBaseOpen(false);
+  }, [selectedUsername]);
   const [usernameDraft, setUsernameDraft] = useState("");
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -328,6 +359,7 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
   useEffect(() => {
     if (!isVisible || !isSelfProfile) {
       setOwnLogDays(null);
+      setOwnPredictions(null);
       return;
     }
     let cancelled = false;
@@ -338,6 +370,13 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
       .catch(() => {
         // Fall back to the cloud snapshot (read-only) if the local API is down.
         if (!cancelled) setOwnLogDays(null);
+      });
+    void listShareablePredictions()
+      .then((items) => {
+        if (!cancelled) setOwnPredictions(items);
+      })
+      .catch(() => {
+        if (!cancelled) setOwnPredictions(null);
       });
     return () => {
       cancelled = true;
@@ -350,6 +389,22 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
       await updateGoldActivityDate(entryId, date);
       const result = await listGoldActivity(30);
       setOwnLogDays(result.days);
+    } catch (nextError) {
+      setError(toErrorMessage(nextError));
+    }
+  }
+
+  // Move a prediction to the day it belongs in the log. Sets only the logDate
+  // grouping override — createdAt ("Made …") and resolvedAt stay as recorded.
+  async function handleMovePrediction(predictionId: string, date: string) {
+    setError(null);
+    try {
+      await updatePrediction(predictionId, { logDate: date });
+      setOwnPredictions(await listShareablePredictions());
+      // The main page keeps the whole predictions array in memory and
+      // autosaves it wholesale — tell it to reload, or its next autosave
+      // would write the stale copy back and silently revert this move.
+      window.dispatchEvent(new Event("slaythelist:accountability-changed"));
     } catch (nextError) {
       setError(toErrorMessage(nextError));
     }
@@ -620,16 +675,46 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
                     <div className="social-profile-top-actions">
                       {hasLog && <PeriodSelector selected={logPeriod} onSelect={setLogPeriod} />}
                       {selectedProfile.base?.canView && (
-                        <a
-                          className="achievement-period-pill"
-                          href={`/base/view/${encodeURIComponent(selectedProfile.user.username)}`}
-                          style={{ textDecoration: "none" }}
+                        <button
+                          type="button"
+                          className={`achievement-period-pill ${baseOpen ? "active" : ""}`}
+                          onClick={() => setBaseOpen((open) => !open)}
                         >
-                          View base
-                        </a>
+                          {baseOpen ? "Hide base" : "View base"}
+                        </button>
                       )}
                     </div>
                   </div>
+
+                  {baseOpen && selectedProfile.base?.canView && (
+                    selectedProfile.base.snapshot ? (
+                      <div style={{ position: "relative", flex: "none", marginBottom: 12 }}>
+                        <FriendBaseView base={selectedProfile.base.snapshot} />
+                        <a
+                          href={`/base/view/${encodeURIComponent(selectedProfile.user.username)}`}
+                          style={{
+                            position: "absolute",
+                            top: 8,
+                            right: 8,
+                            padding: "3px 10px",
+                            borderRadius: 999,
+                            background: "rgba(22, 22, 42, 0.85)",
+                            border: "1px solid #444",
+                            color: "#ccc",
+                            fontSize: 12,
+                            textDecoration: "none",
+                          }}
+                        >
+                          Fullscreen
+                        </a>
+                      </div>
+                    ) : (
+                      <p className="settings-hint">
+                        @{selectedProfile.user.username} hasn&apos;t synced their base yet. It shows up here
+                        once they open the app.
+                      </p>
+                    )
+                  )}
 
                   {hasLog ? (
                     <AchievementSummary
@@ -641,11 +726,18 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
                             : []
                       }
                       habits={selectedProfile.habits.canView ? selectedProfile.habits.items : []}
-                      predictions={selectedProfile.predictions.canView ? selectedProfile.predictions.items : []}
+                      predictions={
+                        isSelfProfile && ownPredictions
+                          ? ownPredictions
+                          : selectedProfile.predictions.canView
+                            ? selectedProfile.predictions.items
+                            : []
+                      }
                       selected={logPeriod}
                       showHabits={selectedProfile.habits.canView}
                       compact
                       onMoveEntry={isSelfProfile && ownLogDays ? handleMoveLogEntry : undefined}
+                      onMovePrediction={isSelfProfile && ownPredictions ? handleMovePrediction : undefined}
                     />
                   ) : (
                     <p className="settings-hint">Nothing shared.</p>

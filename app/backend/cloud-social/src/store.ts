@@ -1,7 +1,13 @@
 import { randomUUID } from "node:crypto";
+import {
+  sharedBaseSchema,
+  sharedStatusSchema,
+  type SharedBase,
+  type SharedStatus,
+} from "@slaythelist/contracts";
 import type {
-  BaseSnapshot,
   CloudDevicePollResponse,
+  FriendTodaySummary,
   CloudDeviceStartResponse,
   CloudIdentityUser,
   Encouragement,
@@ -74,6 +80,7 @@ type SnapshotRow = {
   gold_json: string;
   base_json?: string;
   daily_log_json?: string;
+  status_json?: string;
   source_updated_at: string;
   synced_at: string;
 };
@@ -106,17 +113,24 @@ function safeParseSharedDailyLog(value: string | undefined | null): SocialSnapsh
   }
 }
 
-function safeParseBaseSnapshot(value: string | undefined | null): BaseSnapshot | null {
+// Older rows may hold an isometric-builder snapshot (placements/cells) from
+// before the lane defense became the base — those fail validation and read as
+// "not synced yet" until the owner's next sync overwrites them.
+function safeParseSharedBase(value: string | undefined | null): SharedBase | null {
   if (!value || value === "null") return null;
   try {
-    const parsed = JSON.parse(value) as Partial<BaseSnapshot> | null;
-    if (!parsed || !Array.isArray(parsed.placements)) return null;
-    return {
-      version: typeof parsed.version === "number" ? parsed.version : undefined,
-      placements: parsed.placements,
-      cells: Array.isArray(parsed.cells) ? parsed.cells : undefined,
-      updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date().toISOString(),
-    };
+    const parsed = sharedBaseSchema.safeParse(JSON.parse(value));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
+function safeParseSharedStatus(value: string | undefined | null): SharedStatus | null {
+  if (!value || value === "null") return null;
+  try {
+    const parsed = sharedStatusSchema.safeParse(JSON.parse(value));
+    return parsed.success ? parsed.data : null;
   } catch {
     return null;
   }
@@ -454,6 +468,7 @@ export function saveSocialSnapshot(userId: string, snapshot: SocialSnapshot) {
          gold_json = ?,
          base_json = ?,
          daily_log_json = ?,
+         status_json = ?,
          source_updated_at = ?,
          synced_at = ?
      WHERE user_id = ?`,
@@ -463,6 +478,7 @@ export function saveSocialSnapshot(userId: string, snapshot: SocialSnapshot) {
     JSON.stringify(snapshot.gold),
     JSON.stringify(snapshot.base ?? null),
     JSON.stringify(snapshot.dailyLog ?? []),
+    JSON.stringify(snapshot.status ?? null),
     snapshot.sourceUpdatedAt,
     syncedAt,
     userId,
@@ -477,7 +493,7 @@ function getSnapshot(userId: string): SocialSnapshot {
   ensureUserSocialRows(userId);
   const row = db
     .prepare(
-      `SELECT habits_json, predictions_json, gold_json, base_json, daily_log_json, source_updated_at, synced_at
+      `SELECT habits_json, predictions_json, gold_json, base_json, daily_log_json, status_json, source_updated_at, synced_at
        FROM user_social_snapshots
        WHERE user_id = ?`,
     )
@@ -494,7 +510,8 @@ function getSnapshot(userId: string): SocialSnapshot {
       syncedAt: now,
     };
   }
-  const base = safeParseBaseSnapshot(row.base_json);
+  const base = safeParseSharedBase(row.base_json);
+  const status = safeParseSharedStatus(row.status_json);
   return {
     settings: getSocialSettings(userId),
     habits: safeParseArray(row.habits_json),
@@ -502,6 +519,7 @@ function getSnapshot(userId: string): SocialSnapshot {
     gold: safeParseGoldState(row.gold_json),
     dailyLog: safeParseSharedDailyLog(row.daily_log_json),
     base: base ?? undefined,
+    status: status ?? undefined,
     sourceUpdatedAt: row.source_updated_at,
     syncedAt: row.synced_at,
   };
@@ -724,6 +742,8 @@ export function getSharedProfile(viewerUserId: string, targetUsername: string): 
       canView: canViewBase,
       snapshot: canViewBase ? (snapshot.base ?? null) : null,
     },
+    // Status chips are friends-only by design (no separate visibility knob).
+    status: relationship === "friend" || relationship === "self" ? (snapshot.status ?? null) : null,
     dailyLog: {
       visibility: settings.dailyLogVisibility,
       canView: canViewDailyLog,
@@ -732,6 +752,31 @@ export function getSharedProfile(viewerUserId: string, targetUsername: string): 
     encouragedEntryIds,
     encouragementsRemainingToday: remainingToday,
   };
+}
+
+/** Compact per-friend cards for the overlay taskbar: status chips, today's
+ *  shared log day (`date` = the viewer's local YYYY-MM-DD), and base tier.
+ *  Sections a friend doesn't share come back null. */
+export function listFriendsToday(viewerUserId: string, date: string): FriendTodaySummary[] {
+  return listFriends(viewerUserId).map((friend) => {
+    const settings = getSocialSettings(friend.id);
+    const snapshot = getSnapshot(friend.id);
+    const canViewLog = canViewerSeeSection(settings.dailyLogVisibility, "friend", viewerUserId);
+    const canViewBase = canViewerSeeSection(settings.baseVisibility, "friend", viewerUserId);
+    const today = canViewLog
+      ? ((snapshot.dailyLog ?? []).find((day) => day.date === date) ?? { date, total: 0, entries: [] })
+      : null;
+    const base =
+      canViewBase && snapshot.base
+        ? { tier: snapshot.base.state.tier, bestTier: snapshot.base.state.meta.bestTier }
+        : null;
+    return {
+      user: friend,
+      status: snapshot.status ?? null,
+      today,
+      base,
+    };
+  });
 }
 
 // ---------------------------------------------------------------------------

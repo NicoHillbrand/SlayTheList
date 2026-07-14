@@ -992,6 +992,10 @@ export default function Page() {
   const [expansionContextDraft, setExpansionContextDraft] = useState("");
   const [todoDrafts, setTodoDrafts] = useState<Record<string, string>>({});
   const [showDetectionIndicator, setShowDetectionIndicatorState] = useState(true);
+  const [showGoldToday, setShowGoldTodayState] = useState(false);
+  const [showBaseOverlay, setShowBaseOverlayState] = useState(false);
+  const [overlayToggleHotkey, setOverlayToggleHotkey] = useState("");
+  const [capturingHotkey, setCapturingHotkey] = useState(false);
   const [detectionIntervalMs, setDetectionIntervalMs] = useState(100);
   const [showTodoDuration, setShowTodoDuration] = useState(true);
   const [showCompletionProgress, setShowCompletionProgress] = useState(true);
@@ -1240,6 +1244,12 @@ export default function Page() {
       try {
         const indicatorSetting = await getAppSetting("showDetectionIndicator");
         setShowDetectionIndicatorState(indicatorSetting.value !== "false");
+        const goldTodaySetting = await getAppSetting("showGoldToday");
+        setShowGoldTodayState(goldTodaySetting.value === "true");
+        const baseOverlaySetting = await getAppSetting("showBaseOverlay");
+        setShowBaseOverlayState(baseOverlaySetting.value === "true");
+        const hotkeySetting = await getAppSetting("overlayToggleHotkey");
+        setOverlayToggleHotkey(hotkeySetting.value ?? "");
         const intervalSetting = await getAppSetting("detectionIntervalMs");
         const parsedInterval = Number(intervalSetting.value);
         if (Number.isFinite(parsedInterval) && parsedInterval > 0) {
@@ -1499,9 +1509,13 @@ export default function Page() {
     const onFocus = () => reload();
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("focus", onFocus);
+    // Fired by in-page components (e.g. the social modal's prediction date
+    // move) that write accountability state through the API directly.
+    window.addEventListener("slaythelist:accountability-changed", reload);
     return () => {
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("focus", onFocus);
+      window.removeEventListener("slaythelist:accountability-changed", reload);
     };
   }, []);
 
@@ -3862,7 +3876,7 @@ export default function Page() {
                 <button type="button" className="goals-subtab" onClick={() => setActiveTab("social")}>
                   Social
                 </button>
-                <button type="button" className="goals-subtab" onClick={() => window.location.href = "/defense"}>
+                <button type="button" className="goals-subtab" onClick={() => window.location.href = "/base"}>
                   Base
                 </button>
               </nav>
@@ -4062,7 +4076,7 @@ export default function Page() {
                 <button type="button" className="goals-subtab" onClick={() => setActiveTab("social")}>
                   Social
                 </button>
-                <button type="button" className="goals-subtab" onClick={() => window.location.href = "/defense"}>
+                <button type="button" className="goals-subtab" onClick={() => window.location.href = "/base"}>
                   Base
                 </button>
               </nav>
@@ -4529,7 +4543,7 @@ export default function Page() {
                 <button type="button" className="goals-subtab" onClick={() => setActiveTab("social")}>
                   Social
                 </button>
-                <button type="button" className="goals-subtab" onClick={() => window.location.href = "/defense"}>
+                <button type="button" className="goals-subtab" onClick={() => window.location.href = "/base"}>
                   Base
                 </button>
               </nav>
@@ -5095,7 +5109,7 @@ export default function Page() {
                 <button type="button" className="goals-subtab" onClick={() => setActiveTab("social")}>
                   Social
                 </button>
-                <button type="button" className="goals-subtab" onClick={() => window.location.href = "/defense"}>
+                <button type="button" className="goals-subtab" onClick={() => window.location.href = "/base"}>
                   Base
                 </button>
               </nav>
@@ -6206,7 +6220,7 @@ export default function Page() {
                 <button type="button" className="goals-subtab active" onClick={() => setActiveTab("social")}>
                   Social
                 </button>
-                <button type="button" className="goals-subtab" onClick={() => window.location.href = "/defense"}>
+                <button type="button" className="goals-subtab" onClick={() => window.location.href = "/base"}>
                   Base
                 </button>
               </nav>
@@ -6432,6 +6446,69 @@ export default function Page() {
                   }}
                 />
                 Show detection status overlay
+              </label>
+              <label className="settings-checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={showGoldToday}
+                  onChange={async (event) => {
+                    const val = event.target.checked;
+                    setShowGoldTodayState(val);
+                    await setAppSetting("showGoldToday", String(val));
+                  }}
+                />
+                Show today&apos;s gold earned on screen
+              </label>
+              <label className="settings-checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={showBaseOverlay}
+                  onChange={async (event) => {
+                    const val = event.target.checked;
+                    setShowBaseOverlayState(val);
+                    await setAppSetting("showBaseOverlay", String(val));
+                  }}
+                />
+                Show overlay bar on screen (gold + base + friends, drag to move)
+              </label>
+              <label className="settings-checkbox-label" style={{ display: "flex", gap: "0.6rem", alignItems: "center", flexWrap: "wrap" }}>
+                <span style={{ minWidth: 180 }}>Overlay bar show/hide shortcut</span>
+                <input
+                  type="text"
+                  readOnly
+                  value={capturingHotkey ? "Press keys… (Esc to clear)" : overlayToggleHotkey || "Not set"}
+                  onFocus={() => setCapturingHotkey(true)}
+                  onBlur={() => setCapturingHotkey(false)}
+                  onKeyDown={async (event) => {
+                    event.preventDefault();
+                    if (event.key === "Escape") {
+                      setOverlayToggleHotkey("");
+                      await setAppSetting("overlayToggleHotkey", "");
+                      event.currentTarget.blur();
+                      return;
+                    }
+                    // Ignore lone modifier presses — wait for a real main key.
+                    if (["Control", "Alt", "Shift", "Meta"].includes(event.key)) return;
+                    const mods: string[] = [];
+                    if (event.ctrlKey) mods.push("Ctrl");
+                    if (event.altKey) mods.push("Alt");
+                    if (event.shiftKey) mods.push("Shift");
+                    if (event.metaKey) mods.push("Win");
+                    // Normalize the main key to what the agent's parser accepts.
+                    let main = "";
+                    if (event.key === " ") main = "Space";
+                    else if (/^[a-zA-Z]$/.test(event.key)) main = event.key.toUpperCase();
+                    else if (/^[0-9]$/.test(event.key)) main = event.key;
+                    else if (/^F([1-9]|1[0-2])$/.test(event.key)) main = event.key;
+                    if (!main || mods.length === 0) return; // need a modifier + main key
+                    const combo = [...mods, main].join("+");
+                    setOverlayToggleHotkey(combo);
+                    await setAppSetting("overlayToggleHotkey", combo);
+                    event.currentTarget.blur();
+                  }}
+                  style={{ minWidth: 220, cursor: "pointer" }}
+                  title="Click and press a combo like Ctrl+Shift+B. Needs at least one modifier. Esc clears."
+                />
               </label>
               <label className="settings-checkbox-label" style={{ display: "flex", gap: "0.6rem", alignItems: "center", flexWrap: "wrap" }}>
                 <span style={{ minWidth: 180 }}>Screen detection interval</span>

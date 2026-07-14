@@ -1,16 +1,13 @@
 import type {
   AccountabilityState,
-  BaseCurrencyType,
-  BaseShopPurchaseResponse,
-  BaseState,
   Block,
   BlockUnlockMode,
-  BuildingPlacement,
   CloudConnectionStatus,
   DetectedGameState,
   FriendRequest,
   FriendSearchResult,
   FriendSummary,
+  FriendTodaySummary,
   GameState,
   GameStateDetectionRegion,
   GameStateReferenceImage,
@@ -25,13 +22,14 @@ import type {
   OverlayState,
   Prediction,
   PredictionOutcome,
-  Progression,
   ReflectionEntry,
   EncouragementEntryType,
   EncouragementKind,
   EncouragementResponse,
   SharedProfile,
+  SharedStatus,
   SocialSettings,
+  StatusChip,
   Todo,
   VaultPullResponse,
   VaultPushRequest,
@@ -139,6 +137,26 @@ export async function saveCloudSocialSettings(settings: SocialSettings) {
     method: "PUT",
     body: JSON.stringify(settings),
   });
+}
+
+// Own color-coded status chips (energy / availability / custom), shared with
+// friends via the cloud snapshot.
+export async function getSocialStatus() {
+  return request<SharedStatus>("/api/social-status");
+}
+
+export async function saveSocialStatus(chips: StatusChip[]) {
+  return request<SharedStatus>("/api/social-status", {
+    method: "PUT",
+    body: JSON.stringify({ chips }),
+  });
+}
+
+// Compact per-friend cards for the overlay taskbar. `date` = local YYYY-MM-DD.
+export async function getCloudFriendsSummary(date: string) {
+  return request<{ items: FriendTodaySummary[] }>(
+    `/api/cloud-social/friends/summary?date=${encodeURIComponent(date)}`,
+  );
 }
 
 export async function searchCloudSocialUsers(query: string) {
@@ -449,6 +467,7 @@ export async function updatePrediction(
     confidence: number;
     outcome: PredictionOutcome;
     resolvedAt: number | null;
+    logDate: string | null;
     visibility: "visible" | "private";
   }>,
 ) {
@@ -648,34 +667,3 @@ export async function deleteBlock(id: string) {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Base Builder
-// ---------------------------------------------------------------------------
-
-export async function getBaseState() {
-  return request<BaseState>("/api/base-state");
-}
-
-export async function saveBaseState(state: { placements: BuildingPlacement[]; unlockedItemIds: string[] }) {
-  return request<BaseState>("/api/base-state", {
-    method: "PUT",
-    body: JSON.stringify(state),
-  });
-}
-
-export async function getProgression() {
-  return request<Progression>("/api/progression");
-}
-
-export async function purchaseBaseItem(itemId: string, cost: number, currency: BaseCurrencyType = "gold") {
-  return request<BaseShopPurchaseResponse>("/api/base-shop/purchase", {
-    method: "POST",
-    body: JSON.stringify({ itemId, cost, currency }),
-  });
-}
-
-export async function checkDiamondMilestones() {
-  return request<{ awarded: number; newMilestones: number[] }>("/api/base-diamonds/check", {
-    method: "POST",
-  });
-}

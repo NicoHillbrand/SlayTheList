@@ -15,11 +15,8 @@ import {
 import { db, referenceImagesDir } from "./db.js";
 import type {
   AccountabilityState,
-  BaseCurrencyType,
-  BaseState,
   Block,
   BlockUnlockMode,
-  BuildingPlacement,
   DetectedGameState,
   GameState,
   GameStateDetectionRegion,
@@ -32,11 +29,9 @@ import type {
   LockZone,
   LockZoneState,
   Prediction,
-  Progression,
   ReflectionEntry,
   Todo,
   Walkthrough,
-  Cell,
 } from "@slaythelist/contracts";
 
 type TodoRow = {
@@ -685,6 +680,18 @@ export function listGoldActivityDays(days = 30, userId?: string): GoldActivityDa
     .slice(0, Math.max(0, days));
 }
 
+// Sum of positive ledger deltas for today (local date) — spending is ignored.
+export function getGoldEarnedToday(userId?: string): number {
+  const row = db
+    .prepare(
+      `SELECT COALESCE(SUM(delta), 0) AS total
+       FROM gold_activity
+       WHERE user_id = ? AND date = ? AND delta > 0`,
+    )
+    .get(userId ?? "local", localDateKey(new Date().toISOString())) as { total: number };
+  return row.total;
+}
+
 // Move a ledger entry to a different day (e.g. a todo marked done today that
 // was actually finished yesterday). Only the grouping `date` changes —
 // `created_at` stays as the moment the entry was recorded.
@@ -1160,123 +1167,12 @@ export function setSetting(key: string, value: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// Base Builder
+// Premium currencies (diamonds/emeralds) — awarded by arena combat runs.
+// Balances live on the legacy base_state row; the isometric base builder that
+// spent them has been sunset, but earned balances are preserved.
 // ---------------------------------------------------------------------------
 
-type BaseStateRow = {
-  placements_json: string;
-  inventory_json: string;
-  diamonds: number;
-  emeralds: number;
-  diamond_milestones_json: string;
-  updated_at: string;
-};
-
-type BaseInventory = Record<string, number>;
-
-export function getBaseState(): BaseState {
-  const row = db.prepare("SELECT placements_json, inventory_json, diamonds, emeralds, diamond_milestones_json, updated_at FROM base_state WHERE id = 1").get() as BaseStateRow | undefined;
-  if (!row) {
-    return { version: 2, cells: [], placements: [], inventory: {}, currencies: { gold: 0, diamonds: 0, emeralds: 0 }, diamondMilestones: [], updatedAt: new Date().toISOString() };
-  }
-  const goldState = getGoldState();
-  let parsedPlacements = [];
-  let parsedCells = [];
-  let version = 1;
-
-  try {
-    const raw = JSON.parse(row.placements_json);
-    if (Array.isArray(raw)) {
-      parsedPlacements = raw as BuildingPlacement[];
-      
-      // Perform migration to cells
-      const GRID_ROWS = 20;
-      const GRID_COLS = 20;
-      parsedCells = Array.from({ length: GRID_ROWS }, () =>
-        Array.from({ length: GRID_COLS }, () => ({ terrain: [], object: null as BuildingPlacement | null }))
-      );
-      
-      for (const p of parsedPlacements) {
-        // Just store the placement at its root (x,y)
-        if (p.y >= 0 && p.y < GRID_ROWS && p.x >= 0 && p.x < GRID_COLS) {
-           parsedCells[p.y][p.x].object = p;
-        }
-      }
-      version = 2;
-    } else if (raw && raw.version === 2) {
-      version = 2;
-      parsedCells = raw.cells ?? [];
-      parsedPlacements = raw.placements ?? [];
-    }
-  } catch (e) {
-    console.error("Failed to parse base_state placements_json", e);
-  }
-
-  return {
-    version,
-    placements: parsedPlacements,
-    cells: parsedCells,
-    inventory: JSON.parse(row.inventory_json) as BaseInventory,
-    currencies: { gold: goldState.gold, diamonds: row.diamonds, emeralds: row.emeralds },
-    diamondMilestones: JSON.parse(row.diamond_milestones_json) as number[],
-    updatedAt: row.updated_at,
-  };
-}
-
-export function saveBaseState(state: { version?: number; cells?: Cell[][]; placements?: BuildingPlacement[]; inventory: BaseInventory }): BaseState {
-  const now = new Date().toISOString();
-  const placementsData = {
-    version: 2,
-    cells: state.cells ?? [],
-    placements: state.placements ?? [],
-  };
-  db.prepare(
-    `UPDATE base_state SET placements_json = ?, inventory_json = ?, updated_at = ? WHERE id = 1`,
-  ).run(JSON.stringify(placementsData), JSON.stringify(state.inventory), now);
-  return getBaseState();
-}
-
-/** Streak milestones that award diamonds: [streakLength, diamondReward] */
-const DIAMOND_MILESTONES: [number, number][] = [
-  [3, 1],
-  [7, 3],
-  [14, 5],
-  [30, 10],
-  [60, 20],
-  [90, 30],
-  [180, 50],
-  [365, 100],
-];
-
-/** Check and award diamonds for any new streak milestones reached. */
-export function checkAndAwardDiamonds(): { awarded: number; newMilestones: number[] } {
-  const baseState = getBaseState();
-  const progression = getProgression();
-  const currentStreak = progression.longestDayStreak;
-  const claimed = new Set(baseState.diamondMilestones);
-
-  let awarded = 0;
-  const newMilestones: number[] = [];
-
-  for (const [streak, reward] of DIAMOND_MILESTONES) {
-    if (currentStreak >= streak && !claimed.has(streak)) {
-      awarded += reward;
-      newMilestones.push(streak);
-    }
-  }
-
-  if (awarded > 0) {
-    const allMilestones = [...baseState.diamondMilestones, ...newMilestones];
-    const now = new Date().toISOString();
-    db.prepare(
-      `UPDATE base_state SET diamonds = diamonds + ?, diamond_milestones_json = ?, updated_at = ? WHERE id = 1`,
-    ).run(awarded, JSON.stringify(allMilestones), now);
-  }
-
-  return { awarded, newMilestones };
-}
-
-/** Award premium base currency (diamonds/emeralds). Gold is deliberately NOT
+/** Award premium currency (diamonds/emeralds). Gold is deliberately NOT
  *  awardable here — gold is minted by productivity (todos/habits) only, so
  *  in-game rewards can't become a substitute for doing real work. */
 export function awardBaseCurrency(currency: "diamonds" | "emeralds", amount: number): { diamonds: number; emeralds: number } {
@@ -1284,129 +1180,10 @@ export function awardBaseCurrency(currency: "diamonds" | "emeralds", amount: num
     const now = new Date().toISOString();
     db.prepare(`UPDATE base_state SET ${currency} = ${currency} + ?, updated_at = ? WHERE id = 1`).run(amount, now);
   }
-  const updated = getBaseState();
-  return { diamonds: updated.currencies.diamonds, emeralds: updated.currencies.emeralds };
-}
-
-export function purchaseBaseItem(itemId: string, cost: number, currency: BaseCurrencyType = "gold"): { gold: number; diamonds: number; emeralds: number; inventory: BaseInventory } {
-  if (currency === "gold") {
-    spendGold(cost);
-  } else {
-    const baseState = getBaseState();
-    const current = baseState.currencies[currency];
-    if (current < cost) throw new Error(`not enough ${currency}`);
-    const now = new Date().toISOString();
-    db.prepare(`UPDATE base_state SET ${currency} = ${currency} - ?, updated_at = ? WHERE id = 1`).run(cost, now);
-  }
-
-  // Add item to inventory
-  const baseState = getBaseState();
-  const inventory = { ...baseState.inventory };
-  inventory[itemId] = (inventory[itemId] ?? 0) + 1;
-  const now = new Date().toISOString();
-  db.prepare(`UPDATE base_state SET inventory_json = ?, updated_at = ? WHERE id = 1`).run(JSON.stringify(inventory), now);
-
-  const updated = getBaseState();
-  return { gold: updated.currencies.gold, diamonds: updated.currencies.diamonds, emeralds: updated.currencies.emeralds, inventory: updated.inventory };
-}
-
-export function getProgression(): Progression {
-  const goldState = getGoldState();
-  const baseRow = db.prepare("SELECT diamonds, emeralds FROM base_state WHERE id = 1").get() as { diamonds: number; emeralds: number } | undefined;
-
-  const todoStats = db.prepare(`
-    SELECT
-      COUNT(*) AS total_created,
-      SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS total_completed
-    FROM todos
-  `).get() as { total_created: number; total_completed: number };
-
-  const accRow = db.prepare("SELECT habits_json, predictions_json, reflections_json FROM accountability_state WHERE id = 1").get() as {
-    habits_json: string;
-    predictions_json: string;
-    reflections_json: string;
-  } | undefined;
-
-  const habits: Habit[] = accRow ? JSON.parse(accRow.habits_json) : [];
-  const predictions = accRow ? (JSON.parse(accRow.predictions_json) as unknown[]) : [];
-  const reflections = accRow ? (JSON.parse(accRow.reflections_json) as unknown[]) : [];
-
-  const activeHabitsCount = habits.filter((h) => h.status === "active").length;
-  const totalHabitChecks = habits.reduce((sum, h) => sum + h.checks.filter((c) => c.done).length, 0);
-
-  // Compute day streaks from completed todo dates
-  const completedDates = db.prepare(`
-    SELECT DISTINCT DATE(completed_at) AS d FROM todos
-    WHERE status = 'done' AND completed_at IS NOT NULL
-    ORDER BY d DESC
-  `).all() as Array<{ d: string }>;
-
-  let currentDayStreak = 0;
-  let longestDayStreak = 0;
-
-  if (completedDates.length > 0) {
-    const dates = completedDates.map((r) => r.d);
-    const today = new Date().toISOString().slice(0, 10);
-
-    // Current streak: count consecutive days backwards from today (or yesterday)
-    let streak = 0;
-    let expected = today;
-    for (const d of dates) {
-      if (d === expected) {
-        streak++;
-        const prev = new Date(expected);
-        prev.setDate(prev.getDate() - 1);
-        expected = prev.toISOString().slice(0, 10);
-      } else if (streak === 0 && d === expected) {
-        // already handled
-      } else if (streak === 0) {
-        // Check if yesterday
-        const yesterday = new Date(today);
-        yesterday.setDate(yesterday.getDate() - 1);
-        if (d === yesterday.toISOString().slice(0, 10)) {
-          streak = 1;
-          const prev = new Date(d);
-          prev.setDate(prev.getDate() - 1);
-          expected = prev.toISOString().slice(0, 10);
-        } else {
-          break;
-        }
-      } else {
-        break;
-      }
-    }
-    currentDayStreak = streak;
-
-    // Longest streak: scan all dates
-    const dateSet = new Set(dates);
-    const sorted = [...dateSet].sort();
-    let run = 1;
-    longestDayStreak = 1;
-    for (let i = 1; i < sorted.length; i++) {
-      const prev = new Date(sorted[i - 1]);
-      prev.setDate(prev.getDate() + 1);
-      if (prev.toISOString().slice(0, 10) === sorted[i]) {
-        run++;
-        if (run > longestDayStreak) longestDayStreak = run;
-      } else {
-        run = 1;
-      }
-    }
-  }
-
-  return {
-    gold: goldState.gold,
-    diamonds: baseRow?.diamonds ?? 0,
-    emeralds: baseRow?.emeralds ?? 0,
-    totalTodosCompleted: todoStats.total_completed ?? 0,
-    totalTodosCreated: todoStats.total_created ?? 0,
-    currentDayStreak,
-    longestDayStreak,
-    activeHabitsCount,
-    totalHabitChecks,
-    totalPredictions: predictions.length,
-    totalReflections: reflections.length,
-  };
+  const row = db.prepare("SELECT diamonds, emeralds FROM base_state WHERE id = 1").get() as
+    | { diamonds: number; emeralds: number }
+    | undefined;
+  return { diamonds: row?.diamonds ?? 0, emeralds: row?.emeralds ?? 0 };
 }
 
 // ---------------------------------------------------------------------------

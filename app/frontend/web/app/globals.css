@@ -3072,6 +3072,13 @@ body.desktop-app main {
   font-style: italic;
 }
 
+/* "×n" repeat count on grouped range rows (e.g. "Morning Routine ×3") */
+.achievement-item-mult {
+  color: #8b8477;
+  font-size: 0.76rem;
+  font-variant-numeric: tabular-nums;
+}
+
 .achievement-item-delta {
   font-size: 0.78rem;
   font-weight: 600;

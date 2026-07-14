@@ -32,6 +32,7 @@ import {
   getSocialSettings,
   listFriendRequests,
   listFriends,
+  listFriendsToday,
   pollDeviceAuthorization,
   revokeAccessToken,
   saveSocialSettings,
@@ -223,6 +224,18 @@ app.get("/api/social/friends", (req, res) => {
   const user = requireAuth(req as AuthedRequest, res);
   if (!user) return;
   ok(res, { items: listFriends(user.id) });
+});
+
+// Compact per-friend overlay cards (status chips + today's shared log + base
+// tier). `date` is the viewer's local YYYY-MM-DD; log days are date-keyed.
+app.get("/api/social/friends/summary", (req, res) => {
+  const user = requireAuth(req as AuthedRequest, res);
+  if (!user) return;
+  const date =
+    typeof req.query.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)
+      ? req.query.date
+      : new Date().toISOString().slice(0, 10);
+  ok(res, { items: listFriendsToday(user.id, date) });
 });
 
 app.get("/api/social/friend-requests", (req, res) => {

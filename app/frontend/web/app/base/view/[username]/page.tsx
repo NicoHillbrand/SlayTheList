@@ -1,24 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import dynamic from "next/dynamic";
-import type { BaseSnapshot, SharedProfile } from "@slaythelist/contracts";
-import type { BaseScene } from "../../../../lib/game/BaseScene";
+import type { SharedBase, SharedProfile } from "@slaythelist/contracts";
 import { getCloudSharedProfile } from "../../../../lib/api";
-
-const PhaserGame = dynamic(() => import("../../../../lib/game/PhaserGame"), {
-  ssr: false,
-  loading: () => (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "#888" }}>
-      Loading base...
-    </div>
-  ),
-});
+import { FriendBaseView } from "../../FriendBaseView";
 
 type LoadState =
   | { status: "loading" }
-  | { status: "ready"; profile: SharedProfile; snapshot: BaseSnapshot }
+  | { status: "ready"; profile: SharedProfile; base: SharedBase }
   | { status: "hidden"; profile: SharedProfile }
   | { status: "unsynced"; profile: SharedProfile }
   | { status: "error"; message: string };
@@ -28,10 +18,6 @@ export default function ViewBasePage() {
   const router = useRouter();
   const username = decodeURIComponent(params?.username ?? "");
   const [state, setState] = useState<LoadState>({ status: "loading" });
-
-  const handleSceneReady = useCallback((_scene: BaseScene) => {
-    // No state subscription needed — read-only.
-  }, []);
 
   useEffect(() => {
     if (!username) {
@@ -48,15 +34,13 @@ export default function ViewBasePage() {
           setState({ status: "hidden", profile });
           return;
         }
-        // canView but no snapshot yet — friend hasn't synced base data after
-        // the feature rolled out. Distinct from an empty-but-synced base.
+        // canView but no snapshot yet — the friend hasn't synced since the
+        // base-sharing feature rolled out.
         if (!profile.base.snapshot) {
           setState({ status: "unsynced", profile });
           return;
         }
-        // Empty snapshots (no placements) are still "ready" — render the
-        // empty grid rather than blocking with a message.
-        setState({ status: "ready", profile, snapshot: profile.base.snapshot });
+        setState({ status: "ready", profile, base: profile.base.snapshot });
       })
       .catch((error) => {
         if (cancelled) return;
@@ -81,7 +65,7 @@ export default function ViewBasePage() {
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: "#0e0e1a", color: "#e0e0e0", fontFamily: "system-ui, sans-serif" }}>
+    <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh", background: "#0e0e1a", color: "#e0e0e0", fontFamily: "system-ui, sans-serif" }}>
       <div style={{
         display: "flex", alignItems: "center", gap: 12,
         padding: "10px 16px", borderBottom: "1px solid #333", background: "#16162a",
@@ -126,13 +110,8 @@ export default function ViewBasePage() {
           <CenteredMessage tone="error">{state.message}</CenteredMessage>
         )}
         {state.status === "ready" && (
-          <div style={{ position: "absolute", inset: 0 }}>
-            <PhaserGame
-              onSceneReady={handleSceneReady}
-              readOnly
-              externalSnapshot={state.snapshot}
-              viewerLabel={`@${username}'s base`}
-            />
+          <div style={{ maxWidth: 900, margin: "0 auto", padding: "20px 16px" }}>
+            <FriendBaseView base={state.base} />
           </div>
         )}
       </div>

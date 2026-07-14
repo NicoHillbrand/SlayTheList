@@ -8,7 +8,9 @@ import {
   friendRequestSchema,
   friendSearchResultSchema,
   friendSummarySchema,
+  friendTodaySummarySchema,
   sharedProfileSchema,
+  sharedStatusSchema,
   socialSettingsSchema,
   socialSnapshotSchema,
   vaultPullResponseSchema,
@@ -20,6 +22,9 @@ import {
   type FriendRequest,
   type FriendSearchResult,
   type FriendSummary,
+  type FriendTodaySummary,
+  type SharedStatus,
+  type StatusChip,
   type SharedDailyLogDay,
   type SharedProfile,
   type SocialSettings,
@@ -32,10 +37,12 @@ import {
 import { db } from "./db.js";
 import {
   getAccountabilityState,
-  getBaseState,
+  getDefenseSnapshot,
   getGoldState,
+  getSetting,
   listGoldActivityDays,
   listTodos,
+  setSetting,
 } from "./store.js";
 
 type LocalSocialSettingsRow = {
@@ -294,12 +301,40 @@ export function buildSharedDailyLog(days = SHARED_DAILY_LOG_DAYS): SharedDailyLo
   }));
 }
 
+// ---------------------------------------------------------------------------
+// Status — the user's color-coded "how's my day" chips, stored locally in
+// app_settings and shared with friends via the social snapshot.
+// ---------------------------------------------------------------------------
+
+const STATUS_SETTING_KEY = "social.status";
+
+export function getLocalSocialStatus(): SharedStatus {
+  const raw = getSetting(STATUS_SETTING_KEY);
+  if (raw) {
+    try {
+      const parsed = sharedStatusSchema.safeParse(JSON.parse(raw));
+      if (parsed.success) return parsed.data;
+    } catch {
+      // Corrupt value — fall through to the empty default.
+    }
+  }
+  return { chips: [], updatedAt: new Date().toISOString() };
+}
+
+export function saveLocalSocialStatus(chips: StatusChip[]): SharedStatus {
+  const status = sharedStatusSchema.parse({ chips, updatedAt: new Date().toISOString() });
+  setSetting(STATUS_SETTING_KEY, JSON.stringify(status));
+  return status;
+}
+
 export function buildLocalSocialSnapshot(): SocialSnapshot {
   const now = new Date().toISOString();
   const state = getAccountabilityState();
-  // Slice the local BaseState into a snapshot — placements + cells only,
-  // no inventory/currencies (those stay private).
-  const baseState = getBaseState();
+  // Share the real base run (the lane defense). Reading the snapshot also
+  // fast-forwards and persists the sim, so what's shared is current. State
+  // only — never the wallet, which is the real gold balance and is shared
+  // separately under goldVisibility.
+  const defense = getDefenseSnapshot(false);
   return socialSnapshotSchema.parse({
     settings: getLocalSocialSettings(),
     habits: state.habits.filter((h) => h.visibility !== "private"),
@@ -308,13 +343,19 @@ export function buildLocalSocialSnapshot(): SocialSnapshot {
     gold: getGoldState(),
     dailyLog: buildSharedDailyLog(),
     base: {
-      version: baseState.version,
-      placements: baseState.placements ?? [],
-      cells: baseState.cells,
-      updatedAt: baseState.updatedAt,
+      state: defense.state,
+      updatedAt: now,
     },
+    status: getLocalSocialStatus(),
     sourceUpdatedAt: now,
   });
+}
+
+export async function getCloudFriendsToday(date: string): Promise<{ items: FriendTodaySummary[] }> {
+  const body = await requestCloud<{ items: unknown }>(
+    `/api/social/friends/summary?date=${encodeURIComponent(date)}`,
+  );
+  return { items: friendTodaySummarySchema.array().parse(body.items ?? []) };
 }
 
 export function getCloudConnectionStatus(): CloudConnectionStatus {

@@ -48,9 +48,8 @@ export interface Card {
 }
 
 /**
- * The shareable, read-only form of a deck — the exact analogue of the base
- * builder's `BaseSnapshot`. This is what gets stored and battled against for
- * async snapshot PvP (no live opponent needed).
+ * The shareable, read-only form of a deck. This is what gets stored and
+ * battled against for async snapshot PvP (no live opponent needed).
  */
 export interface DeckSnapshot {
   /** Optional display label, e.g. "@alice's deck". */

@@ -96,12 +96,15 @@ These are stored as JSON arrays. The pattern for any modification is **read → 
   "resolvedAt": 1700000000000,
   "murphy": false,
   "targetTitle": "string | undefined",
+  "logDate": "YYYY-MM-DD | undefined",
   "stake": 5,
   "payout": 8
 }
 ```
 
 `murphy: true` marks a prediction as a Murphy-Jitsu failure-mode prediction (what might go wrong). `targetTitle` links it to a specific goal by title when it's a per-goal failure mode. Regular predictions omit both fields.
+
+`logDate` (optional) overrides which day the prediction appears under in the daily log. Without it, resolved predictions group by their resolution day and pending ones by the day they were made. Set it to move a prediction to the day it actually belongs — never re-date `createdAt`/`resolvedAt` for that; those record when things really happened.
 
 `stake` (optional, gold) escrows gold on a prediction. `set_predictions` handles the gold movements server-side, mirroring the app UI:
 

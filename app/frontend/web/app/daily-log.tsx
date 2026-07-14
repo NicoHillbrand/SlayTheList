@@ -169,6 +169,19 @@ function buildDayGold(entries: DailyLogEntry[]): DayGold {
   return { tasks, habits, privateEntries };
 }
 
+// Collapse entries sharing a label into one row (first-seen order kept).
+function groupEntriesByLabel(entries: DailyLogEntry[], fallbackLabel: string) {
+  const groups = new Map<string, { label: string; entries: DailyLogEntry[]; total: number }>();
+  for (const entry of entries) {
+    const label = entry.label || fallbackLabel;
+    const group = groups.get(label) ?? { label, entries: [], total: 0 };
+    group.entries.push(entry);
+    group.total += entry.delta;
+    groups.set(label, group);
+  }
+  return Array.from(groups.values());
+}
+
 // ---------------------------------------------------------------------------
 // Predictions
 // ---------------------------------------------------------------------------
@@ -185,7 +198,19 @@ function predictionResolvedKey(p: Prediction): string | null {
   return localDayKey(new Date(p.resolvedAt));
 }
 
-function PredictionsSection({ predictions }: { predictions: Prediction[] }) {
+// The day a prediction is grouped under in the log: an explicit logDate
+// override wins; otherwise resolution day (resolved) or made day (pending).
+function predictionLogKey(p: Prediction): string {
+  return p.logDate ?? predictionResolvedKey(p) ?? localDayKey(new Date(p.createdAt));
+}
+
+function PredictionsSection({
+  predictions,
+  onMovePrediction,
+}: {
+  predictions: Prediction[];
+  onMovePrediction?: (predictionId: string, date: string) => void;
+}) {
   if (predictions.length === 0) return null;
   // Resolved first (by recency of resolution), then still-pending.
   const ordered = [...predictions].sort((a, b) => {
@@ -215,11 +240,11 @@ function PredictionsSection({ predictions }: { predictions: Prediction[] }) {
           const net = predictionNet(p);
           const outcomeClass = pending ? "pending" : hit ? "hit" : "miss";
           const outcomeMark = pending ? "•" : hit ? "✓" : "✗";
-          // Rows appear under their resolution day (or creation day while
-          // pending) — flag ones made on an earlier day so carried-over
-          // predictions are distinguishable from same-day ones.
+          // Rows appear under their log day (logDate override, else resolution
+          // day, else made day) — flag ones made on an earlier day so
+          // carried-over predictions are distinguishable from same-day ones.
           const madeKey = localDayKey(new Date(p.createdAt));
-          const appearKey = predictionResolvedKey(p) ?? madeKey;
+          const appearKey = predictionLogKey(p);
           const madeLabel =
             madeKey === appearKey
               ? null
@@ -231,6 +256,20 @@ function PredictionsSection({ predictions }: { predictions: Prediction[] }) {
                 {p.title}
                 {madeLabel && <span className="achievement-pred-made">(Made {madeLabel})</span>}
               </span>
+              {onMovePrediction && (
+                <input
+                  type="date"
+                  className="achievement-item-date"
+                  title="Move this prediction to the day it belongs in the log"
+                  aria-label={`Change day for "${p.title}"`}
+                  value={appearKey}
+                  max={keyDaysAgo(0)}
+                  onChange={(event) => {
+                    const next = event.target.value;
+                    if (next && next !== appearKey) onMovePrediction(p.id, next);
+                  }}
+                />
+              )}
               <span className="achievement-pred-confidence">{p.confidence}%</span>
               {pending ? (
                 p.stake != null && <span className="achievement-pred-pending">{p.stake} staked</span>
@@ -376,10 +415,14 @@ function EntryDatePicker({
 function GoldCategories({
   gold,
   showItems,
+  groupRepeats = false,
   onMoveEntry,
 }: {
   gold: DayGold;
   showItems: boolean;
+  // Multi-day ranges: collapse repeated habits into one "label ×n" row with the
+  // summed gold. Grouped rows drop the per-entry date picker.
+  groupRepeats?: boolean;
   onMoveEntry?: (entryId: string, date: string) => void;
 }) {
   const privateTotal = sumDelta(gold.privateEntries);
@@ -420,11 +463,21 @@ function GoldCategories({
           total={sumDelta(gold.habits)}
           showItems={showItems}
         >
-          {gold.habits.map((entry, index) => (
+          {(groupRepeats
+            ? groupEntriesByLabel(gold.habits, "Habit")
+            : gold.habits.map((entry) => ({ label: entry.label || "Habit", entries: [entry], total: entry.delta }))
+          ).map((group, index) => (
             <div key={`habit:${index}`} className="achievement-item">
-              <span className="achievement-item-label">{entry.label || "Habit"}</span>
-              <EntryDatePicker entry={entry} onMoveEntry={onMoveEntry} />
-              <span className="achievement-item-delta">+{entry.delta}</span>
+              <span className="achievement-item-label">
+                {group.label}
+                {group.entries.length > 1 && (
+                  <span className="achievement-item-mult"> ×{group.entries.length}</span>
+                )}
+              </span>
+              {group.entries.length === 1 && (
+                <EntryDatePicker entry={group.entries[0]} onMoveEntry={onMoveEntry} />
+              )}
+              <span className="achievement-item-delta">+{group.total}</span>
             </div>
           ))}
         </CategoryBlock>
@@ -554,6 +607,7 @@ export function AchievementSummary({
   showHabits = true,
   compact = false,
   onMoveEntry,
+  onMovePrediction,
 }: {
   days: DailyLogDay[];
   habits: Habit[];
@@ -566,6 +620,9 @@ export function AchievementSummary({
   compact?: boolean;
   // Own-log only: move a ledger entry to a different day (hover date picker).
   onMoveEntry?: (entryId: string, date: string) => void;
+  // Own-log only: move a prediction to a different day (resolution day for
+  // resolved ones, made day for pending ones).
+  onMovePrediction?: (predictionId: string, date: string) => void;
 }) {
   const goldByKey = useMemo(() => new Map(days.map((d) => [d.date, d])), [days]);
   const resolvedPreds = useMemo(
@@ -574,6 +631,7 @@ export function AchievementSummary({
   );
   // Resolved predictions key off their resolution day; pending ones off the day
   // they were made — so a bet shows up the day you place it, then again resolved.
+  // An explicit logDate override (own-log date picker) beats both.
   const predsByKey = useMemo(() => {
     const map = new Map<string, Prediction[]>();
     const add = (key: string | null, p: Prediction) => {
@@ -582,9 +640,9 @@ export function AchievementSummary({
       list.push(p);
       map.set(key, list);
     };
-    for (const p of resolvedPreds) add(predictionResolvedKey(p), p);
+    for (const p of resolvedPreds) add(predictionLogKey(p), p);
     for (const p of predictions) {
-      if (p.outcome === "pending") add(localDayKey(new Date(p.createdAt)), p);
+      if (p.outcome === "pending") add(predictionLogKey(p), p);
     }
     return map;
   }, [predictions, resolvedPreds]);
@@ -634,8 +692,8 @@ export function AchievementSummary({
         <p className="achievement-empty">Nothing logged {isRange ? "in this range" : "on this day"}.</p>
       ) : (
         <div className="achievement-categories">
-          <GoldCategories gold={gold} showItems onMoveEntry={onMoveEntry} />
-          {showPredictions && <PredictionsSection predictions={scopePreds} />}
+          <GoldCategories gold={gold} showItems groupRepeats={isRange} onMoveEntry={onMoveEntry} />
+          {showPredictions && <PredictionsSection predictions={scopePreds} onMovePrediction={onMovePrediction} />}
         </div>
       )}
 

@@ -9,8 +9,6 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import {
   accountabilityStateSchema,
-  baseShopPurchaseRequestSchema,
-  baseStateSchema,
   cloudDeviceStartRequestSchema,
   friendRequestSchema,
   friendSearchResultSchema,
@@ -23,6 +21,7 @@ import {
   encouragementResponseSchema,
   sharedProfileSchema,
   socialSettingsSchema,
+  statusChipSchema,
   vaultPushRequestSchema,
   type EventEnvelope,
   type OverlayState,
@@ -43,6 +42,7 @@ import {
   getAccountabilityState,
   getBlock,
   getDetectedGameState,
+  getGoldEarnedToday,
   getGoldState,
   listBlocks,
   listDetectionRegions,
@@ -71,12 +71,7 @@ import {
   updateZone,
   getSetting,
   setSetting,
-  getBaseState,
-  saveBaseState,
-  purchaseBaseItem,
   awardBaseCurrency,
-  getProgression,
-  checkAndAwardDiamonds,
   getDefenseSnapshot,
   buyDefenseUpgrade,
   runDefenseSandboxAction,
@@ -92,8 +87,11 @@ import {
   declineCloudFriendRequest,
   disconnectCloudConnection,
   getCloudConnectionStatus,
+  getCloudFriendsToday,
   getCloudSharedProfile,
   getLocalSocialSettings,
+  getLocalSocialStatus,
+  saveLocalSocialStatus,
   isCloudSyncReady,
   listCloudFriendRequests,
   listCloudFriends,
@@ -122,11 +120,19 @@ app.use(
 app.use(express.json({ limit: "50mb" }));
 app.use(requestLogger);
 
-function buildOverlayState(): OverlayState & { showDetectionIndicator: boolean; detectionIntervalMs: number } {
+function buildOverlayState(): OverlayState & {
+  showDetectionIndicator: boolean;
+  detectionIntervalMs: number;
+  showGoldToday: boolean;
+  goldEarnedToday: number;
+  showBaseOverlay: boolean;
+  overlayToggleHotkey: string;
+} {
   const rawInterval = Number(getSetting("detectionIntervalMs"));
   const detectionIntervalMs = Number.isFinite(rawInterval) && rawInterval > 0
     ? Math.min(800, Math.max(100, Math.round(rawInterval)))
     : 100;
+  const showGoldToday = getSetting("showGoldToday") === "true";
   return {
     gameWindow: { titleHint: "Slay the Spire 2" },
     zones: listOverlayState(),
@@ -135,6 +141,10 @@ function buildOverlayState(): OverlayState & { showDetectionIndicator: boolean; 
     lastUpdatedAt: new Date().toISOString(),
     showDetectionIndicator: getSetting("showDetectionIndicator") !== "false",
     detectionIntervalMs,
+    showGoldToday,
+    goldEarnedToday: showGoldToday ? getGoldEarnedToday() : 0,
+    showBaseOverlay: getSetting("showBaseOverlay") === "true",
+    overlayToggleHotkey: getSetting("overlayToggleHotkey") ?? "",
   };
 }
 
@@ -314,6 +324,36 @@ app.get("/api/cloud-social/friends", async (_req, res) => {
   } catch (error) {
     return badRequest(res, (error as Error).message);
   }
+});
+
+// Compact per-friend overlay cards: status chips + today's shared log + base
+// tier. `date` is the viewer's local YYYY-MM-DD (log days are date-keyed).
+app.get("/api/cloud-social/friends/summary", async (req, res) => {
+  const date =
+    typeof req.query.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)
+      ? req.query.date
+      : new Date().toISOString().slice(0, 10);
+  try {
+    ok(res, await getCloudFriendsToday(date));
+  } catch (error) {
+    return badRequest(res, (error as Error).message);
+  }
+});
+
+// The user's own status chips (energy / availability / custom), shared with
+// friends through the social snapshot.
+app.get("/api/social-status", (_req, res) => {
+  ok(res, getLocalSocialStatus());
+});
+
+app.put("/api/social-status", (req, res) => {
+  const parsed = statusChipSchema.array().max(8).safeParse(req.body?.chips);
+  if (!parsed.success) {
+    return badRequest(res, `invalid status chips: ${parsed.error.issues[0]?.message ?? "invalid payload"}`);
+  }
+  const status = saveLocalSocialStatus(parsed.data);
+  triggerCloudSnapshotSync();
+  ok(res, status);
 });
 
 app.get("/api/cloud-social/friend-requests", async (_req, res) => {
@@ -624,6 +664,7 @@ app.post("/api/gold/award", (req, res) => {
   const activity = parseActivity(req.body?.activity) ?? parseAgentActivity(req.body);
   ok(res, awardGold(amount, undefined, activity));
   if (withSound) broadcastPlaySound("gold");
+  broadcastOverlayState();
   triggerCloudSnapshotSync();
 });
 
@@ -655,6 +696,7 @@ app.post("/api/gold/deduct", (req, res) => {
   }
   ok(res, deductGold(amount, undefined, parseActivity(req.body?.activity)));
   if (withSound) broadcastPlaySound("gold");
+  broadcastOverlayState();
   triggerCloudSnapshotSync();
 });
 
@@ -681,6 +723,7 @@ app.post("/api/gold/award-todo", (req, res) => {
   };
   const result = awardTodoGold(todoId.trim(), amount, undefined, activity);
   ok(res, result);
+  broadcastOverlayState();
   triggerCloudSnapshotSync();
 });
 
@@ -800,6 +843,7 @@ app.patch("/api/predictions/:id", (req, res) => {
   const nextConfidence = patch.confidence;
   const nextOutcome = patch.outcome;
   const nextResolvedAt = patch.resolvedAt;
+  const nextLogDate = patch.logDate;
   const nextVisibility = patch.visibility;
   if (nextTitle !== undefined && typeof nextTitle !== "string") {
     return badRequest(res, "title must be a string");
@@ -821,6 +865,13 @@ app.patch("/api/predictions/:id", (req, res) => {
     (typeof nextResolvedAt !== "number" || !Number.isFinite(nextResolvedAt))
   ) {
     return badRequest(res, "resolvedAt must be a number timestamp or null");
+  }
+  if (
+    nextLogDate !== undefined &&
+    nextLogDate !== null &&
+    (typeof nextLogDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(nextLogDate))
+  ) {
+    return badRequest(res, "logDate must be a YYYY-MM-DD string or null");
   }
   const visibilityParsed =
     nextVisibility === undefined ? { success: true, data: undefined } : itemVisibilitySchema.safeParse(nextVisibility);
@@ -844,6 +895,8 @@ app.patch("/api/predictions/:id", (req, res) => {
     title: nextTitle === undefined ? current.title : nextTitle.trim(),
     confidence: nextConfidence === undefined ? current.confidence : nextConfidence,
     outcome: outcomeParsed.data === undefined ? current.outcome : outcomeParsed.data,
+    // null clears the override (falls back to resolution/made-day grouping).
+    logDate: nextLogDate === undefined ? current.logDate : nextLogDate ?? undefined,
     resolvedAt:
       nextResolvedAt === undefined
         ? resolvedAtFromOutcome === undefined
@@ -1525,37 +1578,8 @@ app.post("/api/autostart", async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Base Builder
+// Premium currencies (the isometric base builder is sunset; balances remain)
 // ---------------------------------------------------------------------------
-
-app.get("/api/base-state", (_req, res) => {
-  ok(res, getBaseState());
-});
-
-app.put("/api/base-state", (req, res) => {
-  const parsed = baseStateSchema.pick({ placements: true, inventory: true }).safeParse(req.body);
-  if (!parsed.success) return badRequest(res, parsed.error.message);
-  ok(res, saveBaseState(parsed.data));
-});
-
-app.get("/api/progression", (_req, res) => {
-  ok(res, getProgression());
-});
-
-app.post("/api/base-shop/purchase", (req, res) => {
-  const parsed = baseShopPurchaseRequestSchema.safeParse(req.body);
-  if (!parsed.success) return badRequest(res, parsed.error.message);
-  try {
-    ok(res, purchaseBaseItem(parsed.data.itemId, parsed.data.cost, parsed.data.currency));
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "purchase failed";
-    badRequest(res, message);
-  }
-});
-
-app.post("/api/base-diamonds/check", (_req, res) => {
-  ok(res, checkAndAwardDiamonds());
-});
 
 // Award premium currency (diamonds/emeralds) — e.g. arena run rewards.
 // Gold is intentionally rejected: gold is minted by productivity only.
@@ -1572,7 +1596,7 @@ app.post("/api/base-currencies/award", (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Lane defense (Stage 1)
+// Base — lane defense (Stage 1)
 // ---------------------------------------------------------------------------
 
 const isDefenseSandbox = (value: unknown) => value === true || value === "1" || value === "true";
@@ -1586,11 +1610,14 @@ app.post("/api/defense/upgrade", (req, res) => {
   if (typeof slotIndex !== "number" || !Number.isInteger(slotIndex)) {
     return badRequest(res, "slotIndex must be an integer");
   }
+  const sandbox = isDefenseSandbox(req.body?.sandbox);
   try {
-    ok(res, buyDefenseUpgrade(isDefenseSandbox(req.body?.sandbox), slotIndex));
+    ok(res, buyDefenseUpgrade(sandbox, slotIndex));
   } catch (err) {
-    badRequest(res, err instanceof Error ? err.message : "upgrade failed");
+    return badRequest(res, err instanceof Error ? err.message : "upgrade failed");
   }
+  // The real defense run is shared with friends via the social snapshot.
+  if (!sandbox) triggerCloudSnapshotSync();
 });
 
 // Collapse behaviour A/B toggle ("knockback" | "reset") — applies to both the

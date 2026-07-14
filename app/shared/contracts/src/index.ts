@@ -58,6 +58,10 @@ export const predictionSchema = z.object({
   murphy: z.boolean().optional(),
   targetTitle: z.string().optional(),
   visibility: itemVisibilitySchema.optional(),
+  // Daily-log grouping override (local YYYY-MM-DD): the day this prediction
+  // shows up in the log, without touching createdAt/resolvedAt. Absent =
+  // group by resolution day (resolved) or made day (pending).
+  logDate: z.string().optional(),
   // Gold escrowed on this prediction at creation. While pending, a staked
   // prediction's confidence is locked (it determines the payout).
   stake: z.number().int().min(1).optional(),
@@ -181,6 +185,25 @@ export const sharedDailyLogDaySchema = z.object({
 });
 export type SharedDailyLogDay = z.infer<typeof sharedDailyLogDaySchema>;
 
+// ---------------------------------------------------------------------------
+// Status — short-lived, color-coded "how my day is going" chips shared with
+// friends (energy level, open to a call, co-working, custom labels).
+// ---------------------------------------------------------------------------
+
+export const statusChipSchema = z.object({
+  id: z.string(),
+  label: z.string().min(1).max(40),
+  /** CSS color of the chip — the at-a-glance code for energy/availability. */
+  color: z.string().min(1).max(32),
+});
+export type StatusChip = z.infer<typeof statusChipSchema>;
+
+export const sharedStatusSchema = z.object({
+  chips: z.array(statusChipSchema).max(8),
+  updatedAt: z.string(),
+});
+export type SharedStatus = z.infer<typeof sharedStatusSchema>;
+
 export const socialVisibilitySchema = z.enum(["private", "friends", "public"]);
 export type SocialVisibility = z.infer<typeof socialVisibilitySchema>;
 
@@ -210,10 +233,43 @@ export const socialSettingsSchema = z.object({
   predictionsVisibility: socialVisibilitySchema.default("friends"),
   goldVisibility: socialVisibilitySchema.default("friends"),
   walkthroughsVisibility: socialVisibilitySchema.default("private"),
+  // "Base" = the lane-defense game — governs the shared defense snapshot.
   baseVisibility: socialVisibilitySchema.default("friends"),
   dailyLogVisibility: socialVisibilitySchema.default("friends"),
 });
 export type SocialSettings = z.infer<typeof socialSettingsSchema>;
+
+// ---------------------------------------------------------------------------
+// Base (lane defense) — shared via the social snapshot so friends can view it
+// ---------------------------------------------------------------------------
+
+// Mirrors DefenseState from @slaythelist/defense-engine, kept permissive
+// (plain numbers, no literals) so engine version bumps don't invalidate
+// stored snapshots. Deliberately excludes the wallet — in real mode that is
+// the actual gold balance, which is shared separately under goldVisibility.
+export const sharedBaseStateSchema = z.object({
+  version: z.number().int(),
+  lastTickMs: z.number(),
+  runStartedMs: z.number(),
+  tier: z.number(),
+  kills: z.number(),
+  baseHp: z.number(),
+  slots: z.array(z.object({ level: z.number() })),
+  goldInvestedRun: z.number(),
+  meta: z.object({
+    bestTier: z.number(),
+    runsLost: z.number(),
+    totalTierUps: z.number(),
+    totalGoldInvested: z.number(),
+  }),
+});
+export type SharedBaseState = z.infer<typeof sharedBaseStateSchema>;
+
+export const sharedBaseSchema = z.object({
+  state: sharedBaseStateSchema,
+  updatedAt: z.string(),
+});
+export type SharedBase = z.infer<typeof sharedBaseSchema>;
 
 export const friendRelationshipSchema = z.enum([
   "self",
@@ -250,6 +306,16 @@ export const friendSearchResultSchema = z.object({
 });
 export type FriendSearchResult = z.infer<typeof friendSearchResultSchema>;
 
+/** Compact per-friend card for the overlay taskbar: status chips + what
+ *  they've done today + base tier. Sections the friend doesn't share are null. */
+export const friendTodaySummarySchema = z.object({
+  user: friendSummarySchema,
+  status: sharedStatusSchema.nullable(),
+  today: sharedDailyLogDaySchema.nullable(),
+  base: z.object({ tier: z.number(), bestTier: z.number() }).nullable(),
+});
+export type FriendTodaySummary = z.infer<typeof friendTodaySummarySchema>;
+
 export const sharedProfileSectionSchema = z.object({
   visibility: socialVisibilitySchema,
   canView: z.boolean(),
@@ -275,16 +341,18 @@ export const sharedProfileSchema = z.object({
     canView: z.boolean(),
     state: goldStateSchema.nullable(),
   }),
-  // Optional so this schema still validates against older cloud servers
-  // that haven't been redeployed with the base-sharing feature yet.
+  // The base (lane defense). Optional so this schema still validates against
+  // older cloud servers.
   base: z
     .object({
       visibility: socialVisibilitySchema,
       canView: z.boolean(),
-      // Forward-referenced — see baseSnapshotSchema in the Base Builder section.
-      snapshot: z.lazy(() => baseSnapshotSchema).nullable(),
+      snapshot: sharedBaseSchema.nullable(),
     })
     .optional(),
+  // Friends-only status chips; null when unset or not visible to the viewer.
+  // Optional so this schema still validates against older cloud servers.
+  status: sharedStatusSchema.nullable().optional(),
   // Optional so this schema still validates against older cloud servers that
   // predate the daily-log feature.
   dailyLog: z
@@ -343,8 +411,10 @@ export const socialSnapshotSchema = z.object({
   gold: goldStateSchema,
   // Privacy already applied before this leaves the local machine.
   dailyLog: z.array(sharedDailyLogDaySchema).optional(),
-  // Forward-referenced — defined further down in the Base Builder section.
-  base: z.lazy(() => baseSnapshotSchema).optional(),
+  // The base (lane-defense run).
+  base: sharedBaseSchema.optional(),
+  // Color-coded "how's my day" chips, shown to friends.
+  status: sharedStatusSchema.optional(),
   sourceUpdatedAt: z.string(),
   syncedAt: z.string().optional(),
 });
@@ -549,95 +619,6 @@ export const playSoundPayloadSchema = z.object({
   sound: z.string().min(1),
 });
 export type PlaySoundPayload = z.infer<typeof playSoundPayloadSchema>;
-
-// ---------------------------------------------------------------------------
-// Base Builder
-// ---------------------------------------------------------------------------
-
-export const buildingPlacementSchema = z.object({
-  itemId: z.string(),
-  x: z.number(),
-  y: z.number(),
-  rotation: z.number().int().min(0).max(3).default(0),
-  flipped: z.boolean().default(false),
-});
-export type BuildingPlacement = z.infer<typeof buildingPlacementSchema>;
-
-export const baseCurrenciesSchema = z.object({
-  gold: z.number().int().nonnegative(),
-  diamonds: z.number().int().nonnegative(),
-  emeralds: z.number().int().nonnegative(),
-});
-export type BaseCurrencies = z.infer<typeof baseCurrenciesSchema>;
-
-export const baseInventorySchema = z.record(z.string(), z.number().int().nonnegative());
-export type BaseInventory = z.infer<typeof baseInventorySchema>;
-
-export const terrainStackSchema = z.object({
-  tileId: z.string(),
-  height: z.union([z.literal(0), z.literal(1), z.literal(2)]),
-});
-export type TerrainStack = z.infer<typeof terrainStackSchema>;
-
-export const cellSchema = z.object({
-  terrain: z.array(terrainStackSchema),
-  object: buildingPlacementSchema.nullable(),
-});
-export type Cell = z.infer<typeof cellSchema>;
-
-export const baseStateSchema = z.object({
-  version: z.number().int().optional(),
-  placements: z.array(buildingPlacementSchema).optional(),
-  cells: z.array(z.array(cellSchema)).optional(),
-  inventory: baseInventorySchema,
-  currencies: baseCurrenciesSchema,
-  /** Tracks which streak milestones have already been rewarded */
-  diamondMilestones: z.array(z.number().int()),
-  updatedAt: z.string(),
-});
-export type BaseState = z.infer<typeof baseStateSchema>;
-
-/** Read-only base view shown to other users via the social profile.
- *  Excludes inventory and currencies — those stay private. */
-export const baseSnapshotSchema = z.object({
-  version: z.number().int().optional(),
-  placements: z.array(buildingPlacementSchema),
-  cells: z.array(z.array(cellSchema)).optional(),
-  updatedAt: z.string(),
-});
-export type BaseSnapshot = z.infer<typeof baseSnapshotSchema>;
-
-export const progressionSchema = z.object({
-  gold: z.number(),
-  diamonds: z.number(),
-  emeralds: z.number(),
-  totalTodosCompleted: z.number(),
-  totalTodosCreated: z.number(),
-  currentDayStreak: z.number(),
-  longestDayStreak: z.number(),
-  activeHabitsCount: z.number(),
-  totalHabitChecks: z.number(),
-  totalPredictions: z.number(),
-  totalReflections: z.number(),
-});
-export type Progression = z.infer<typeof progressionSchema>;
-
-export type BaseCurrencyType = "gold" | "diamonds" | "emeralds";
-
-export const baseShopPurchaseRequestSchema = z.object({
-  itemId: z.string(),
-  cost: z.number().int().nonnegative(),
-  currency: z.enum(["gold", "diamonds", "emeralds"]).default("gold"),
-});
-export type BaseShopPurchaseRequest = z.infer<typeof baseShopPurchaseRequestSchema>;
-
-export const baseShopPurchaseResponseSchema = z.object({
-  gold: z.number(),
-  diamonds: z.number(),
-  emeralds: z.number(),
-  inventory: baseInventorySchema,
-});
-export type BaseShopPurchaseResponse = z.infer<typeof baseShopPurchaseResponseSchema>;
 
 // ---------------------------------------------------------------------------
 // Cloud Vault (E2E encrypted full-data sync)

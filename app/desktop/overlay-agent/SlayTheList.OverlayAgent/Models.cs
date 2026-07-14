@@ -33,6 +33,20 @@ public sealed class OverlayPayload
 
     [JsonPropertyName("detectionIntervalMs")]
     public int DetectionIntervalMs { get; set; } = 100;
+
+    [JsonPropertyName("showGoldToday")]
+    public bool ShowGoldToday { get; set; }
+
+    [JsonPropertyName("goldEarnedToday")]
+    public int GoldEarnedToday { get; set; }
+
+    [JsonPropertyName("showBaseOverlay")]
+    public bool ShowBaseOverlay { get; set; }
+
+    /// <summary>Global hotkey combo (e.g. "Ctrl+Shift+B") that toggles the
+    /// overlay bar. Empty = no hotkey.</summary>
+    [JsonPropertyName("overlayToggleHotkey")]
+    public string OverlayToggleHotkey { get; set; } = string.Empty;
 }
 
 public sealed class GameWindowHint

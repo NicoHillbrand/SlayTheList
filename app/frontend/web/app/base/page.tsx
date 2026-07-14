@@ -1,243 +1,399 @@
 "use client";
 
-import { useState, useCallback } from "react";
-import dynamic from "next/dynamic";
-import { CATALOG, effectiveCost, type CatalogItem } from "../../lib/game/catalog";
-import { SPRITE_ASSETS, hasSprite } from "../../lib/game/sprites";
-import type { BaseScene } from "../../lib/game/BaseScene";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  DEFAULT_PARAMS,
+  currentEnemyDps,
+  metaCostMultiplier,
+  playerDps,
+  slotDps,
+  upgradeCost,
+  type DefenseEvent,
+  type DefenseState,
+} from "@slaythelist/defense-engine";
+import { battleMath, clamp, fmtDps, laneVisuals } from "../../lib/defense/math";
+import { CoinIcon } from "../../lib/combat/icons";
+import { setMuted, sfx } from "../../lib/combat/sfx";
+import { LaneTheater } from "./LaneTheater";
+import {
+  buyUpgrade,
+  fetchDefense,
+  sandboxAction,
+  type DefenseDeathMode,
+  type DefenseSnapshot,
+  type SandboxAction,
+} from "../../lib/defense/data";
+import styles from "./base.module.css";
 
-const PhaserGame = dynamic(() => import("../../lib/game/PhaserGame"), {
-  ssr: false,
-  loading: () => (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "#888" }}>
-      Loading game...
-    </div>
-  ),
-});
+const P = DEFAULT_PARAMS;
+const POLL_MS = 15_000;
+const MUTE_KEY = "slaythelist.defense.muted";
+/** Only sound events that just happened — not stale ones from offline catch-up. */
+const FRESH_EVENT_MS = 5 * 60_000;
 
-type ShopTab = "building" | "decoration" | "terrain";
-
-const CURRENCY_COLORS: Record<string, string> = {
-  gold: "#ffd700",
-  diamonds: "#b9f2ff",
-  emeralds: "#50c878",
-};
-
-function playPurchaseSound() {
-  const audio = new Audio("/sfx/gold-sack.wav");
-  audio.volume = 0.72;
-  audio.currentTime = 0.22;
-  audio.play().catch(() => {});
-  setTimeout(() => { audio.pause(); audio.currentTime = 0; }, 1450);
+/** Base-HP loss per second at the current power balance (always negative). */
+function hpRatePerSec(state: DefenseState): number {
+  const pd = playerDps(state, P);
+  const ed = currentEnemyDps(state, P);
+  const deficit = Math.min(1, Math.max(P.chipBleedFloor, 1 - pd / ed));
+  return -(P.hpMax * deficit * P.damageRatePerHour) / 3600;
 }
 
-export default function BasePage() {
-  const [scene, setScene] = useState<BaseScene | null>(null);
-  const [activeTab, setActiveTab] = useState<ShopTab>("building");
-  const [shopOpen, setShopOpen] = useState(true);
-  const [, setRenderTick] = useState(0);
+function eventNotice(events: DefenseEvent[], deathMode: DefenseDeathMode): string | null {
+  let death: string | null = null;
+  let tier: string | null = null;
+  for (const e of events) {
+    if (e.type === "baseDestroyed") {
+      death =
+        deathMode === "reset"
+          ? `Overrun at tier ${e.tierReached}! The base fell — rebuilt from tier 1 on your legacy floor. Reclaiming is fast.`
+          : `Overrun at tier ${e.tierReached}! Knocked back ${P.collapseTierSetback} tiers and towers weakened — your legacy floor held.`;
+    } else if (e.type === "tierUp") {
+      tier = `Horde cleared — a stronger generation marches now (tier ${e.tier}).`;
+    }
+  }
+  return death ?? tier;
+}
 
-  const handleSceneReady = useCallback((s: BaseScene) => {
-    s.onStateChange = () => setRenderTick((t) => t + 1);
-    s.onPurchaseSound = playPurchaseSound;
-    setScene(s);
+export default function DefensePage() {
+  const [snap, setSnap] = useState<DefenseSnapshot | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [sandbox, setSandbox] = useState(false);
+  const [soundOn, setSoundOn] = useState(true);
+  const [displayHp, setDisplayHp] = useState<number | null>(null);
+  const sandboxRef = useRef(false);
+  const snapRef = useRef<DefenseSnapshot | null>(null);
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const applySnapshot = useCallback((next: DefenseSnapshot) => {
+    snapRef.current = next;
+    setSnap(next);
+    setDisplayHp(next.state.baseHp);
+    setError(null);
+    const cutoff = Date.now() - FRESH_EVENT_MS;
+    if (next.events.some((e) => e.type === "baseDestroyed" && e.atMs > cutoff)) {
+      sfx.defeat();
+    } else if (next.events.some((e) => e.type === "tierUp" && e.atMs > cutoff)) {
+      sfx.fanfare();
+    }
+    const message = eventNotice(next.events, next.deathMode);
+    if (message) {
+      setNotice(message);
+      if (noticeTimer.current) clearTimeout(noticeTimer.current);
+      noticeTimer.current = setTimeout(() => setNotice(null), 8000);
+    }
   }, []);
 
-  const progression = scene?.getProgression() ?? null;
-  const inventory = scene?.getInventory() ?? {};
+  const refresh = useCallback(
+    async (useSandbox?: boolean) => {
+      try {
+        applySnapshot(await fetchDefense(useSandbox ?? sandboxRef.current));
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to reach the API");
+      }
+    },
+    [applySnapshot],
+  );
 
-  const filteredItems = CATALOG.filter((item) => item.category === activeTab);
+  useEffect(() => {
+    const fromUrl = new URLSearchParams(window.location.search).get("sandbox") === "1";
+    sandboxRef.current = fromUrl;
+    setSandbox(fromUrl);
+    const storedMute = window.localStorage.getItem(MUTE_KEY) === "1";
+    setSoundOn(!storedMute);
+    setMuted(storedMute);
+    void refresh(fromUrl);
 
-  function canAfford(item: CatalogItem): boolean {
-    if (!progression) return false;
-    const balance = item.currency === "diamonds" ? progression.diamonds
-      : item.currency === "emeralds" ? progression.emeralds
-      : progression.gold;
-    return balance >= effectiveCost(item);
+    const interval = setInterval(() => void refresh(), POLL_MS);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void refresh();
+    };
+    // Live HP ticker: interpolate between polls so the bleed/repair is visible.
+    const hpTicker = setInterval(() => {
+      const current = snapRef.current;
+      if (!current) return;
+      const rate = hpRatePerSec(current.state);
+      setDisplayHp((prev) =>
+        prev == null ? null : Math.max(0, Math.min(P.hpMax, prev + rate / 2)),
+      );
+    }, 500);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(interval);
+      clearInterval(hpTicker);
+      document.removeEventListener("visibilitychange", onVisible);
+      if (noticeTimer.current) clearTimeout(noticeTimer.current);
+    };
+  }, [refresh]);
+
+  function toggleSound() {
+    const next = !soundOn;
+    setSoundOn(next);
+    setMuted(!next);
+    window.localStorage.setItem(MUTE_KEY, next ? "0" : "1");
+    if (next) sfx.buff();
   }
 
-  function meetsRequirement(item: CatalogItem): boolean {
-    if (!item.unlockRequirement) return true;
-    if (!progression) return false;
-    return (progression[item.unlockRequirement.stat] ?? 0) >= item.unlockRequirement.value;
+  function toggleSandbox() {
+    const next = !sandboxRef.current;
+    sandboxRef.current = next;
+    setSandbox(next);
+    setSnap(null);
+    const url = next ? "/base?sandbox=1" : "/base";
+    window.history.replaceState(null, "", url);
+    void refresh(next);
   }
 
-  async function handleBuy(item: CatalogItem) {
-    if (!scene) return;
-    await scene.buyItem(item.id, effectiveCost(item), item.currency);
+  async function runAction(work: () => Promise<DefenseSnapshot>) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      applySnapshot(await work());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Action failed");
+    } finally {
+      setBusy(false);
+    }
   }
 
-  function handlePlace(item: CatalogItem) {
-    scene?.startPlacement(item.id);
+  const buy = (slotIndex: number) =>
+    runAction(async () => {
+      const result = await buyUpgrade(sandboxRef.current, slotIndex);
+      sfx.buff();
+      return result;
+    });
+  const doSandbox = (action: SandboxAction) => runAction(() => sandboxAction(action));
+
+  if (!snap) {
+    return (
+      <div className={styles.root}>
+        <div className={styles.shell}>
+          <div className={styles.loading}>
+            {error ? `Cannot reach the battle: ${error}` : "Scouting the lane…"}
+          </div>
+        </div>
+      </div>
+    );
   }
+
+  const { state, wallet } = snap;
+  const math = battleMath(state);
+  const hp = displayHp ?? state.baseHp;
+  const hpPct = clamp((hp / P.hpMax) * 100, 0, 100);
+  const killPct = clamp((state.kills / P.killsPerTier) * 100, 0, 100);
+  const costMult = metaCostMultiplier(state.meta, P);
+  const { frontPct, reclaiming, monsterCount } = laneVisuals(state, math.adv);
 
   return (
-    <div style={{ display: "flex", height: "100vh", background: "#0e0e1a", color: "#e0e0e0", fontFamily: "system-ui, sans-serif" }}>
-      {/* Game canvas */}
-      <div style={{ flex: 1, position: "relative" }}>
-        <div style={{ position: "absolute", inset: 0, zIndex: 0 }}>
-          <PhaserGame onSceneReady={handleSceneReady} />
+    <div className={styles.root}>
+      <header className={styles.topbar}>
+        <a className={styles.back} href="/">
+          ← Back
+        </a>
+        <div className={styles.brandBox}>
+          <span className={styles.brand}>Base</span>
+          <span className={styles.subBrand}>
+            Tier {state.tier}
+            {state.meta.bestTier > state.tier ? ` · best ${state.meta.bestTier}` : ""}
+            {state.meta.runsLost > 0 ? ` · overrun ×${state.meta.runsLost}` : ""}
+          </span>
         </div>
-        <button
-          onClick={() => window.location.href = "/"}
-          style={{
-            position: "absolute", top: 16, left: 16, padding: "6px 14px",
-            background: "#2a2a4a", color: "#ccc", border: "1px solid #444",
-            borderRadius: 6, cursor: "pointer", fontSize: 14, zIndex: 20,
-            display: "flex", alignItems: "center", gap: 6,
-          }}
-        >
-          <span style={{ fontSize: 18 }}>&larr;</span> Back
-        </button>
-        {!shopOpen && (
-          <button
-            onClick={() => setShopOpen(true)}
-            style={{
-              position: "absolute", top: 16, right: 16, padding: "8px 16px",
-              background: "#2a2a4a", color: "#ffd700", border: "1px solid #444",
-              borderRadius: 6, cursor: "pointer", fontSize: 14, zIndex: 20,
-            }}
-          >
-            Shop
+        <div className={styles.topRight}>
+          <button type="button" className={styles.sandboxToggle} onClick={toggleSound}>
+            {soundOn ? "Sound: on" : "Sound: off"}
           </button>
-        )}
-      </div>
-
-      {/* Shop sidebar */}
-      {shopOpen && (
-        <div style={{
-          width: 280, background: "#16162a", borderLeft: "1px solid #333",
-          display: "flex", flexDirection: "column", overflow: "hidden",
-        }}>
-          {/* Header */}
-          <div style={{ padding: "12px 16px", borderBottom: "1px solid #333", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <h2 style={{ margin: 0, fontSize: 18, color: "#ffd700" }}>Shop</h2>
-            <button
-              onClick={() => setShopOpen(false)}
-              style={{ background: "none", border: "none", color: "#888", cursor: "pointer", fontSize: 18 }}
-            >
-              x
-            </button>
-          </div>
-
-          {/* Tabs */}
-          <div style={{ display: "flex", borderBottom: "1px solid #333" }}>
-            {(["building", "decoration", "terrain"] as ShopTab[]).map((tab) => (
-              <button
-                key={tab}
-                onClick={() => setActiveTab(tab)}
-                style={{
-                  flex: 1, padding: "8px 4px", background: activeTab === tab ? "#2a2a4a" : "transparent",
-                  color: activeTab === tab ? "#ffd700" : "#888", border: "none",
-                  borderBottom: activeTab === tab ? "2px solid #ffd700" : "2px solid transparent",
-                  cursor: "pointer", fontSize: 12, textTransform: "capitalize",
-                }}
-              >
-                {tab}s
-              </button>
-            ))}
-          </div>
-
-          {/* Items list */}
-          <div style={{ flex: 1, overflowY: "auto", padding: 8 }}>
-            {filteredItems.map((item) => {
-              const meetsReq = meetsRequirement(item);
-              const affordable = canAfford(item);
-              const stock = inventory[item.id] ?? 0;
-              const cost = effectiveCost(item);
-
-              return (
-                <div
-                  key={item.id}
-                  style={{
-                    padding: "10px 12px", marginBottom: 6, borderRadius: 6,
-                    background: "#1e1e3a", border: "1px solid #333",
-                    opacity: meetsReq ? 1 : 0.5,
-                  }}
-                >
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
-                    {hasSprite(item.id) ? (
-                      <div style={{
-                        width: 56, height: 56, borderRadius: 4, flexShrink: 0,
-                        background: "#0e0e1a",
-                        // Quote the URL — some pack folders contain spaces ("more kenney/...")
-                        // and unquoted CSS url() doesn't accept literal whitespace.
-                        backgroundImage: `url("/assets/${encodeURI(SPRITE_ASSETS[item.id].path)}")`,
-                        backgroundSize: "contain",
-                        backgroundRepeat: "no-repeat",
-                        backgroundPosition: "center",
-                        border: "1px solid #2a2a4a",
-                      }} />
-                    ) : (
-                      <div style={{
-                        width: 56, height: 56, borderRadius: 4, flexShrink: 0,
-                        background: item.color,
-                        border: "1px solid #2a2a4a",
-                      }} />
-                    )}
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 13, fontWeight: 600 }}>
-                        {item.name}
-                        {stock > 0 && <span style={{ color: "#88ff88", fontWeight: 400, marginLeft: 6 }}>x{stock}</span>}
-                      </div>
-                      <div style={{ fontSize: 11, color: "#888" }}>
-                        {item.footprint[0]}x{item.footprint[1]}
-                        {cost > 0 && (
-                          <> {"\u2022"} <span style={{ color: CURRENCY_COLORS[item.currency] ?? "#888" }}>{cost} {item.currency}</span></>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  {!meetsReq && item.unlockRequirement && (
-                    <div style={{ fontSize: 11, color: "#ff6b6b", marginBottom: 4 }}>
-                      Requires: {item.unlockRequirement.stat.replace(/([A-Z])/g, " $1").toLowerCase()} {">="} {item.unlockRequirement.value}
-                    </div>
-                  )}
-
-                  {meetsReq && (
-                  <div style={{ display: "flex", gap: 6 }}>
-                    <button
-                      onClick={() => handleBuy(item)}
-                      disabled={!affordable}
-                      style={{
-                        flex: 1, padding: "6px 0",
-                        background: affordable ? "#5a4a2d" : "#333",
-                        color: affordable ? (CURRENCY_COLORS[item.currency] ?? "#ffd700") : "#666",
-                        border: `1px solid ${affordable ? "#7a6a3a" : "#444"}`,
-                        borderRadius: 4, cursor: affordable ? "pointer" : "not-allowed", fontSize: 12,
-                      }}
-                    >
-                      {cost === 0 ? "Get (free)" : `Buy (${cost} ${item.currency})`}
-                    </button>
-                    {stock > 0 && (
-                      <button
-                        onClick={() => handlePlace(item)}
-                        style={{
-                          flex: 1, padding: "6px 0", background: "#2d5a2d", color: "#88ff88",
-                          border: "1px solid #3a7a3a", borderRadius: 4, cursor: "pointer", fontSize: 12,
-                        }}
-                      >
-                        Place
-                      </button>
-                    )}
-                  </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Stats footer */}
-          {progression && (
-            <div style={{ padding: "8px 12px", borderTop: "1px solid #333", fontSize: 11, color: "#666" }}>
-              <div>Todos completed: {progression.totalTodosCompleted}</div>
-              <div>Day streak: {progression.currentDayStreak}</div>
-              <div>Habit checks: {progression.totalHabitChecks}</div>
-            </div>
-          )}
+          <button
+            type="button"
+            className={`${styles.sandboxToggle} ${sandbox ? styles.sandboxOn : ""}`}
+            onClick={toggleSandbox}
+          >
+            {sandbox ? "Sandbox: on" : "Sandbox: off"}
+          </button>
+          <span className={styles.goldBadge} title={sandbox ? "Practice wallet" : "Your gold"}>
+            <CoinIcon size={15} />
+            {Math.floor(wallet).toLocaleString()}
+          </span>
         </div>
-      )}
+      </header>
+
+      <div className={styles.shell}>
+        {notice ? <div className={styles.notice}>{notice}</div> : null}
+        {error ? <div className={styles.errorBar}>{error}</div> : null}
+
+        <section className={`${styles.statusCard} ${styles[math.status]}`}>
+          <div className={styles.statusLine}>{math.statusLine}</div>
+          <div className={styles.forecast}>{math.forecast}</div>
+          <div className={styles.hpRow}>
+            <span className={styles.hpLabel}>Base</span>
+            <div className={styles.hpTrack}>
+              <div className={styles.hpFill} style={{ width: `${hpPct}%` }} />
+            </div>
+            <span className={styles.hpValue}>
+              {Math.floor(hp).toLocaleString()}/{P.hpMax.toLocaleString()}
+            </span>
+          </div>
+          <div className={styles.hpRow}>
+            <span className={styles.hpLabel}>Horde</span>
+            <div className={styles.hpTrack}>
+              <div className={styles.killFill} style={{ width: `${killPct}%` }} />
+            </div>
+            <span className={styles.hpValue}>
+              {Math.floor(state.kills)}/{P.killsPerTier} slain
+            </span>
+          </div>
+        </section>
+
+        <LaneTheater
+          tier={state.tier}
+          slotLevels={state.slots.map((s) => s.level)}
+          frontPct={frontPct}
+          bleeding={math.adv < 0}
+          killRate={math.killRate}
+          monsterCount={monsterCount}
+          reclaiming={reclaiming}
+        />
+
+        <div className={styles.panels}>
+          <section className={styles.panel}>
+            <h2 className={styles.panelTitle}>Towers</h2>
+            <div className={styles.slotList}>
+              {state.slots.map((slot, i) => {
+                const cost = upgradeCost(state, i, P);
+                const affordable = wallet >= cost;
+                return (
+                  <div key={i} className={styles.slotRow}>
+                    <span className={styles.slotName}>Tower {i + 1}</span>
+                    <span className={styles.slotStats}>
+                      lv {slot.level} · {fmtDps(slotDps(slot.level, P))}dps
+                    </span>
+                    <button
+                      type="button"
+                      className={styles.upgradeBtn}
+                      disabled={busy || !affordable}
+                      onClick={() => void buy(i)}
+                    >
+                      Upgrade
+                      <span className={styles.cost}>
+                        <CoinIcon size={12} />
+                        {cost.toLocaleString()}
+                      </span>
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+
+          <section className={styles.panel}>
+            <h2 className={styles.panelTitle}>Battle</h2>
+            <dl className={styles.statList}>
+              <div className={styles.statRow}>
+                <dt>Your DPS</dt>
+                <dd>{fmtDps(math.pd)}</dd>
+              </div>
+              <div className={styles.statRow}>
+                <dt>Horde DPS (tier {state.tier})</dt>
+                <dd>{fmtDps(math.ed)}</dd>
+              </div>
+              <div className={styles.statRow}>
+                <dt>Advantage</dt>
+                <dd className={math.adv >= 0 ? styles.good : styles.bad}>
+                  {math.adv >= 0 ? "+" : ""}
+                  {(math.adv * 100).toFixed(0)}%
+                </dd>
+              </div>
+              <div className={styles.statRow}>
+                <dt>Base HP</dt>
+                <dd className={math.adv >= 0 ? styles.good : styles.bad}>
+                  −{Math.abs(hpRatePerSec(state)).toFixed(1)}/s
+                </dd>
+              </div>
+              <div className={styles.statRow}>
+                <dt>Kill rate</dt>
+                <dd>{math.killRate.toFixed(1)}/h</dd>
+              </div>
+              <div className={styles.statRow}>
+                <dt>Monsters slain</dt>
+                <dd>
+                  {Math.floor(state.kills)}/{P.killsPerTier}
+                </dd>
+              </div>
+              <div className={styles.statRow}>
+                <dt>Invested this run</dt>
+                <dd>{state.goldInvestedRun.toLocaleString()}g</dd>
+              </div>
+            </dl>
+          </section>
+
+          <section className={styles.panel}>
+            <h2 className={styles.panelTitle}>Legacy</h2>
+            <dl className={styles.statList}>
+              <div className={styles.statRow}>
+                <dt>Best tier</dt>
+                <dd>{state.meta.bestTier || "—"}</dd>
+              </div>
+              <div className={styles.statRow}>
+                <dt>Overruns</dt>
+                <dd>{state.meta.runsLost}</dd>
+              </div>
+              <div className={styles.statRow}>
+                <dt>Upgrade discount</dt>
+                <dd>{costMult < 1 ? `−${Math.round((1 - costMult) * 100)}%` : "—"}</dd>
+              </div>
+              <div className={styles.statRow}>
+                <dt>Lifetime invested</dt>
+                <dd>{state.meta.totalGoldInvested.toLocaleString()}g</dd>
+              </div>
+            </dl>
+            <p className={styles.legacyHint}>
+              {snap.deathMode === "reset"
+                ? "Getting overrun wipes the base back to tier 1 — but your legacy floor sets the rebuilt towers, and tiers below your best clear at many times the pace."
+                : `Getting overrun is a knockback, not a wipe: the horde pushes you back ${P.collapseTierSetback} tiers and weakens your towers — never below the floor your best tier has earned.`}{" "}
+              Tiers below your best always clear fast; scaling past it never does.
+            </p>
+          </section>
+        </div>
+
+        {sandbox ? (
+          <section className={`${styles.panel} ${styles.sandboxPanel}`}>
+            <h2 className={styles.panelTitle}>Sandbox controls</h2>
+            <p className={styles.sandboxHint}>
+              Practice wallet and a separate battle — your real gold and real run are untouched.
+            </p>
+            <div className={styles.sandboxRow}>
+              {[1, 6, 24, 72].map((h) => (
+                <button
+                  key={h}
+                  type="button"
+                  className={styles.sandboxBtn}
+                  disabled={busy}
+                  onClick={() => void doSandbox({ action: "skip", hours: h })}
+                >
+                  Skip {h < 24 ? `${h}h` : `${h / 24}d`}
+                </button>
+              ))}
+              <button
+                type="button"
+                className={styles.sandboxBtn}
+                disabled={busy}
+                onClick={() => void doSandbox({ action: "grant", amount: 250 })}
+              >
+                +250 gold
+              </button>
+              <button
+                type="button"
+                className={`${styles.sandboxBtn} ${styles.sandboxDanger}`}
+                disabled={busy}
+                onClick={() => void doSandbox({ action: "reset" })}
+              >
+                Reset sandbox
+              </button>
+            </div>
+          </section>
+        ) : null}
+      </div>
     </div>
   );
 }

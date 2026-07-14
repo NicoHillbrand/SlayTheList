@@ -284,4 +284,72 @@ internal static class NativeMethods
         var current32 = GetWindowLong32(hWnd, GwlExStyle);
         _ = SetWindowLong32(hWnd, GwlExStyle, current32 | flag);
     }
+
+    // ---- Global hotkey (RegisterHotKey / WM_HOTKEY) -----------------------
+    public const int WmHotkey = 0x0312;
+    public const uint ModAlt = 0x0001;
+    public const uint ModControl = 0x0002;
+    public const uint ModShift = 0x0004;
+    public const uint ModWin = 0x0008;
+    // Don't repeat-fire while the key is held down.
+    public const uint ModNoRepeat = 0x4000;
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+
+    /// <summary>Parses a combo like "Ctrl+Shift+B" into (modifiers, virtual-key).
+    /// Requires at least one modifier and a supported main key (A-Z, 0-9, F1-F12,
+    /// Space). Returns null for anything unparseable.</summary>
+    public static (uint Modifiers, uint Vk)? ParseHotkey(string? combo)
+    {
+        if (string.IsNullOrWhiteSpace(combo)) return null;
+
+        uint modifiers = 0;
+        uint vk = 0;
+        foreach (var raw in combo.Split('+', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var token = raw.ToUpperInvariant();
+            switch (token)
+            {
+                case "CTRL":
+                case "CONTROL":
+                    modifiers |= ModControl;
+                    break;
+                case "ALT":
+                    modifiers |= ModAlt;
+                    break;
+                case "SHIFT":
+                    modifiers |= ModShift;
+                    break;
+                case "WIN":
+                case "META":
+                case "SUPER":
+                    modifiers |= ModWin;
+                    break;
+                case "SPACE":
+                    vk = 0x20;
+                    break;
+                default:
+                    if (token.Length == 1 && token[0] >= 'A' && token[0] <= 'Z')
+                    {
+                        vk = token[0];
+                    }
+                    else if (token.Length == 1 && token[0] >= '0' && token[0] <= '9')
+                    {
+                        vk = token[0]; // '0'..'9' == VK_0..VK_9
+                    }
+                    else if (token.Length >= 2 && token[0] == 'F' && int.TryParse(token[1..], out var fn) && fn is >= 1 and <= 12)
+                    {
+                        vk = (uint)(0x70 + fn - 1); // VK_F1..VK_F12
+                    }
+                    break;
+            }
+        }
+
+        if (modifiers == 0 || vk == 0) return null;
+        return (modifiers, vk);
+    }
 }

@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * LaneTheater — the decorative battle layer of /defense.
+ * LaneTheater — the decorative battle layer of /base.
  *
  * Purely visual: a client-side skirmish loop (monsters walk in from the right,
  * trade blows at the battle line, take tower bolts, die, respawn) whose tempo
@@ -11,7 +11,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import styles from "./defense.module.css";
+import styles from "./base.module.css";
 
 interface LaneTheaterProps {
   tier: number;

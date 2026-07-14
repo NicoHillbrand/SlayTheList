@@ -155,7 +155,7 @@ internal sealed class LauncherForm : Form
             return;
         }
 
-        StartChild(overlayExe, "", Path.GetDirectoryName(overlayExe)!, null);
+        StartChild(overlayExe, "", Path.GetDirectoryName(overlayExe)!, new Dictionary<string, string> { { "SLAYTHELIST_WEB_URL", GetWebAppUrl() } });
     }
 
     private void StopStack()
