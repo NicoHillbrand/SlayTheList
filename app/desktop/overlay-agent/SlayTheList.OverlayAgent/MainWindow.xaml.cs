@@ -57,6 +57,11 @@ public partial class MainWindow : Window
     private TextBlock? _detectionIndicatorText;
     private Window? _goldIndicatorWindow;
     private TextBlock? _goldIndicatorText;
+    // Once the user drags the gold chip, stop auto-parking it top-right.
+    private bool _goldIndicatorMoved;
+    private static readonly string GoldIndicatorBoundsPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "SlayTheList", "gold-indicator-window.json");
     private OverlayBarWindow? _overlayBarWindow;
     private const int OverlayToggleHotkeyId = 0xB001;
     private string _registeredHotkey = "";
@@ -1103,9 +1108,19 @@ public partial class MainWindow : Window
             Foreground = new SolidColorBrush(Color.FromArgb(255, 248, 223, 139)),
             FontSize = 13,
             FontWeight = FontWeights.SemiBold,
-            Text = "\U0001fa99 0 today",
+            Text = "0 today",
             VerticalAlignment = VerticalAlignment.Center,
         };
+
+        // Draw the coin as a vector shape rather than the U+1FA99 emoji, which
+        // renders as a tofu box under WPF's default (non-emoji) font.
+        var content = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        content.Children.Add(BuildCoinGlyph());
+        content.Children.Add(_goldIndicatorText);
 
         var border = new Border
         {
@@ -1114,8 +1129,10 @@ public partial class MainWindow : Window
             Background = new SolidColorBrush(Color.FromArgb(180, 17, 24, 38)),
             BorderBrush = new SolidColorBrush(Color.FromArgb(120, 212, 170, 71)),
             BorderThickness = new Thickness(1),
-            Child = _goldIndicatorText,
-            IsHitTestVisible = false,
+            Child = content,
+            // Grabbable so the chip can be dragged; drops full click-through.
+            Cursor = Cursors.SizeAll,
+            ToolTip = "Drag to move — position is remembered",
         };
 
         _goldIndicatorWindow = new Window
@@ -1132,13 +1149,90 @@ public partial class MainWindow : Window
             Content = border,
         };
 
-        _goldIndicatorWindow.SourceInitialized += (_, _) =>
+        border.MouseLeftButtonDown += (_, args) =>
         {
-            var handle = new WindowInteropHelper(_goldIndicatorWindow).Handle;
-            NativeMethods.EnableNoActivate(handle);
-            NativeMethods.EnableClickThrough(handle);
-            NativeMethods.ExcludeFromCapture(handle);
+            if (args.ButtonState != MouseButtonState.Pressed || _goldIndicatorWindow is null)
+                return;
+            _goldIndicatorWindow.DragMove(); // blocks until the drag completes
+            _goldIndicatorMoved = true;
+            SaveGoldIndicatorBounds();
         };
+
+        // Note: intentionally NOT excluded from capture (visible in screenshots)
+        // and no longer click-through, so it can receive the drag.
+        RestoreGoldIndicatorBounds();
+    }
+
+    private sealed record GoldIndicatorBounds(double Left, double Top);
+
+    private void RestoreGoldIndicatorBounds()
+    {
+        if (_goldIndicatorWindow is null)
+            return;
+        try
+        {
+            if (!File.Exists(GoldIndicatorBoundsPath))
+                return;
+            var bounds = JsonSerializer.Deserialize<GoldIndicatorBounds>(File.ReadAllText(GoldIndicatorBoundsPath));
+            if (bounds is null)
+                return;
+            // Keep it reachable if the display layout changed since last run.
+            var vLeft = SystemParameters.VirtualScreenLeft;
+            var vTop = SystemParameters.VirtualScreenTop;
+            var vRight = vLeft + SystemParameters.VirtualScreenWidth;
+            var vBottom = vTop + SystemParameters.VirtualScreenHeight;
+            _goldIndicatorWindow.Left = Math.Clamp(bounds.Left, vLeft, Math.Max(vLeft, vRight - 60));
+            _goldIndicatorWindow.Top = Math.Clamp(bounds.Top, vTop, Math.Max(vTop, vBottom - 20));
+            _goldIndicatorMoved = true;
+        }
+        catch
+        {
+            // Corrupt bounds file — fall back to the default top-right position.
+        }
+    }
+
+    private void SaveGoldIndicatorBounds()
+    {
+        if (_goldIndicatorWindow is null)
+            return;
+        try
+        {
+            var dir = Path.GetDirectoryName(GoldIndicatorBoundsPath);
+            if (dir is not null)
+                Directory.CreateDirectory(dir);
+            File.WriteAllText(
+                GoldIndicatorBoundsPath,
+                JsonSerializer.Serialize(new GoldIndicatorBounds(_goldIndicatorWindow.Left, _goldIndicatorWindow.Top)));
+        }
+        catch
+        {
+            // Best-effort persistence; ignore write failures.
+        }
+    }
+
+    /// <summary>A small vector coin: gold disc, darker rim, and a slim "$" bar —
+    /// mirrors the web CoinIcon so it renders identically without an emoji font.</summary>
+    private static FrameworkElement BuildCoinGlyph()
+    {
+        var gold = new SolidColorBrush(Color.FromArgb(255, 245, 197, 66)); // #f5c542
+        var disc = new Grid
+        {
+            Width = 13,
+            Height = 13,
+            Margin = new Thickness(0, 0, 5, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        disc.Children.Add(new System.Windows.Shapes.Ellipse { Fill = gold });
+        disc.Children.Add(new System.Windows.Shapes.Ellipse
+        {
+            Width = 8,
+            Height = 8,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            Stroke = new SolidColorBrush(Color.FromArgb(150, 92, 64, 0)),
+            StrokeThickness = 1.2,
+        });
+        return disc;
     }
 
     private void UpdateGoldIndicator()
@@ -1152,12 +1246,16 @@ public partial class MainWindow : Window
             return;
         }
 
-        _goldIndicatorText.Text = $"\U0001fa99 {_lastOverlayState.GoldEarnedToday} today";
+        _goldIndicatorText.Text = $"{_lastOverlayState.GoldEarnedToday} today";
 
-        // Sit at the top-right, below the detection indicator when that is visible
-        var screenWidth = SystemParameters.PrimaryScreenWidth;
-        _goldIndicatorWindow.Left = screenWidth - 220;
-        _goldIndicatorWindow.Top = _detectionIndicatorWindow?.IsVisible == true ? 44 : 8;
+        // Default position: top-right, below the detection indicator when it's
+        // visible. Once the user drags the chip we leave its position alone.
+        if (!_goldIndicatorMoved)
+        {
+            var screenWidth = SystemParameters.PrimaryScreenWidth;
+            _goldIndicatorWindow.Left = screenWidth - 220;
+            _goldIndicatorWindow.Top = _detectionIndicatorWindow?.IsVisible == true ? 44 : 8;
+        }
 
         if (!_goldIndicatorWindow.IsVisible)
             _goldIndicatorWindow.Show();

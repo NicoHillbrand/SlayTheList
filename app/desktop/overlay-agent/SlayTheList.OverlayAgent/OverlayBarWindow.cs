@@ -12,12 +12,11 @@ using Microsoft.Web.WebView2.Wpf;
 namespace SlayTheList.OverlayAgent;
 
 /// <summary>
-/// The always-on-top overlay taskbar, rendered by the web app's /overlay route
-/// inside WebView2: gold always visible, with Base and Friends dropdown
-/// panels. The page reports its content height via postMessage and the window
-/// hugs it. Draggable via the top bar; position and width persist across
-/// runs. Collapsible into a small floating arrow (the « chip) that expands
-/// back on click; the collapsed state persists too.
+/// The always-on-top overlay bar: a compact native pill styled identically to
+/// the gold indicator (transparent window, dark fill, thin gold border), holding
+/// just the Base and Friends dropdown buttons. Clicking a button opens its
+/// content in a separate WebView2 panel window docked below the bar. The pill is
+/// draggable (grab anywhere but the buttons) and its position persists across runs.
 /// </summary>
 public sealed class OverlayBarWindow : Window
 {
@@ -25,179 +24,249 @@ public sealed class OverlayBarWindow : Window
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "SlayTheList", "overlay-bar-window.json");
 
-    private static readonly string WebViewDataFolder = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "SlayTheList", "webview2");
-
-    private const double CollapsedSize = 30;
-    private const double ExpandedMinWidth = 320;
-    // The bar row alone is ~40px of content; height is otherwise content-driven.
-    private const double ExpandedMinHeight = 56;
-    private const double MaxContentHeight = 780;
-    private const double DragBarHeight = 22;
-
-    private readonly string _overlayUrl;
-    private readonly WebView2 _webView = new();
-    private readonly TextBlock _fallbackText;
-    private readonly Border _expandedRoot;
-    private readonly Border _collapsedRoot;
+    private readonly string _webBaseUrl;
+    private readonly Border _baseButton;
+    private readonly Border _friendsButton;
     private readonly DispatcherTimer _saveBoundsTimer;
-    private readonly DispatcherTimer _retryTimer;
-    private bool _webViewReady;
-    private bool _pageLoaded;
-    private bool _collapsed;
-    private double _expandedWidth;
-    private double _expandedHeight;
+    private OverlayPanelWindow? _panelWindow;
+    private string? _openPanel; // "base" | "friends" | null
 
-    private sealed record WindowBounds(double Left, double Top, double Width, double Height, bool Collapsed = false);
+    private sealed record WindowBounds(double Left, double Top);
 
     public OverlayBarWindow(string webBaseUrl)
     {
-        _overlayUrl = $"{webBaseUrl.TrimEnd('/')}/overlay";
+        _webBaseUrl = webBaseUrl.TrimEnd('/');
 
         WindowStyle = WindowStyle.None;
-        // AllowsTransparency must stay false: WebView2 cannot render inside a
-        // layered (transparent) window.
-        ResizeMode = ResizeMode.CanResizeWithGrip;
+        ResizeMode = ResizeMode.NoResize;
         Topmost = true;
         ShowActivated = false;
         Focusable = false;
         ShowInTaskbar = false;
-        Background = new SolidColorBrush(Color.FromRgb(26, 26, 46));
-        // Height is content-driven (the page reports it); width is the user's.
-        Width = 440;
-        Height = 88;
-        MinWidth = ExpandedMinWidth;
-        MinHeight = ExpandedMinHeight;
+        AllowsTransparency = true;
+        Background = Brushes.Transparent;
+        SizeToContent = SizeToContent.WidthAndHeight;
 
-        var screenWidth = SystemParameters.PrimaryScreenWidth;
-        Left = screenWidth - Width - 16;
-        Top = 80;
-        var startCollapsed = RestoreBounds_();
+        _baseButton = BuildBarButton();
+        _friendsButton = BuildBarButton();
+        _baseButton.MouseLeftButtonDown += (_, args) => { args.Handled = true; TogglePanel("base"); };
+        _friendsButton.MouseLeftButtonDown += (_, args) => { args.Handled = true; TogglePanel("friends"); };
 
-        var collapseChip = new Border
+        var row = new StackPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(_baseButton);
+        row.Children.Add(_friendsButton);
+
+        // Same dark fill + thin gold border + rounded corners as the gold chip.
+        var pill = new Border
         {
+            Padding = new Thickness(6, 5, 6, 5),
+            CornerRadius = new CornerRadius(6),
+            Background = new SolidColorBrush(Color.FromArgb(180, 17, 24, 38)),
+            BorderBrush = new SolidColorBrush(Color.FromArgb(120, 212, 170, 71)),
+            BorderThickness = new Thickness(1),
+            Cursor = Cursors.SizeAll,
+            ToolTip = "Drag to move — click Base or Friends to open",
+            Child = row,
+        };
+        pill.MouseLeftButtonDown += (_, args) =>
+        {
+            if (args.ButtonState != MouseButtonState.Pressed)
+                return;
+            DragMove(); // blocks until the drag completes
+            SaveBounds();
+            RepositionPanel();
+        };
+        Content = pill;
+
+        UpdateButtonStates();
+
+        // Default to the top-right; restore the saved position if there is one.
+        Left = SystemParameters.PrimaryScreenWidth - 180;
+        Top = 80;
+        RestoreSavedBounds();
+
+        _saveBoundsTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
+        _saveBoundsTimer.Tick += (_, _) => { _saveBoundsTimer.Stop(); SaveBounds(); };
+        LocationChanged += (_, _) =>
+        {
+            _saveBoundsTimer.Stop();
+            _saveBoundsTimer.Start();
+            RepositionPanel();
+        };
+
+        Closed += (_, _) =>
+        {
+            _saveBoundsTimer.Stop();
+            _panelWindow?.Close();
+            _panelWindow = null;
+        };
+    }
+
+    /// <summary>A pill button mirroring the web overlay's Base/Friends buttons.
+    /// Text and colours are set by <see cref="UpdateButtonStates"/>.</summary>
+    private static Border BuildBarButton()
+    {
+        return new Border
+        {
+            Margin = new Thickness(3, 0, 3, 0),
+            Padding = new Thickness(12, 3, 12, 3),
+            CornerRadius = new CornerRadius(6),
+            BorderThickness = new Thickness(1),
             Cursor = Cursors.Hand,
-            ToolTip = "Collapse",
-            Padding = new Thickness(8, 0, 8, 0),
-            Background = Brushes.Transparent,
             Child = new TextBlock
             {
-                Text = "»",
-                Foreground = new SolidColorBrush(Color.FromArgb(200, 212, 170, 71)),
-                FontSize = 13,
+                FontSize = 12,
                 VerticalAlignment = VerticalAlignment.Center,
                 IsHitTestVisible = false,
             },
         };
-        collapseChip.MouseLeftButtonDown += (_, args) =>
-        {
-            args.Handled = true;
-            SetCollapsed(true);
-        };
-        DockPanel.SetDock(collapseChip, Dock.Right);
+    }
 
-        var dragBarContent = new DockPanel();
-        dragBarContent.Children.Add(collapseChip);
-        dragBarContent.Children.Add(new TextBlock
-        {
-            Text = "☰  SlayTheList",
-            Foreground = new SolidColorBrush(Color.FromArgb(200, 229, 231, 235)),
-            FontSize = 11,
-            Margin = new Thickness(8, 0, 0, 0),
-            VerticalAlignment = VerticalAlignment.Center,
-            IsHitTestVisible = false,
-        });
+    private void UpdateButtonStates()
+    {
+        StyleButton(_baseButton, "Base", _openPanel == "base");
+        StyleButton(_friendsButton, "Friends", _openPanel == "friends");
+    }
 
-        var dragBar = new Border
+    private static void StyleButton(Border button, string label, bool active)
+    {
+        var text = (TextBlock)button.Child;
+        text.Text = active ? $"{label}  ▴" : $"{label}  ▾";
+        text.Foreground = new SolidColorBrush(active
+            ? Color.FromRgb(0xf5, 0xc5, 0x42)
+            : Color.FromRgb(0xcc, 0xcc, 0xcc));
+        button.Background = new SolidColorBrush(active
+            ? Color.FromRgb(0x2a, 0x2a, 0x4a)
+            : Color.FromRgb(0x1e, 0x1e, 0x3a));
+        button.BorderBrush = new SolidColorBrush(active
+            ? Color.FromRgb(0xd4, 0xaa, 0x47)
+            : Color.FromRgb(0x3a, 0x3a, 0x5a));
+    }
+
+    private void TogglePanel(string which)
+    {
+        if (_openPanel == which)
         {
-            Height = 22,
-            Background = new SolidColorBrush(Color.FromArgb(255, 22, 22, 42)),
-            Cursor = Cursors.SizeAll,
-            Child = dragBarContent,
-        };
-        dragBar.MouseLeftButtonDown += (_, args) =>
+            _openPanel = null;
+            _panelWindow?.Hide();
+        }
+        else
         {
-            if (args.ButtonState == MouseButtonState.Pressed)
-            {
-                DragMove();
-            }
-        };
-        DockPanel.SetDock(dragBar, Dock.Top);
+            _openPanel = which;
+            _panelWindow ??= new OverlayPanelWindow(_webBaseUrl);
+            _panelWindow.NavigatePanel(which);
+            RepositionPanel();
+            _panelWindow.Show();
+        }
+        UpdateButtonStates();
+    }
+
+    private void RepositionPanel()
+    {
+        if (_panelWindow is null || _openPanel is null)
+            return;
+        // Dock just below the bar, right edges aligned, clamped on-screen.
+        var virtualLeft = SystemParameters.VirtualScreenLeft;
+        var right = Left + (ActualWidth > 0 ? ActualWidth : Width);
+        _panelWindow.Left = Math.Max(virtualLeft, right - _panelWindow.Width);
+        _panelWindow.Top = Top + (ActualHeight > 0 ? ActualHeight : Height) + 6;
+    }
+
+    private void RestoreSavedBounds()
+    {
+        try
+        {
+            if (!File.Exists(BoundsPath))
+                return;
+            var bounds = JsonSerializer.Deserialize<WindowBounds>(File.ReadAllText(BoundsPath));
+            if (bounds is null)
+                return;
+            var vLeft = SystemParameters.VirtualScreenLeft;
+            var vTop = SystemParameters.VirtualScreenTop;
+            var vRight = vLeft + SystemParameters.VirtualScreenWidth;
+            var vBottom = vTop + SystemParameters.VirtualScreenHeight;
+            Left = Math.Clamp(bounds.Left, vLeft, Math.Max(vLeft, vRight - 60));
+            Top = Math.Clamp(bounds.Top, vTop, Math.Max(vTop, vBottom - 20));
+        }
+        catch
+        {
+            // Corrupt bounds file — fall back to the default top-right position.
+        }
+    }
+
+    private void SaveBounds()
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(BoundsPath);
+            if (dir is not null)
+                Directory.CreateDirectory(dir);
+            File.WriteAllText(BoundsPath, JsonSerializer.Serialize(new WindowBounds(Left, Top)));
+        }
+        catch
+        {
+            // Best-effort persistence; ignore write failures.
+        }
+    }
+}
+
+/// <summary>A WebView2 content window that hosts a single overlay panel
+/// (?panel=base or ?panel=friends), docked below the bar. Opaque (WebView2 can't
+/// render in a transparent window) with a matching thin gold border. Reports its
+/// content height via postMessage so the window hugs the content.</summary>
+internal sealed class OverlayPanelWindow : Window
+{
+    private const double PanelWidth = 340;
+    private const double MinContentHeight = 48;
+    private const double MaxContentHeight = 780;
+
+    private static readonly string WebViewDataFolder = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "SlayTheList", "webview2");
+
+    private readonly string _webBaseUrl;
+    private readonly WebView2 _webView = new();
+    private readonly TextBlock _fallbackText;
+    private readonly DispatcherTimer _retryTimer;
+    private bool _webViewReady;
+    private bool _pageLoaded;
+    private string _pendingPanel = "base";
+    private string _panelUrl = "";
+
+    public OverlayPanelWindow(string webBaseUrl)
+    {
+        _webBaseUrl = webBaseUrl;
+
+        WindowStyle = WindowStyle.None;
+        ResizeMode = ResizeMode.NoResize;
+        Topmost = true;
+        ShowActivated = false;
+        Focusable = false;
+        ShowInTaskbar = false;
+        // AllowsTransparency must stay false: WebView2 cannot render in a layered window.
+        Background = new SolidColorBrush(Color.FromRgb(22, 22, 42));
+        Width = PanelWidth;
+        Height = 120;
 
         _fallbackText = new TextBlock
         {
-            Text = "Loading base…",
+            Text = "Loading…",
             Foreground = new SolidColorBrush(Color.FromArgb(180, 148, 163, 184)),
             FontSize = 12,
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
         };
 
-        var contentGrid = new Grid();
-        contentGrid.Children.Add(_fallbackText);
-        contentGrid.Children.Add(_webView);
+        var grid = new Grid();
+        grid.Children.Add(_fallbackText);
+        grid.Children.Add(_webView);
 
-        var dock = new DockPanel();
-        dock.Children.Add(dragBar);
-        dock.Children.Add(contentGrid);
-
-        _expandedRoot = new Border
+        Content = new Border
         {
             BorderBrush = new SolidColorBrush(Color.FromArgb(120, 212, 170, 71)),
             BorderThickness = new Thickness(1),
-            Child = dock,
+            Child = grid,
         };
-
-        // The collapsed form: a small floating « chip. Click expands; drag moves.
-        _collapsedRoot = new Border
-        {
-            Visibility = Visibility.Collapsed,
-            Background = new SolidColorBrush(Color.FromRgb(22, 22, 42)),
-            BorderBrush = new SolidColorBrush(Color.FromArgb(120, 212, 170, 71)),
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(6),
-            Cursor = Cursors.Hand,
-            ToolTip = "Show base",
-            Child = new TextBlock
-            {
-                Text = "«",
-                Foreground = new SolidColorBrush(Color.FromArgb(230, 212, 170, 71)),
-                FontSize = 15,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, -2, 0, 0),
-                IsHitTestVisible = false,
-            },
-        };
-        _collapsedRoot.MouseLeftButtonDown += (_, args) =>
-        {
-            args.Handled = true;
-            var beforeLeft = Left;
-            var beforeTop = Top;
-            DragMove();
-            // A press that barely moved is a click — expand. A real drag just
-            // repositions the chip.
-            if (Math.Abs(Left - beforeLeft) + Math.Abs(Top - beforeTop) < 4)
-            {
-                SetCollapsed(false);
-            }
-        };
-
-        var root = new Grid();
-        root.Children.Add(_expandedRoot);
-        root.Children.Add(_collapsedRoot);
-        Content = root;
-
-        _saveBoundsTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
-        _saveBoundsTimer.Tick += (_, _) => { _saveBoundsTimer.Stop(); SaveBounds(); };
-        LocationChanged += (_, _) => { _saveBoundsTimer.Stop(); _saveBoundsTimer.Start(); };
-        SizeChanged += (_, _) => { _saveBoundsTimer.Stop(); _saveBoundsTimer.Start(); };
-
-        if (startCollapsed)
-        {
-            SetCollapsed(true);
-        }
 
         _retryTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
         _retryTimer.Tick += (_, _) =>
@@ -208,25 +277,35 @@ public sealed class OverlayBarWindow : Window
                 return;
             }
             if (_webViewReady)
-            {
-                _webView.CoreWebView2?.Navigate(_overlayUrl);
-            }
+                _webView.CoreWebView2?.Navigate(_panelUrl);
         };
 
         SourceInitialized += (_, _) =>
         {
             var handle = new WindowInteropHelper(this).Handle;
             NativeMethods.EnableNoActivate(handle);
-            NativeMethods.ExcludeFromCapture(handle);
+            // Not excluded from capture — screenshottable, like the gold indicator.
         };
 
         Loaded += (_, _) => _ = InitializeWebViewAsync();
         Closed += (_, _) =>
         {
-            _saveBoundsTimer.Stop();
             _retryTimer.Stop();
             _webView.Dispose();
         };
+    }
+
+    /// <summary>Point the panel at base or friends. Navigates immediately if the
+    /// WebView is ready, otherwise defers until initialization completes.</summary>
+    public void NavigatePanel(string which)
+    {
+        _pendingPanel = which;
+        _panelUrl = $"{_webBaseUrl}/overlay?panel={which}";
+        if (_webViewReady)
+        {
+            _pageLoaded = false;
+            _webView.CoreWebView2?.Navigate(_panelUrl);
+        }
     }
 
     private async Task InitializeWebViewAsync()
@@ -254,8 +333,8 @@ public sealed class OverlayBarWindow : Window
                 }
             };
 
-            // The page reports its content height ({type:"resize", height:N})
-            // whenever a dropdown opens/closes, so the window hugs the content.
+            // The page reports its content height ({type:"resize", height:N}) so
+            // the window hugs the content as data loads or the panel changes.
             core.WebMessageReceived += (_, args) =>
             {
                 try
@@ -267,7 +346,7 @@ public sealed class OverlayBarWindow : Window
                         && doc.RootElement.TryGetProperty("height", out var height)
                         && height.TryGetDouble(out var contentHeight))
                     {
-                        ApplyContentHeight(contentHeight);
+                        Height = Math.Clamp(contentHeight + 2, MinContentHeight, MaxContentHeight);
                     }
                 }
                 catch
@@ -276,123 +355,13 @@ public sealed class OverlayBarWindow : Window
                 }
             };
 
-            core.Navigate(_overlayUrl);
+            _panelUrl = $"{_webBaseUrl}/overlay?panel={_pendingPanel}";
+            core.Navigate(_panelUrl);
         }
         catch
         {
             // WebView2 runtime missing or failed to initialize.
-            _fallbackText.Text = "Base view unavailable (WebView2 runtime missing)";
-        }
-    }
-
-    private void ApplyContentHeight(double contentHeight)
-    {
-        var total = Math.Clamp(contentHeight + DragBarHeight + 2, ExpandedMinHeight, MaxContentHeight);
-        if (_collapsed)
-        {
-            _expandedHeight = total;
-        }
-        else
-        {
-            Height = total;
-        }
-    }
-
-    /// <summary>Toggle between the full preview and the small « chip. The
-    /// chip keeps the window's right edge in place, so the preview collapses
-    /// toward (and expands from) the same corner.</summary>
-    private void SetCollapsed(bool collapsed)
-    {
-        if (_collapsed == collapsed)
-        {
-            return;
-        }
-        _collapsed = collapsed;
-
-        if (collapsed)
-        {
-            _expandedWidth = Width;
-            _expandedHeight = Height;
-            _expandedRoot.Visibility = Visibility.Collapsed;
-            _collapsedRoot.Visibility = Visibility.Visible;
-            ResizeMode = ResizeMode.NoResize;
-            MinWidth = CollapsedSize;
-            MinHeight = CollapsedSize;
-            Width = CollapsedSize;
-            Height = CollapsedSize;
-            Left += _expandedWidth - CollapsedSize;
-        }
-        else
-        {
-            _expandedRoot.Visibility = Visibility.Visible;
-            _collapsedRoot.Visibility = Visibility.Collapsed;
-            MinWidth = ExpandedMinWidth;
-            MinHeight = ExpandedMinHeight;
-            Width = _expandedWidth;
-            Height = _expandedHeight;
-            ResizeMode = ResizeMode.CanResizeWithGrip;
-            var virtualLeft = SystemParameters.VirtualScreenLeft;
-            Left = Math.Max(virtualLeft, Left - (_expandedWidth - CollapsedSize));
-        }
-
-        _saveBoundsTimer.Stop();
-        _saveBoundsTimer.Start();
-    }
-
-    /// <summary>Restores saved bounds (always stored in expanded-window
-    /// coordinates). Returns whether the window should start collapsed.</summary>
-    private bool RestoreBounds_()
-    {
-        try
-        {
-            if (!File.Exists(BoundsPath))
-            {
-                return false;
-            }
-
-            var bounds = JsonSerializer.Deserialize<WindowBounds>(File.ReadAllText(BoundsPath));
-            if (bounds is null || bounds.Width < MinWidth || bounds.Height < MinHeight)
-            {
-                return false;
-            }
-
-            // Keep the window reachable if screens changed since last run.
-            var virtualLeft = SystemParameters.VirtualScreenLeft;
-            var virtualTop = SystemParameters.VirtualScreenTop;
-            var virtualRight = virtualLeft + SystemParameters.VirtualScreenWidth;
-            var virtualBottom = virtualTop + SystemParameters.VirtualScreenHeight;
-            Left = Math.Clamp(bounds.Left, virtualLeft, Math.Max(virtualLeft, virtualRight - bounds.Width));
-            Top = Math.Clamp(bounds.Top, virtualTop, Math.Max(virtualTop, virtualBottom - bounds.Height));
-            Width = bounds.Width;
-            Height = bounds.Height;
-            return bounds.Collapsed;
-        }
-        catch
-        {
-            // Corrupt bounds file — fall back to defaults.
-            return false;
-        }
-    }
-
-    private void SaveBounds()
-    {
-        try
-        {
-            var dir = Path.GetDirectoryName(BoundsPath);
-            if (dir is not null)
-            {
-                Directory.CreateDirectory(dir);
-            }
-            // Always persist expanded-window coordinates so restore + collapse
-            // reproduces the same chip position.
-            var left = _collapsed ? Left - (_expandedWidth - CollapsedSize) : Left;
-            var width = _collapsed ? _expandedWidth : Width;
-            var height = _collapsed ? _expandedHeight : Height;
-            File.WriteAllText(BoundsPath, JsonSerializer.Serialize(new WindowBounds(left, Top, width, height, _collapsed)));
-        }
-        catch
-        {
-            // Non-critical.
+            _fallbackText.Text = "Panel unavailable (WebView2 runtime missing)";
         }
     }
 }

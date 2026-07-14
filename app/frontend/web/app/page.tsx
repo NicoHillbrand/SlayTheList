@@ -6484,10 +6484,12 @@ export default function Page() {
                   onBlur={() => setCapturingHotkey(false)}
                   onKeyDown={async (event) => {
                     event.preventDefault();
+                    // Capture before any await — React nulls out currentTarget once the handler yields.
+                    const input = event.currentTarget;
                     if (event.key === "Escape") {
                       setOverlayToggleHotkey("");
                       await setAppSetting("overlayToggleHotkey", "");
-                      event.currentTarget.blur();
+                      input.blur();
                       return;
                     }
                     // Ignore lone modifier presses — wait for a real main key.
@@ -6507,7 +6509,7 @@ export default function Page() {
                     const combo = [...mods, main].join("+");
                     setOverlayToggleHotkey(combo);
                     await setAppSetting("overlayToggleHotkey", combo);
-                    event.currentTarget.blur();
+                    input.blur();
                   }}
                   style={{ minWidth: 220, cursor: "pointer" }}
                   title="Click and press a combo like Ctrl+Shift+B. Needs at least one modifier. Esc clears."
@@ -6629,7 +6631,7 @@ export default function Page() {
                     Start automatically when I log in
                   </label>
                   <p className="settings-section-copy" style={{ marginLeft: "1.6rem" }}>
-                    Launches SlayTheList in browser mode at Windows login (starts the servers and opens your default browser). Adds a shortcut to your Startup folder — no admin needed.
+                    Auto-starts SlayTheList at Windows login.
                   </p>
                   {autostartError && (
                     <p className="settings-hint" style={{ color: "#f87171" }}>{autostartError}</p>

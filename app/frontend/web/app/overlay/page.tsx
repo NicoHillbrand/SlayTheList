@@ -1,10 +1,12 @@
 "use client";
 
 /**
- * Overlay taskbar — the always-on-top strip embedded by the desktop overlay
- * agent (WebView2). Gold stays always visible; "Base" and "Friends" are
- * dropdown panels. Reports its content height to the C# host via
- * window.chrome.webview.postMessage so the window hugs the content.
+ * Overlay panels rendered inside the desktop overlay agent's WebView2 windows.
+ * The desktop bar is now a native pill (Base/Friends buttons); each button opens
+ * this route with ?panel=base|friends to show just that panel in its own window.
+ * With no ?panel (direct browser view) it falls back to the original full bar
+ * (gold + buttons). Reports its content height to the C# host via
+ * window.chrome.webview.postMessage so the host window hugs the content.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FriendTodaySummary, SharedStatus, StatusChip } from "@slaythelist/contracts";
@@ -261,6 +263,13 @@ export default function OverlayTaskbarPage() {
   const [panel, setPanel] = useState<"none" | "base" | "friends">("none");
   const [gold, setGold] = useState<number | null>(null);
   const [goldToday, setGoldToday] = useState(0);
+  // The desktop bar hosts each panel in its own window via ?panel=base|friends.
+  // `undefined` = not yet read (first client render); `null` = no param (browser).
+  const [panelParam, setPanelParam] = useState<"base" | "friends" | null | undefined>(undefined);
+  useEffect(() => {
+    const value = new URLSearchParams(window.location.search).get("panel");
+    setPanelParam(value === "base" || value === "friends" ? value : null);
+  }, []);
 
   // Keep the hosting window sized to the content.
   useEffect(() => {
@@ -322,27 +331,36 @@ export default function OverlayTaskbarPage() {
     // minHeight: 0 overrides the module's 100vh so the reported height is the
     // actual content height (the host window hugs the content).
     <div ref={rootRef} className={styles.root} style={{ padding: 8, overflow: "hidden", minHeight: 0 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <span
-          title="Your gold — earned by real work"
-          style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 13, fontWeight: 600, color: "#f5c542" }}
-        >
-          <CoinIcon size={14} />
-          {gold === null ? "—" : gold.toLocaleString()}
-          {goldToday > 0 && (
-            <span style={{ fontSize: 11, fontWeight: 500, color: "#7fd88f" }}>+{goldToday} today</span>
+      {/* Desktop bar: a single panel per window. */}
+      {panelParam === "base" && <BaseOverlayMini />}
+      {panelParam === "friends" && <FriendsPanel />}
+
+      {/* Direct browser view (no ?panel): the original full bar. */}
+      {panelParam === null && (
+        <>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span
+              title="Your gold — earned by real work"
+              style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 13, fontWeight: 600, color: "#f5c542" }}
+            >
+              <CoinIcon size={14} />
+              {gold === null ? "—" : gold.toLocaleString()}
+              {goldToday > 0 && (
+                <span style={{ fontSize: 11, fontWeight: 500, color: "#7fd88f" }}>+{goldToday} today</span>
+              )}
+            </span>
+            <span style={{ flex: 1 }} />
+            {barButton("base", "Base")}
+            {barButton("friends", "Friends")}
+          </div>
+          {panel === "base" && (
+            <div style={{ marginTop: 8 }}>
+              <BaseOverlayMini />
+            </div>
           )}
-        </span>
-        <span style={{ flex: 1 }} />
-        {barButton("base", "Base")}
-        {barButton("friends", "Friends")}
-      </div>
-      {panel === "base" && (
-        <div style={{ marginTop: 8 }}>
-          <BaseOverlayMini />
-        </div>
+          {panel === "friends" && <FriendsPanel />}
+        </>
       )}
-      {panel === "friends" && <FriendsPanel />}
     </div>
   );
 }
