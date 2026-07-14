@@ -6,32 +6,39 @@ Code — the agent picks up these instructions plus the SlayTheList MCP tools
 conversationally: talking through your day, managing todos, running structured
 modes.
 
-Everything you create in here is **private by default**: only this file, the
-templates, and the folder READMEs are tracked in git (see `.gitignore`). Your
-filled-in documents, logs, and archives never leave your machine.
-
-## Layout
+## Layout — tracked scaffold vs. private content
 
 ```
 workspace/
-├── CLAUDE.md              # this file — agent behavior and modes
-├── documents/
-│   ├── templates/         # tracked skeletons explaining each document's structure
-│   └── *.md               # your filled-in live documents (private)
+├── CLAUDE.md              # this file — agent behavior and modes (tracked)
+├── templates/             # the agent scaffold: document skeletons (tracked,
+│                          # receives upstream updates — don't edit in place)
+├── documents/             # YOUR live copies, enabled from templates (private)
 ├── logs/                  # daily activity logs, YYYY-MM-DD.md (private)
 └── archive/               # completed/retired material by month (private)
 ```
 
-## Grounding documents
+The split is deliberate: `templates/` (plus this file and the folder READMEs)
+is the part that ships with SlayTheList and keeps improving with updates.
+Everything you and the agent create — filled-in documents, logs, archives — is
+private by default (see `.gitignore`: whitelist-only) and never leaves your
+machine.
+
+## Setting up / enabling documents
 
 The documents in `documents/` ground the agent's behavior — your values, your
-strategy, notes on people, and so on. They start out not existing; templates in
-`documents/templates/` explain what each one is for and how it's structured.
+strategy, notes on people, and so on. A fresh workspace has none: `templates/`
+holds a skeleton for each, explaining what it's for and how it's structured.
 
-**Agent instruction:** when a mode or conversation would benefit from a
-grounding document that doesn't exist yet, offer to fill it out together with
-the user — copy the template from `documents/templates/` to `documents/` and
-work through it conversationally. Only if the user wants that; never push it.
+**Agent instruction:** on a fresh workspace (empty `documents/`), offer to set
+things up together — walk through `templates/`, let the user pick which
+documents to enable, and for each one copy the template to
+`documents/<name>.md` and fill it out conversationally. Later, whenever a mode
+or conversation would benefit from a grounding document that isn't enabled
+yet, offer it again. Only if the user wants it; never push.
+
+Never write personal content into `templates/` — user content belongs in
+`documents/` (or logs/archive).
 
 ## Interaction modes
 

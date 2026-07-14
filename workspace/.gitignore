@@ -1,6 +1,9 @@
 # The agent workspace is PRIVATE BY DEFAULT.
 # Everything is ignored unless explicitly whitelisted below — so personal
-# content (filled-in documents, logs, archives) can never end up on GitHub.
+# content (documents, logs, archives) can never end up on GitHub.
+#
+# Tracked = the shippable agent scaffold (CLAUDE.md, templates/, folder
+# READMEs). Private = everything the agent and user create from it.
 *
 
 # --- Tracked structure & templates -----------------------------------------
@@ -8,10 +11,12 @@
 !CLAUDE.md
 !.mcp.json
 
+!templates/
+!templates/**
+
 !documents/
 documents/*
-!documents/templates/
-!documents/templates/**
+!documents/README.md
 
 !logs/
 logs/*
