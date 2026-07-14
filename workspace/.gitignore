@@ -2,17 +2,20 @@
 # Everything is ignored unless explicitly whitelisted below — so personal
 # content (documents, logs, archives) can never end up on GitHub.
 #
-# Tracked = the shippable agent scaffold (CLAUDE.md, templates/, folder
-# READMEs). Private = everything the agent and user create from it.
+# Tracked = the shippable agent scaffold (templates/, folder READMEs). Private =
+# everything the agent and user create from it, including your own CLAUDE.md
+# (copied from templates/CLAUDE.md on setup, then yours to edit).
 *
 
 # --- Tracked structure & templates -----------------------------------------
 !.gitignore
-!CLAUDE.md
 !.mcp.json
 
 !templates/
 !templates/**
+
+# CLAUDE.md is intentionally NOT whitelisted: the base lives at
+# templates/CLAUDE.md; your working copy here stays private.
 
 !documents/
 documents/*

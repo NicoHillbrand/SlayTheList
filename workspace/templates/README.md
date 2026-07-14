@@ -1,12 +1,18 @@
-# Document templates
+# Templates
 
-Each file here is a tracked skeleton explaining what the corresponding live
-document is for and how it's structured. To start using one, copy it to
-`documents/<name>.md` (dropping nothing but the folder) and fill it out —
-ideally together with the agent in a Claude Code session.
+Tracked base files that ship with SlayTheList and keep receiving upstream
+updates. Your filled-in copies live outside this folder and stay private, so your
+content never conflicts with updates here.
 
-Live documents in `documents/` are gitignored: your filled-in content stays
-private, while these templates can keep receiving upstream updates without
-touching your copies.
+- **`CLAUDE.md`** — the base agent-behavior instructions (modes, style, startup,
+  todos, gold, logging). On setup it's copied to `../CLAUDE.md`, your private
+  working copy; edit that one, not this.
+- **document skeletons** — one per grounding document, each explaining what the
+  live doc is for and how to structure it. To enable one, copy it to
+  `../documents/<name>.md` and fill it out, ideally with the agent in a session.
 
-<!-- Templates get added in the content-transfer pass. -->
+Current document skeletons: `strategy`, `values`, `style-notes`,
+`reflection-prompts`, `heuristics`, `projects`, `backlog`, `state-notes`.
+`style-notes` ships
+with real default content the agent uses as-is unless you override it with your
+own copy in `../documents/`.

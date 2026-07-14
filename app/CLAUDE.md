@@ -4,6 +4,10 @@ Development context for the SlayTheList codebase. This file loads when you open
 `app/` in Claude Code, so it stays out of end-user agent sessions (which open
 `workspace/`). Open this folder for any coding work.
 
+For the HTTP API path, app-startup/launcher details, and PowerShell command
+templates, see [`docs/api-guide.md`](docs/api-guide.md). The MCP tool contract
+and data shapes below are the fast path for agents.
+
 ## Repo Layout
 
 ```
@@ -37,7 +41,7 @@ Individual rows with full CRUD:
 | Tool | Purpose |
 |------|---------|
 | `get_gold` | Returns the current `GoldState` (`gold` balance + `rewardedTodoIds`). |
-| `award_gold` | Add gold. Requires `amount` (non-negative integer). Optional: `title` — records a named achievement in the daily/shareable log (omit for a silent balance-only bump); `category` — `"Tasks"` \| `"Habits"` \| `"Encouragements"` (unknown/missing → `"Other"`); `source` — which agent submitted it (e.g. `"claude-code"`); `timestamp` — ISO 8601 to backdate; `with_sound: true` plays the gold coin sound in the overlay (best-effort — needs the API server running). |
+| `award_gold` | Add gold. Requires `amount` (non-negative integer). Optional: `title` — records a named achievement in the daily/shareable log (omit for a silent balance-only bump); `category` — `"Tasks"` \| `"Habits"` \| `"Encouragements"` \| `"Micro"` (small engagement rewards; collapsed into one running "⚡ Micro actions" total in the Tasks section of the log) (unknown/missing → `"Other"`); `source` — which agent submitted it (e.g. `"claude-code"`); `timestamp` — ISO 8601 to backdate; `with_sound: true` plays the gold coin sound in the overlay (best-effort — needs the API server running). |
 | `spend_gold` | Deduct gold (clamps at zero, never negative). Requires `amount`. Optional `with_sound` like above. |
 
 ### Habits, Predictions, Reflections

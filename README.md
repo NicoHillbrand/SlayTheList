@@ -88,7 +88,7 @@ The overlay agent blocks game windows until todos are completed. It is optional 
 
 For command-line usage patterns (including PowerShell examples suitable for Claude Code), see:
 
-- `docs/claude-todo-api-skill.md`
+- `app/docs/api-guide.md`
 
 ## Validation
 
