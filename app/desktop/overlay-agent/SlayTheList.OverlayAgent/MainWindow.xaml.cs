@@ -173,6 +173,12 @@ public partial class MainWindow : Window
             {
                 await Task.Delay(GetDetectionIntervalMs());
 
+                // Master toggle from settings: while off, no screenshots and no
+                // matching happen at all. Zones, the overlay bar and the gold
+                // indicator are driven elsewhere and keep working.
+                if (_lastOverlayState?.ScreenDetectionEnabled == false)
+                    continue;
+
                 var hasGameStates = (_lastOverlayState?.GameStates.Count ?? 0) > 0;
                 if (!hasGameStates)
                     continue;

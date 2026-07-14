@@ -992,6 +992,7 @@ export default function Page() {
   const [expansionContextDraft, setExpansionContextDraft] = useState("");
   const [todoDrafts, setTodoDrafts] = useState<Record<string, string>>({});
   const [showDetectionIndicator, setShowDetectionIndicatorState] = useState(true);
+  const [screenDetectionEnabled, setScreenDetectionEnabledState] = useState(true);
   const [showGoldToday, setShowGoldTodayState] = useState(false);
   const [showBaseOverlay, setShowBaseOverlayState] = useState(false);
   const [overlayToggleHotkey, setOverlayToggleHotkey] = useState("");
@@ -1244,6 +1245,8 @@ export default function Page() {
       try {
         const indicatorSetting = await getAppSetting("showDetectionIndicator");
         setShowDetectionIndicatorState(indicatorSetting.value !== "false");
+        const screenDetectionSetting = await getAppSetting("screenDetectionEnabled");
+        setScreenDetectionEnabledState(screenDetectionSetting.value !== "false");
         const goldTodaySetting = await getAppSetting("showGoldToday");
         setShowGoldTodayState(goldTodaySetting.value === "true");
         const baseOverlaySetting = await getAppSetting("showBaseOverlay");
@@ -6510,7 +6513,19 @@ export default function Page() {
                   title="Click and press a combo like Ctrl+Shift+B. Needs at least one modifier. Esc clears."
                 />
               </label>
-              <label className="settings-checkbox-label" style={{ display: "flex", gap: "0.6rem", alignItems: "center", flexWrap: "wrap" }}>
+              <label className="settings-checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={screenDetectionEnabled}
+                  onChange={async (event) => {
+                    const val = event.target.checked;
+                    setScreenDetectionEnabledState(val);
+                    await setAppSetting("screenDetectionEnabled", String(val));
+                  }}
+                />
+                Screen detection (scan the game window to auto-detect game states; off = the agent takes no screenshots)
+              </label>
+              <label className="settings-checkbox-label" style={{ display: "flex", gap: "0.6rem", alignItems: "center", flexWrap: "wrap", opacity: screenDetectionEnabled ? 1 : 0.5 }}>
                 <span style={{ minWidth: 180 }}>Screen detection interval</span>
                 <input
                   type="range"

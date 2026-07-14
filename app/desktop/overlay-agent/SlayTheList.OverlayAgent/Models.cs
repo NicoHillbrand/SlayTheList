@@ -34,6 +34,12 @@ public sealed class OverlayPayload
     [JsonPropertyName("detectionIntervalMs")]
     public int DetectionIntervalMs { get; set; } = 100;
 
+    /// <summary>Master switch for screenshot-based game-state detection.
+    /// Off = the agent captures nothing and runs no matching; zones, the
+    /// overlay bar and the gold indicator keep working.</summary>
+    [JsonPropertyName("screenDetectionEnabled")]
+    public bool ScreenDetectionEnabled { get; set; } = true;
+
     [JsonPropertyName("showGoldToday")]
     public bool ShowGoldToday { get; set; }
 

@@ -123,6 +123,7 @@ app.use(requestLogger);
 function buildOverlayState(): OverlayState & {
   showDetectionIndicator: boolean;
   detectionIntervalMs: number;
+  screenDetectionEnabled: boolean;
   showGoldToday: boolean;
   goldEarnedToday: number;
   showBaseOverlay: boolean;
@@ -141,6 +142,7 @@ function buildOverlayState(): OverlayState & {
     lastUpdatedAt: new Date().toISOString(),
     showDetectionIndicator: getSetting("showDetectionIndicator") !== "false",
     detectionIntervalMs,
+    screenDetectionEnabled: getSetting("screenDetectionEnabled") !== "false",
     showGoldToday,
     goldEarnedToday: showGoldToday ? getGoldEarnedToday() : 0,
     showBaseOverlay: getSetting("showBaseOverlay") === "true",
@@ -1340,7 +1342,12 @@ app.post("/api/game-states/test-detection", async (req, res) => {
 
 app.get("/api/detection-refs", async (_req, res) => {
   try {
-    const states = listGameStates();
+    // Empty refs make every agent skip the screenshot before capturing, so
+    // this filter is the cross-platform kill switch for screen detection:
+    // the master setting turns it off wholesale, and per-state `enabled`
+    // flags drop individual states (previously ignored here).
+    const detectionOff = getSetting("screenDetectionEnabled") === "false";
+    const states = detectionOff ? [] : listGameStates().filter((gs) => gs.enabled);
     const refMap = new Map<string, Array<{ id: string; filename: string }>>();
     const regionsMap = new Map<string, import("./image-match.js").DetectionRegion[]>();
     for (const gs of states) {
@@ -1444,6 +1451,12 @@ app.put("/api/settings/:key", (req, res) => {
     return badRequest(res, "value must be a string");
   }
   setSetting(req.params.key, value);
+  // Turning screen detection off leaves the last detected state dangling —
+  // clear it so game-state-bound zones/blocks don't stay locked on a stale
+  // detection that will never update again.
+  if (req.params.key === "screenDetectionEnabled" && value === "false") {
+    setDetectedGameState(null, 0);
+  }
   broadcastOverlayState();
   ok(res, { updated: true });
 });
