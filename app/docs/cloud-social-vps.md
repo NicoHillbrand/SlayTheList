@@ -35,7 +35,8 @@ it would fail to start because no `slaythelist` user exists on this box.
 ### Redeploy steps (the ones that actually work)
 
 ```bash
-ssh srv1252048
+ssh nico@slaythelist.nicohillbrand.com   # a.k.a. 72.60.84.77 — there is no
+                                         # "srv1252048" SSH alias configured
 cd ~/apps/SlayTheList
 
 git fetch origin
