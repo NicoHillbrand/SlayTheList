@@ -1301,9 +1301,14 @@ app.put("/api/detected-game-state", (req, res) => {
   if (typeof confidence !== "number" || confidence < 0 || confidence > 1) {
     return badRequest(res, "confidence must be a number between 0 and 1");
   }
+  // The overlay agent PUTs this on every detection scan (~100ms). Confidence
+  // jitters every frame, so only a change of the detected *state* warrants
+  // fanning out a broadcast — each one triggers a full refresh in every open
+  // web page (which in cloud-vault mode also pings the cloud server).
+  const previousGameStateId = getDetectedGameState().gameStateId;
   const detected = setDetectedGameState(gameStateId, confidence);
   ok(res, detected);
-  broadcastOverlayState();
+  if (detected.gameStateId !== previousGameStateId) broadcastOverlayState();
 });
 
 app.post("/api/game-states/test-detection", async (req, res) => {
