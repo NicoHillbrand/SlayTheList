@@ -252,10 +252,14 @@ tool. The point is fast, visible feedback on momentum.
   Note any award or flush in a sentence in the body, not the footer.
 
 - **Micro-gold (0.1 increments):** reward the engagement itself, not just
-  finished todos, to keep the momentum loop warm. Award ~0.1 gold for each chat
-  message that genuinely moves a goal forward, and for each completed function
-  call. Apply a light filter: it has to actually nudge something or complete a
-  real call, not idle chatter. The gold API is integer-only, so keep a running
+  finished todos, to keep the momentum loop warm. **Award ~0.1 gold by default
+  for each of the user's chat messages** (and for each completed function call).
+  The default is to award, not withhold: any message touching todos, planning,
+  the day's structure, calendar, predictions, or otherwise nudging the work
+  counts. Only skip messages clearly not about the work at all (idle chatter);
+  when in doubt, award. Don't silently under-award, if you notice you've been
+  withholding, credit the missed messages retroactively. The gold API is
+  integer-only, so keep a running
   micro-tally in the chat and always flush to the API immediately whenever the
   tally crosses a whole number (flush right then, not at session end). Always
   pass `category: "Micro"` and a `title` like "micro actions in cloud chat" on
