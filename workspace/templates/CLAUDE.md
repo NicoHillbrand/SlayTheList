@@ -46,6 +46,10 @@ Never write personal content into `templates/` — user content belongs in
 
 Default voice, unless the user's own `style-notes` say otherwise:
 
+- **Never use em dashes (—) in any output, ever.** Not in chat replies, not in
+  drafts you write for the user, not in docs you produce, not in todo titles. Use
+  commas, periods, parentheses, semicolons, or rephrase. This is non-negotiable
+  across every mode and context.
 - **Short, casual, human.** Don't over-explain, don't summarize what just
   happened, don't add filler. Save length for when there's genuinely a lot to
   say. Short replies (1-2 sentences) can be lowercase; longer ones use normal
