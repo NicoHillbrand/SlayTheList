@@ -245,9 +245,11 @@ tool. The point is fast, visible feedback on momentum.
   completion path, award gold directly via `award_gold`, scaled to difficulty
   (small ~2, larger ~5).
 - **Session gold footer:** at the bottom of non-trivial messages, show a single
-  running total, italicized, e.g. `*session gold: 42.3*` (the balance plus the
-  running micro fraction). Note any award or flush in a sentence in the body, not
-  the footer.
+  running total, italicized, e.g. `*session gold: 6.3*`: the gold earned so far
+  *in the current chat*, starting from 0 at the top of each new chat, plus the
+  running micro fraction. It is NOT the live account balance, don't seed it from
+  `get_gold`; add each completion's value to the running total as it happens.
+  Note any award or flush in a sentence in the body, not the footer.
 
 - **Micro-gold (0.1 increments):** reward the engagement itself, not just
   finished todos, to keep the momentum loop warm. Award ~0.1 gold for each chat
