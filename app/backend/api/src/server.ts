@@ -87,8 +87,12 @@ import {
   declineCloudFriendRequest,
   disconnectCloudConnection,
   getCloudConnectionStatus,
+  getCloudFriendsFeed,
+  reconcileReceivedFeedHearts,
   getCloudFriendsToday,
   getCloudSharedProfile,
+  removeCloudFeedHeart,
+  sendCloudFeedHeart,
   getLocalSocialSettings,
   getLocalSocialStatus,
   saveLocalSocialStatus,
@@ -337,6 +341,61 @@ app.get("/api/cloud-social/friends/summary", async (req, res) => {
       : new Date().toISOString().slice(0, 10);
   try {
     ok(res, await getCloudFriendsToday(date));
+  } catch (error) {
+    return badRequest(res, (error as Error).message);
+  }
+});
+
+// Queue of visible-to-you things friends got done since `since` (ISO 8601),
+// newest first with per-entry heart state.
+app.get("/api/cloud-social/friends/feed", async (req, res) => {
+  const since = typeof req.query.since === "string" ? req.query.since : "";
+  if (!since || !Number.isFinite(new Date(since).getTime())) {
+    return badRequest(res, "since must be an ISO 8601 timestamp");
+  }
+  try {
+    ok(res, await getCloudFriendsFeed(new Date(since).toISOString()));
+  } catch (error) {
+    return badRequest(res, (error as Error).message);
+  }
+});
+
+app.post("/api/cloud-social/feed-hearts", async (req, res) => {
+  const targetUserId = typeof req.body?.targetUserId === "string" ? req.body.targetUserId : "";
+  const entryId = typeof req.body?.entryId === "string" ? req.body.entryId : "";
+  if (!targetUserId || !entryId) {
+    return badRequest(res, "targetUserId and entryId are required");
+  }
+  try {
+    ok(res, await sendCloudFeedHeart(targetUserId, entryId));
+  } catch (error) {
+    return badRequest(res, (error as Error).message);
+  }
+});
+
+app.delete("/api/cloud-social/feed-hearts/:entryId", async (req, res) => {
+  try {
+    await removeCloudFeedHeart(req.params.entryId);
+    ok(res, { success: true });
+  } catch (error) {
+    return badRequest(res, (error as Error).message);
+  }
+});
+
+// Hearts friends put on the user's own entries — shown on the overlay. Also
+// the moment new hearts get paid out (+1 gold each, ledger-logged), so the
+// gold is already awarded by the time the overlay renders the heart.
+app.get("/api/cloud-social/feed-hearts/received", async (req, res) => {
+  const since = typeof req.query.since === "string" ? req.query.since : "";
+  if (!since || !Number.isFinite(new Date(since).getTime())) {
+    return badRequest(res, "since must be an ISO 8601 timestamp");
+  }
+  try {
+    const sinceIso = new Date(since).toISOString();
+    // Reconcile fetches with its own (longer) lookback; trim to the caller's
+    // window for display.
+    const { items } = await reconcileReceivedFeedHearts();
+    ok(res, { items: items.filter((heart) => heart.createdAt >= sinceIso) });
   } catch (error) {
     return badRequest(res, (error as Error).message);
   }
@@ -614,17 +673,19 @@ app.put("/api/gold-state", (req, res) => {
   triggerCloudSnapshotSync();
 });
 
-const GOLD_ACTIVITY_SOURCES = new Set(["todo", "habit", "encouragement", "manual", "spend", "prediction"]);
+const GOLD_ACTIVITY_SOURCES = new Set(["todo", "habit", "encouragement", "manual", "spend", "prediction", "micro"]);
 
 function parseActivity(raw: unknown): GoldActivityContext | undefined {
   if (!raw || typeof raw !== "object") return undefined;
   const obj = raw as Record<string, unknown>;
   const sourceType = obj.sourceType;
   if (typeof sourceType !== "string" || !GOLD_ACTIVITY_SOURCES.has(sourceType)) return undefined;
+  const date = typeof obj.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(obj.date) ? obj.date : null;
   return {
     sourceType: sourceType as GoldActivityContext["sourceType"],
     sourceId: typeof obj.sourceId === "string" ? obj.sourceId : null,
     label: typeof obj.label === "string" ? obj.label.slice(0, 500) : "",
+    date,
   };
 }
 
@@ -637,6 +698,7 @@ function categoryToSourceType(category: unknown): GoldActivityContext["sourceTyp
   if (c === "habits" || c === "habit") return "habit";
   if (c === "encouragements" || c === "encouragement" || c === "encourage") return "encouragement";
   if (c === "predictions" || c === "prediction") return "prediction";
+  if (c.startsWith("micro")) return "micro";
   return "manual";
 }
 
@@ -1731,6 +1793,16 @@ setInterval(() => {
 setInterval(() => {
   broadcastOverlayState();
 }, 5_000).unref();
+
+// Pay out received feed hearts (+1 gold each) even while the friends panel is
+// closed. The overlay's received-hearts poll reconciles too; the table guard
+// makes the two paths safely overlap.
+setInterval(() => {
+  if (!isCloudSyncReady()) return;
+  void reconcileReceivedFeedHearts().catch((error) => {
+    console.error("[api] feed-heart reconcile failed", error);
+  });
+}, 5 * 60_000).unref();
 
 app.use(errorLogger);
 

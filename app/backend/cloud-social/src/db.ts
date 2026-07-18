@@ -118,6 +118,17 @@ CREATE TABLE IF NOT EXISTS encouragements (
   FOREIGN KEY(sender_user_id) REFERENCES cloud_users(id) ON DELETE CASCADE,
   FOREIGN KEY(target_user_id) REFERENCES cloud_users(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS feed_hearts (
+  id TEXT PRIMARY KEY,
+  sender_user_id TEXT NOT NULL,
+  target_user_id TEXT NOT NULL,
+  entry_id TEXT NOT NULL,
+  entry_label TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(sender_user_id, entry_id),
+  FOREIGN KEY(sender_user_id) REFERENCES cloud_users(id) ON DELETE CASCADE,
+  FOREIGN KEY(target_user_id) REFERENCES cloud_users(id) ON DELETE CASCADE
+);
 `);
 
 db.exec(`
@@ -129,6 +140,8 @@ CREATE INDEX IF NOT EXISTS idx_access_tokens_user ON access_tokens(cloud_user_id
 CREATE INDEX IF NOT EXISTS idx_device_auth_sessions_status ON device_auth_sessions(status, expires_at);
 CREATE INDEX IF NOT EXISTS idx_friend_requests_sender ON friend_requests(sender_user_id, status);
 CREATE INDEX IF NOT EXISTS idx_friend_requests_receiver ON friend_requests(receiver_user_id, status);
+CREATE INDEX IF NOT EXISTS idx_feed_hearts_target_date ON feed_hearts(target_user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_feed_hearts_entry ON feed_hearts(entry_id);
 `);
 
 // Migrations for existing databases

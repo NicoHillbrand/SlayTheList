@@ -5,6 +5,8 @@ import {
   cloudUsernameUpdateRequestSchema,
   cloudDeviceStartResponseSchema,
   cloudSyncResponseSchema,
+  feedHeartSchema,
+  friendFeedItemSchema,
   friendRequestSchema,
   friendSearchResultSchema,
   friendSummarySchema,
@@ -19,6 +21,8 @@ import {
   vaultVersionResponseSchema,
   type CloudConnectionStatus,
   type CloudIdentityUser,
+  type FeedHeart,
+  type FriendFeedItem,
   type FriendRequest,
   type FriendSearchResult,
   type FriendSummary,
@@ -36,6 +40,7 @@ import {
 } from "@slaythelist/contracts";
 import { db } from "./db.js";
 import {
+  awardGold,
   getAccountabilityState,
   getDefenseSnapshot,
   getGoldState,
@@ -292,6 +297,10 @@ export function buildSharedDailyLog(days = SHARED_DAILY_LOG_DAYS): SharedDailyLo
         isPrivate = predictionVisibility.get(entry.sourceId) === "private";
       }
       return {
+        // Ledger id + timestamp power the friends activity feed (recent-window
+        // filtering and per-entry hearts).
+        id: entry.id,
+        createdAt: entry.createdAt,
         delta: entry.delta,
         sourceType: entry.sourceType,
         label: isPrivate ? null : entry.label,
@@ -356,6 +365,70 @@ export async function getCloudFriendsToday(date: string): Promise<{ items: Frien
     `/api/social/friends/summary?date=${encodeURIComponent(date)}`,
   );
   return { items: friendTodaySummarySchema.array().parse(body.items ?? []) };
+}
+
+// Queue of visible-to-you things friends got done since `since` (ISO 8601).
+export async function getCloudFriendsFeed(since: string): Promise<{ items: FriendFeedItem[] }> {
+  const body = await requestCloud<{ items: unknown }>(
+    `/api/social/friends/feed?since=${encodeURIComponent(since)}`,
+  );
+  return { items: friendFeedItemSchema.array().parse(body.items ?? []) };
+}
+
+export async function sendCloudFeedHeart(targetUserId: string, entryId: string): Promise<FeedHeart> {
+  return feedHeartSchema.parse(
+    await requestCloud("/api/social/feed-hearts", {
+      method: "POST",
+      body: JSON.stringify({ targetUserId, entryId }),
+    }),
+  );
+}
+
+export async function removeCloudFeedHeart(entryId: string): Promise<void> {
+  await requestCloud(`/api/social/feed-hearts/${encodeURIComponent(entryId)}`, { method: "DELETE" });
+}
+
+export async function getCloudFeedHeartsReceived(since: string): Promise<{ items: FeedHeart[] }> {
+  const body = await requestCloud<{ items: unknown }>(
+    `/api/social/feed-hearts/received?since=${encodeURIComponent(since)}`,
+  );
+  return { items: feedHeartSchema.array().parse(body.items ?? []) };
+}
+
+// Each heart a friend puts on one of your entries pays out 1 gold, logged in
+// the ledger. Hearts live on the cloud but gold lives here, so this pulls
+// recent hearts and awards any not yet paid out (processed_feed_hearts is the
+// once-only guard). Un-hearting later doesn't claw the gold back.
+const FEED_HEART_GOLD = 1;
+// Look back further than any feed window so a heart can't slip through
+// unpaid between polls (e.g. while the app was off for a few days).
+const FEED_HEART_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
+
+export async function reconcileReceivedFeedHearts(): Promise<{ items: FeedHeart[] }> {
+  const since = new Date(Date.now() - FEED_HEART_LOOKBACK_MS).toISOString();
+  const { items } = await getCloudFeedHeartsReceived(since);
+  const markProcessed = db.prepare(
+    "INSERT OR IGNORE INTO processed_feed_hearts (heart_id, processed_at) VALUES (?, ?)",
+  );
+  let awarded = 0;
+  // Oldest first so the ledger reads chronologically.
+  for (const heart of [...items].reverse()) {
+    if (markProcessed.run(heart.id, new Date().toISOString()).changes === 0) continue;
+    awardGold(FEED_HEART_GOLD, undefined, {
+      sourceType: "encouragement",
+      sourceId: heart.id,
+      label: `❤ @${heart.sender.username} loved “${heart.entryLabel}”`,
+      at: heart.createdAt,
+    });
+    awarded += 1;
+  }
+  if (awarded > 0 && isCloudSyncReady()) {
+    // Push the new balance/log so friends' views stay current.
+    void syncCloudSnapshot().catch((error) => {
+      console.error("[cloud-sync] snapshot sync after heart payout failed", error);
+    });
+  }
+  return { items };
 }
 
 export function getCloudConnectionStatus(): CloudConnectionStatus {

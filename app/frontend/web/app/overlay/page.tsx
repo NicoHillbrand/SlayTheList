@@ -9,13 +9,19 @@
  * window.chrome.webview.postMessage so the host window hugs the content.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { FriendTodaySummary, SharedStatus, StatusChip } from "@slaythelist/contracts";
+import type { FeedHeart, FriendFeedItem, FriendTodaySummary, SharedStatus, StatusChip } from "@slaythelist/contracts";
 import {
+  FEED_WINDOW_SETTING_KEY,
+  getAppSetting,
+  getCloudFriendsFeed,
   getCloudFriendsSummary,
+  getFeedHeartsReceived,
   getGoldState,
   getSocialStatus,
   listGoldActivity,
+  removeFeedHeart,
   saveSocialStatus,
+  sendFeedHeart,
 } from "../../lib/api";
 import { CoinIcon } from "../../lib/combat/icons";
 import { BaseOverlayMini } from "../base/OverlayMini";
@@ -185,52 +191,108 @@ function OwnStatusEditor() {
   );
 }
 
-function FriendCard({ friend }: { friend: FriendTodaySummary }) {
-  const entries = friend.today?.entries.filter((e) => e.label !== null).slice(0, 4) ?? [];
+const FEED_WINDOW_DEFAULT_MINUTES = 60;
+
+function feedWindowLabel(minutes: number): string {
+  if (minutes < 60) return `${minutes} min`;
+  if (minutes % 60 === 0) return minutes === 60 ? "hour" : `${minutes / 60} h`;
+  return `${(minutes / 60).toFixed(1)} h`;
+}
+
+function timeAgo(iso: string): string {
+  const mins = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 60_000));
+  if (mins < 1) return "now";
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+}
+
+/** One friend per line: name, base tier, status chips. The doing-things part
+ *  lives in the activity feed below. */
+function FriendStatusRow({ friend }: { friend: FriendTodaySummary }) {
   return (
-    <div style={{ padding: "6px 0", borderBottom: "1px solid #1e1e3a" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 12, fontWeight: 600, color: "#e5e7eb" }}>@{friend.user.username}</span>
-        {friend.base && (
-          <span style={{ fontSize: 10, color: "#f5c542" }}>
-            ⚔ T{friend.base.tier}
-            {friend.base.bestTier > friend.base.tier ? `/${friend.base.bestTier}` : ""}
-          </span>
-        )}
-        {friend.today && friend.today.total !== 0 && (
-          <span style={{ fontSize: 10, color: "#f5c542", display: "inline-flex", alignItems: "center", gap: 2 }}>
-            <CoinIcon size={10} />
-            {friend.today.total > 0 ? `+${friend.today.total}` : friend.today.total} today
-          </span>
-        )}
-        {friend.status?.chips.map((chip) => <StatusChipPill key={chip.id} chip={chip} />)}
-      </div>
-      {friend.today ? (
-        entries.length > 0 ? (
-          <ul style={{ margin: "4px 0 0", paddingLeft: 16, fontSize: 11, color: "#b8b8d0" }}>
-            {entries.map((entry, i) => (
-              <li key={i}>{entry.label}</li>
-            ))}
-          </ul>
-        ) : (
-          <div style={{ fontSize: 11, color: "#6a6a88", marginTop: 2 }}>Quiet so far today.</div>
-        )
-      ) : null}
+    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", padding: "3px 0" }}>
+      <span style={{ fontSize: 12, fontWeight: 600, color: "#e5e7eb" }}>@{friend.user.username}</span>
+      {friend.base && (
+        <span style={{ fontSize: 10, color: "#f5c542" }}>
+          ⚔ T{friend.base.tier}
+          {friend.base.bestTier > friend.base.tier ? `/${friend.base.bestTier}` : ""}
+        </span>
+      )}
+      {friend.status?.chips.map((chip) => <StatusChipPill key={chip.id} chip={chip} />)}
+    </div>
+  );
+}
+
+function FeedRow({ item, onToggleHeart }: { item: FriendFeedItem; onToggleHeart: (item: FriendFeedItem) => void }) {
+  return (
+    <div style={{ display: "flex", alignItems: "baseline", gap: 6, padding: "4px 0", borderBottom: "1px solid #1e1e3a" }}>
+      <span style={{ fontSize: 11, fontWeight: 600, color: "#e5e7eb", whiteSpace: "nowrap" }}>
+        @{item.user.username}
+      </span>
+      <span style={{ fontSize: 11, color: "#b8b8d0", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
+        {item.label}
+      </span>
+      <span style={{ fontSize: 10, color: "#f5c542", display: "inline-flex", alignItems: "center", gap: 2, whiteSpace: "nowrap" }}>
+        <CoinIcon size={9} />+{item.delta}
+      </span>
+      <span style={{ fontSize: 10, color: "#6a6a88", whiteSpace: "nowrap" }}>{timeAgo(item.createdAt)}</span>
+      <button
+        type="button"
+        onClick={() => onToggleHeart(item)}
+        title={item.heartedByMe ? "Un-heart" : "Send a heart"}
+        style={{
+          font: "inherit",
+          fontSize: 11,
+          lineHeight: 1,
+          padding: "2px 4px",
+          border: "none",
+          background: "transparent",
+          cursor: "pointer",
+          color: item.heartedByMe ? "#f472b6" : "#5a5a78",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {item.heartedByMe ? "❤" : "♡"}
+        {item.hearts > 0 ? ` ${item.hearts}` : ""}
+      </button>
     </div>
   );
 }
 
 function FriendsPanel() {
   const [friends, setFriends] = useState<FriendTodaySummary[] | null>(null);
+  const [feed, setFeed] = useState<FriendFeedItem[] | null>(null);
+  const [heartsReceived, setHeartsReceived] = useState<FeedHeart[]>([]);
+  const [windowMinutes, setWindowMinutes] = useState(FEED_WINDOW_DEFAULT_MINUTES);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     async function poll() {
       try {
-        const result = await getCloudFriendsSummary(localToday());
+        // Re-read the window each poll so a settings change lands without a
+        // reload (the overlay window has no other channel to the settings UI).
+        let minutes = FEED_WINDOW_DEFAULT_MINUTES;
+        try {
+          const setting = await getAppSetting(FEED_WINDOW_SETTING_KEY);
+          const parsed = Number(setting.value);
+          if (Number.isFinite(parsed) && parsed > 0) minutes = Math.round(parsed);
+        } catch {
+          // Settings are cosmetic here — fall back to the default window.
+        }
+        const since = new Date(Date.now() - minutes * 60_000).toISOString();
+        const [summary, feedResult, heartsResult] = await Promise.all([
+          getCloudFriendsSummary(localToday()),
+          getCloudFriendsFeed(since),
+          getFeedHeartsReceived(since),
+        ]);
         if (!cancelled) {
-          setFriends(result.items);
+          setWindowMinutes(minutes);
+          setFriends(summary.items);
+          setFeed(feedResult.items);
+          setHeartsReceived(heartsResult.items);
           setError(null);
         }
       } catch (e) {
@@ -245,6 +307,22 @@ function FriendsPanel() {
     };
   }, []);
 
+  const toggleHeart = useCallback((item: FriendFeedItem) => {
+    const next = !item.heartedByMe;
+    const patch = (flip: boolean) => (current: FriendFeedItem[] | null) =>
+      current?.map((f) =>
+        f.entryId === item.entryId
+          ? { ...f, heartedByMe: flip, hearts: Math.max(0, f.hearts + (flip ? 1 : -1)) }
+          : f,
+      ) ?? current;
+    setFeed(patch(next));
+    void (next ? sendFeedHeart(item.user.id, item.entryId) : removeFeedHeart(item.entryId)).catch(() => {
+      setFeed(patch(!next));
+    });
+  }, []);
+
+  const friendsWithStatus = friends?.filter((f) => (f.status?.chips.length ?? 0) > 0 || f.base) ?? [];
+
   return (
     <div style={{ marginTop: 8 }}>
       <OwnStatusEditor />
@@ -253,7 +331,40 @@ function FriendsPanel() {
       {friends !== null && friends.length === 0 && (
         <div style={{ fontSize: 11, color: "#8a89a6" }}>No friends yet — add some in the social tab.</div>
       )}
-      {friends?.map((friend) => <FriendCard key={friend.user.id} friend={friend} />)}
+
+      {friendsWithStatus.length > 0 && (
+        <div style={{ borderBottom: "1px solid #2a2a4a", paddingBottom: 6, marginBottom: 6 }}>
+          {friendsWithStatus.map((friend) => (
+            <FriendStatusRow key={friend.user.id} friend={friend} />
+          ))}
+        </div>
+      )}
+
+      {heartsReceived.length > 0 && (
+        <div style={{ borderBottom: "1px solid #2a2a4a", paddingBottom: 6, marginBottom: 6 }}>
+          {heartsReceived.map((heart) => (
+            <div key={heart.id} style={{ fontSize: 11, color: "#f472b6", padding: "2px 0" }}>
+              ❤ @{heart.sender.username}{" "}
+              <span style={{ color: "#b8b8d0" }}>loved “{heart.entryLabel}”</span>{" "}
+              <span style={{ color: "#6a6a88" }}>· {timeAgo(heart.createdAt)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {friends !== null && friends.length > 0 && (
+        <>
+          <div style={{ fontSize: 11, color: "#8a89a6", marginBottom: 2 }}>
+            Friends got done — last {feedWindowLabel(windowMinutes)}
+          </div>
+          {feed !== null && feed.length === 0 && (
+            <div style={{ fontSize: 11, color: "#6a6a88" }}>Nothing in the last {feedWindowLabel(windowMinutes)}.</div>
+          )}
+          {feed?.map((item) => (
+            <FeedRow key={item.entryId} item={item} onToggleHeart={toggleHeart} />
+          ))}
+        </>
+      )}
     </div>
   );
 }

@@ -297,6 +297,13 @@ CREATE TABLE IF NOT EXISTS cloud_connection_state (
   last_sync_state TEXT NOT NULL DEFAULT 'idle' CHECK(last_sync_state IN ('idle', 'pending', 'success', 'error')),
   last_sync_error TEXT
 );
+
+-- Feed hearts (from the cloud) that have already been paid out as local gold.
+-- The primary key is the dedup guard: each heart awards exactly once.
+CREATE TABLE IF NOT EXISTS processed_feed_hearts (
+  heart_id TEXT PRIMARY KEY,
+  processed_at TEXT NOT NULL
+);
 `);
 
 db.exec(`

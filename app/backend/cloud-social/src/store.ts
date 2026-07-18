@@ -14,6 +14,8 @@ import type {
   EncouragementEntryType,
   EncouragementKind,
   EncouragementResponse,
+  FeedHeart,
+  FriendFeedItem,
   FriendRelationship,
   FriendRequest,
   FriendRequestStatus,
@@ -884,4 +886,147 @@ export function createEncouragement(
     senderGoldAwarded: ENCOURAGEMENT_GOLD_REWARD,
     remainingToday: remaining - 1,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Friends activity feed + hearts
+// ---------------------------------------------------------------------------
+
+const FEED_MAX_ITEMS = 50;
+
+type FeedHeartRow = {
+  id: string;
+  sender_user_id: string;
+  target_user_id: string;
+  entry_id: string;
+  entry_label: string;
+  created_at: string;
+};
+
+/** Flatten friends' shared daily-log entries newer than `since` into one
+ *  newest-first queue. Only positive, labeled (non-private) entries count as
+ *  "gotten done"; entries from snapshots that predate id/createdAt are
+ *  invisible here until the friend's app re-syncs. */
+export function listFriendsFeed(viewerUserId: string, since: string): FriendFeedItem[] {
+  const heartedRows = db
+    .prepare("SELECT entry_id FROM feed_hearts WHERE sender_user_id = ?")
+    .all(viewerUserId) as Array<{ entry_id: string }>;
+  const heartedByMe = new Set(heartedRows.map((r) => r.entry_id));
+
+  const items: FriendFeedItem[] = [];
+  for (const friend of listFriends(viewerUserId)) {
+    const settings = getSocialSettings(friend.id);
+    if (!canViewerSeeSection(settings.dailyLogVisibility, "friend", viewerUserId)) continue;
+    const snapshot = getSnapshot(friend.id);
+    for (const day of snapshot.dailyLog ?? []) {
+      for (const entry of day.entries) {
+        if (!entry.id || !entry.createdAt || entry.createdAt < since) continue;
+        if (entry.label === null || entry.delta <= 0) continue;
+        // Encouragement/heart payouts are meta — surfacing them would make
+        // hearts themselves heartable (feedback loop) and crowd out real work.
+        if (entry.sourceType === "encouragement") continue;
+        items.push({
+          user: friend,
+          entryId: entry.id,
+          label: entry.label,
+          delta: entry.delta,
+          sourceType: entry.sourceType,
+          createdAt: entry.createdAt,
+          heartedByMe: heartedByMe.has(entry.id),
+          hearts: 0,
+        });
+      }
+    }
+  }
+  items.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  const top = items.slice(0, FEED_MAX_ITEMS);
+
+  // Heart counts for just the returned entries.
+  if (top.length > 0) {
+    const placeholders = top.map(() => "?").join(", ");
+    const counts = db
+      .prepare(`SELECT entry_id, COUNT(*) as cnt FROM feed_hearts WHERE entry_id IN (${placeholders}) GROUP BY entry_id`)
+      .all(...top.map((i) => i.entryId)) as Array<{ entry_id: string; cnt: number }>;
+    const byEntry = new Map(counts.map((c) => [c.entry_id, c.cnt]));
+    for (const item of top) {
+      item.hearts = byEntry.get(item.entryId) ?? 0;
+    }
+  }
+  return top;
+}
+
+function toFeedHeart(row: FeedHeartRow): FeedHeart {
+  const sender = getUserRowById(row.sender_user_id);
+  if (!sender) throw new Error("heart references a missing user");
+  return {
+    id: row.id,
+    sender: toFriendSummary(sender),
+    entryId: row.entry_id,
+    entryLabel: row.entry_label,
+    createdAt: row.created_at,
+  };
+}
+
+/** Heart a friend's feed entry. Idempotent: re-hearting returns the existing
+ *  heart. The entry must exist, be visible to the sender, and be labeled —
+ *  resolved from the target's current snapshot, which also captures the label
+ *  so received hearts stay readable after the entry leaves the snapshot. */
+export function createFeedHeart(senderUserId: string, targetUserId: string, entryId: string): FeedHeart {
+  if (senderUserId === targetUserId) throw new Error("cannot heart your own entries");
+  if (getFriendRelationship(senderUserId, targetUserId) !== "friend") {
+    throw new Error("you can only heart friends' entries");
+  }
+
+  const existing = db
+    .prepare("SELECT * FROM feed_hearts WHERE sender_user_id = ? AND entry_id = ? LIMIT 1")
+    .get(senderUserId, entryId) as FeedHeartRow | undefined;
+  if (existing) return toFeedHeart(existing);
+
+  const settings = getSocialSettings(targetUserId);
+  if (!canViewerSeeSection(settings.dailyLogVisibility, "friend", senderUserId)) {
+    throw new Error("entry not found");
+  }
+  const snapshot = getSnapshot(targetUserId);
+  let label: string | null = null;
+  for (const day of snapshot.dailyLog ?? []) {
+    const entry = day.entries.find((e) => e.id === entryId);
+    if (entry) {
+      label = entry.label;
+      break;
+    }
+  }
+  if (label === null) throw new Error("entry not found");
+
+  const row: FeedHeartRow = {
+    id: randomUUID(),
+    sender_user_id: senderUserId,
+    target_user_id: targetUserId,
+    entry_id: entryId,
+    entry_label: label,
+    created_at: new Date().toISOString(),
+  };
+  db.prepare(
+    `INSERT INTO feed_hearts (id, sender_user_id, target_user_id, entry_id, entry_label, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(row.id, row.sender_user_id, row.target_user_id, row.entry_id, row.entry_label, row.created_at);
+  return toFeedHeart(row);
+}
+
+/** Un-heart. No error if the heart doesn't exist (toggle semantics). */
+export function deleteFeedHeart(senderUserId: string, entryId: string) {
+  db.prepare("DELETE FROM feed_hearts WHERE sender_user_id = ? AND entry_id = ?").run(senderUserId, entryId);
+}
+
+/** Hearts friends put on the viewer's entries since `since`, newest first —
+ *  what the viewer's own overlay shows as received love. */
+export function listFeedHeartsReceived(userId: string, since: string): FeedHeart[] {
+  const rows = db
+    .prepare(
+      `SELECT * FROM feed_hearts
+       WHERE target_user_id = ? AND created_at >= ?
+       ORDER BY created_at DESC
+       LIMIT ${FEED_MAX_ITEMS}`,
+    )
+    .all(userId, since) as FeedHeartRow[];
+  return rows.map(toFeedHeart);
 }

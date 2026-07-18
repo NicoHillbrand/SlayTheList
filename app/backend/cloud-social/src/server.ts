@@ -8,6 +8,8 @@ import {
   encouragementEntryTypeSchema,
   encouragementKindSchema,
   encouragementResponseSchema,
+  feedHeartSchema,
+  friendFeedItemSchema,
   friendRequestSchema,
   friendSearchResultSchema,
   sharedProfileSchema,
@@ -41,6 +43,10 @@ import {
   startDeviceAuthorization,
   updateCloudUsername,
   createEncouragement,
+  createFeedHeart,
+  deleteFeedHeart,
+  listFeedHeartsReceived,
+  listFriendsFeed,
 } from "./store.js";
 import { getVaultVersion, pullVault, pushVault } from "./vault-store.js";
 
@@ -311,6 +317,62 @@ app.get("/api/social/users/:username", (req, res) => {
   } catch (error) {
     return badRequest(res, (error as Error).message);
   }
+});
+
+// ---------------------------------------------------------------------------
+// Friends activity feed + hearts
+// ---------------------------------------------------------------------------
+
+function parseSinceParam(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : null;
+}
+
+// Queue of visible-to-you things friends got done since `since` (ISO 8601),
+// newest first, with the viewer's heart state per entry.
+app.get("/api/social/friends/feed", (req, res) => {
+  const user = requireAuth(req as AuthedRequest, res);
+  if (!user) return;
+  const since = parseSinceParam(req.query.since);
+  if (!since) {
+    return badRequest(res, "since must be an ISO 8601 timestamp");
+  }
+  ok(res, { items: friendFeedItemSchema.array().parse(listFriendsFeed(user.id, since)) });
+});
+
+app.post("/api/social/feed-hearts", (req, res) => {
+  const user = requireAuth(req as AuthedRequest, res);
+  if (!user) return;
+  const targetUserId = typeof req.body?.targetUserId === "string" ? req.body.targetUserId : "";
+  const entryId = typeof req.body?.entryId === "string" ? req.body.entryId : "";
+  if (!targetUserId || !entryId) {
+    return badRequest(res, "targetUserId and entryId are required");
+  }
+  try {
+    ok(res, feedHeartSchema.parse(createFeedHeart(user.id, targetUserId, entryId)));
+  } catch (error) {
+    return badRequest(res, (error as Error).message);
+  }
+});
+
+app.delete("/api/social/feed-hearts/:entryId", (req, res) => {
+  const user = requireAuth(req as AuthedRequest, res);
+  if (!user) return;
+  deleteFeedHeart(user.id, req.params.entryId);
+  ok(res, { success: true });
+});
+
+// Hearts friends put on the viewer's entries since `since` — shown on the
+// viewer's own overlay.
+app.get("/api/social/feed-hearts/received", (req, res) => {
+  const user = requireAuth(req as AuthedRequest, res);
+  if (!user) return;
+  const since = parseSinceParam(req.query.since);
+  if (!since) {
+    return badRequest(res, "since must be an ISO 8601 timestamp");
+  }
+  ok(res, { items: feedHeartSchema.array().parse(listFeedHeartsReceived(user.id, since)) });
 });
 
 // ---------------------------------------------------------------------------

@@ -4,6 +4,8 @@ import type {
   BlockUnlockMode,
   CloudConnectionStatus,
   DetectedGameState,
+  FeedHeart,
+  FriendFeedItem,
   FriendRequest,
   FriendSearchResult,
   FriendSummary,
@@ -156,6 +158,33 @@ export async function saveSocialStatus(chips: StatusChip[]) {
 export async function getCloudFriendsSummary(date: string) {
   return request<{ items: FriendTodaySummary[] }>(
     `/api/cloud-social/friends/summary?date=${encodeURIComponent(date)}`,
+  );
+}
+
+// Queue of visible-to-you things friends got done since `since` (ISO 8601).
+export async function getCloudFriendsFeed(since: string) {
+  return request<{ items: FriendFeedItem[] }>(
+    `/api/cloud-social/friends/feed?since=${encodeURIComponent(since)}`,
+  );
+}
+
+export async function sendFeedHeart(targetUserId: string, entryId: string) {
+  return request<FeedHeart>("/api/cloud-social/feed-hearts", {
+    method: "POST",
+    body: JSON.stringify({ targetUserId, entryId }),
+  });
+}
+
+export async function removeFeedHeart(entryId: string) {
+  return request<{ success: true }>(`/api/cloud-social/feed-hearts/${encodeURIComponent(entryId)}`, {
+    method: "DELETE",
+  });
+}
+
+// Hearts friends put on your own entries since `since`.
+export async function getFeedHeartsReceived(since: string) {
+  return request<{ items: FeedHeart[] }>(
+    `/api/cloud-social/feed-hearts/received?since=${encodeURIComponent(since)}`,
   );
 }
 
@@ -384,6 +413,9 @@ export type GoldActivityInput = {
   sourceType: GoldActivitySource;
   sourceId?: string | null;
   label?: string;
+  // Grouping day (YYYY-MM-DD) this entry belongs under, when it differs from the
+  // day of the click — e.g. ticking a habit for a past day.
+  date?: string;
 };
 
 export async function awardGold(amount: number, activity?: GoldActivityInput) {
@@ -511,6 +543,11 @@ export async function deleteReflection(id: string) {
     method: "DELETE",
   });
 }
+
+/** App-settings key for how far back the overlay's friends activity feed
+ *  looks (minutes). Stored in the local API so the overlay window and the
+ *  browser app read the same value. */
+export const FEED_WINDOW_SETTING_KEY = "friendsFeedWindowMinutes";
 
 export async function getAppSetting(key: string) {
   return request<{ value: string | null }>(`/api/settings/${encodeURIComponent(key)}`);

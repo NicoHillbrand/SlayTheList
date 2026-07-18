@@ -142,6 +142,7 @@ export const goldActivitySourceSchema = z.enum([
   "manual",
   "spend",
   "prediction",
+  "micro",
 ]);
 export type GoldActivitySource = z.infer<typeof goldActivitySourceSchema>;
 
@@ -171,6 +172,10 @@ export type GoldActivityDay = z.infer<typeof goldActivityDaySchema>;
 // The privacy-applied form that gets shared with friends. Private entries keep
 // their delta (so day totals still reconcile) but drop the identifying label.
 export const sharedDailyLogEntrySchema = z.object({
+  // Ledger id + timestamp let friends' overlays build a recent-activity feed
+  // and heart individual entries. Optional: older snapshots predate them.
+  id: z.string().optional(),
+  createdAt: z.string().optional(), // ISO timestamp
   delta: z.number().int(),
   sourceType: goldActivitySourceSchema,
   label: z.string().nullable(), // null when the source item is private
@@ -315,6 +320,32 @@ export const friendTodaySummarySchema = z.object({
   base: z.object({ tier: z.number(), bestTier: z.number() }).nullable(),
 });
 export type FriendTodaySummary = z.infer<typeof friendTodaySummarySchema>;
+
+/** One completed item in the friends activity feed — the overlay's queue of
+ *  visible-to-you things friends got done inside the configured time window. */
+export const friendFeedItemSchema = z.object({
+  user: friendSummarySchema,
+  entryId: z.string(),
+  label: z.string(),
+  delta: z.number().int(),
+  sourceType: goldActivitySourceSchema,
+  createdAt: z.string(), // ISO timestamp
+  heartedByMe: z.boolean(),
+  hearts: z.number().int(),
+});
+export type FriendFeedItem = z.infer<typeof friendFeedItemSchema>;
+
+/** A heart a friend put on one of your shared log entries. The label is
+ *  captured at heart time so it survives the entry rolling out of the
+ *  14-day shared snapshot. */
+export const feedHeartSchema = z.object({
+  id: z.string(),
+  sender: friendSummarySchema,
+  entryId: z.string(),
+  entryLabel: z.string(),
+  createdAt: z.string(),
+});
+export type FeedHeart = z.infer<typeof feedHeartSchema>;
 
 export const sharedProfileSectionSchema = z.object({
   visibility: socialVisibilitySchema,

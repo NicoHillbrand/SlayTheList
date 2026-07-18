@@ -11,28 +11,35 @@ import type {
   FriendSearchResult,
   FriendSummary,
   GoldActivityDay,
+  GoldState,
+  Habit,
   Prediction,
   SharedProfile,
   SocialSettings,
   SocialVisibility,
 } from "@slaythelist/contracts";
 import {
+  FEED_WINDOW_SETTING_KEY,
   acceptCloudFriendRequest,
   cancelCloudFriendRequest,
   declineCloudFriendRequest,
   disconnectCloudConnect,
+  getAppSetting,
   getCloudConnectionStatus,
   getCloudSharedProfile,
   getCloudSocialSettings,
+  getGoldState,
   listCloudFriendRequests,
   listCloudFriends,
   listGoldActivity,
+  listHabits,
   listPredictions,
   updateGoldActivityDate,
   updatePrediction,
   pollCloudConnect,
   saveCloudSocialSettings,
   searchCloudSocialUsers,
+  setAppSetting,
   removeCloudFriend,
   sendCloudFriendRequest,
   sendEncouragement,
@@ -84,6 +91,13 @@ function toErrorMessage(error: unknown) {
 async function listShareablePredictions() {
   const result = await listPredictions();
   return result.items.filter((p) => p.visibility !== "private");
+}
+
+// Local habits minus private ones — same idea, so the self-profile habit grid
+// reflects live local checks instead of the last-synced cloud snapshot.
+async function listShareableHabits() {
+  const result = await listHabits();
+  return result.items.filter((h) => h.visibility !== "private");
 }
 
 // Stale-while-revalidate cache for shared profiles: the last-seen profile is
@@ -214,6 +228,8 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
   const [selectedProfile, setSelectedProfile] = useState<SharedProfile | null>(null);
   const [ownLogDays, setOwnLogDays] = useState<GoldActivityDay[] | null>(null);
   const [ownPredictions, setOwnPredictions] = useState<Prediction[] | null>(null);
+  const [ownHabits, setOwnHabits] = useState<Habit[] | null>(null);
+  const [ownGold, setOwnGold] = useState<GoldState | null>(null);
   const [baseOpen, setBaseOpen] = useState(false);
 
   // Collapse the inline base viewer whenever the selected profile changes.
@@ -228,7 +244,31 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
   const [encouragementsRemaining, setEncouragementsRemaining] = useState<number | null>(null);
   const [logPeriod, setLogPeriod] = useState<string>(defaultLogPeriod());
   const [draggingFriendId, setDraggingFriendId] = useState<string | null>(null);
+  const [feedWindowMinutes, setFeedWindowMinutes] = useState(60);
   const closeSettings = onCloseSettings ?? (() => {});
+
+  // The overlay's friends-feed window lives in local app settings (not the
+  // cloud visibility settings) so the overlay window can read it directly.
+  useEffect(() => {
+    if (!showSettings) return;
+    void getAppSetting(FEED_WINDOW_SETTING_KEY)
+      .then((setting) => {
+        const parsed = Number(setting.value);
+        if (Number.isFinite(parsed) && parsed > 0) setFeedWindowMinutes(Math.round(parsed));
+      })
+      .catch(() => {
+        // Local API down — keep the default; the select still renders.
+      });
+  }, [showSettings]);
+
+  async function onChangeFeedWindow(minutes: number) {
+    setFeedWindowMinutes(minutes);
+    try {
+      await setAppSetting(FEED_WINDOW_SETTING_KEY, String(minutes));
+    } catch (nextError) {
+      setError(toErrorMessage(nextError));
+    }
+  }
 
   const refreshConnectedData = useCallback(async (currentStatus?: CloudConnectionStatus | null) => {
     const nextStatus = currentStatus ?? (await getCloudConnectionStatus());
@@ -360,9 +400,19 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
     if (!isVisible || !isSelfProfile) {
       setOwnLogDays(null);
       setOwnPredictions(null);
+      setOwnHabits(null);
+      setOwnGold(null);
       return;
     }
     let cancelled = false;
+    void getGoldState()
+      .then((state) => {
+        if (!cancelled) setOwnGold(state);
+      })
+      .catch(() => {
+        // Fall back to the cloud snapshot's gold if the local API is down.
+        if (!cancelled) setOwnGold(null);
+      });
     void listGoldActivity(30)
       .then((result) => {
         if (!cancelled) setOwnLogDays(result.days);
@@ -377,6 +427,14 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
       })
       .catch(() => {
         if (!cancelled) setOwnPredictions(null);
+      });
+    void listShareableHabits()
+      .then((items) => {
+        if (!cancelled) setOwnHabits(items);
+      })
+      .catch(() => {
+        // Fall back to the cloud snapshot if the local API is down.
+        if (!cancelled) setOwnHabits(null);
       });
     return () => {
       cancelled = true;
@@ -669,8 +727,10 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
                 <>
                   <div className="social-profile-top">
                     <h4>@{selectedProfile.user.username}</h4>
-                    {selectedProfile.gold.canView && (
-                      <span className="social-gold-value">{selectedProfile.gold.state?.gold ?? 0} gold</span>
+                    {(selectedProfile.gold.canView || (isSelfProfile && ownGold)) && (
+                      <span className="social-gold-value">
+                        {(isSelfProfile && ownGold ? ownGold.gold : selectedProfile.gold.state?.gold) ?? 0} gold
+                      </span>
                     )}
                     <div className="social-profile-top-actions">
                       {hasLog && <PeriodSelector selected={logPeriod} onSelect={setLogPeriod} />}
@@ -725,7 +785,13 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
                             ? selectedProfile.dailyLog.days
                             : []
                       }
-                      habits={selectedProfile.habits.canView ? selectedProfile.habits.items : []}
+                      habits={
+                        isSelfProfile && ownHabits
+                          ? ownHabits
+                          : selectedProfile.habits.canView
+                            ? selectedProfile.habits.items
+                            : []
+                      }
                       predictions={
                         isSelfProfile && ownPredictions
                           ? ownPredictions
@@ -734,7 +800,7 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
                             : []
                       }
                       selected={logPeriod}
-                      showHabits={selectedProfile.habits.canView}
+                      showHabits={(isSelfProfile && !!ownHabits) || selectedProfile.habits.canView}
                       compact
                       onMoveEntry={isSelfProfile && ownLogDays ? handleMoveLogEntry : undefined}
                       onMovePrediction={isSelfProfile && ownPredictions ? handleMovePrediction : undefined}
@@ -1070,6 +1136,29 @@ export default function SocialModal({ open = false, onClose, embedded = false, s
         <button type="button" onClick={() => void onSaveSettings()} disabled={busyAction === "save-settings"}>
           {busyAction === "save-settings" ? "Saving..." : "Save visibility"}
         </button>
+      </section>
+
+      <section className="social-card">
+        <p className="settings-section-title">Friends activity feed</p>
+        <p className="settings-section-copy">
+          How far back the overlay&apos;s feed of things your friends got done looks.
+        </p>
+        <div className="social-visibility-grid">
+          <label className="social-visibility-row">
+            <span>Time window</span>
+            <select
+              value={String(feedWindowMinutes)}
+              onChange={(event) => void onChangeFeedWindow(Number(event.target.value))}
+            >
+              <option value="30">30 minutes</option>
+              <option value="60">1 hour</option>
+              <option value="120">2 hours</option>
+              <option value="240">4 hours</option>
+              <option value="480">8 hours</option>
+              <option value="1440">24 hours</option>
+            </select>
+          </label>
+        </div>
       </section>
 
       <section className="social-card">
