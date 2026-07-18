@@ -3141,7 +3141,9 @@ export default function Page() {
   const todayKey = getDateKey(new Date());
   const habitsView: HabitsView = habitsSubtab === "month" ? "month" : "week";
 
-  function awardHabitGold(streak: number, sourceElement: HTMLElement | null, habit?: Habit) {
+  // `dateKey` is the day the check is *for* — the ledger entry groups under it,
+  // so a habit ticked today for a past day logs on the day it belongs to.
+  function awardHabitGold(streak: number, sourceElement: HTMLElement | null, habit?: Habit, dateKey?: string) {
     const rewardAmount = 4 + streak;
     playGoldSound();
     launchFlyingCoins(sourceElement);
@@ -3150,19 +3152,21 @@ export default function Page() {
         sourceType: "habit",
         sourceId: habit?.id ?? null,
         label: habit?.name ?? "",
+        date: dateKey,
       });
       setGold(nextGoldState.gold);
       setRewardedTodoIds(nextGoldState.rewardedTodoIds);
     });
   }
 
-  function deductHabitGold(streak: number, habit?: Habit) {
+  function deductHabitGold(streak: number, habit?: Habit, dateKey?: string) {
     const deductAmount = 4 + streak;
     void runAction(async () => {
       const nextGoldState = await deductGoldApi(deductAmount, {
         sourceType: "habit",
         sourceId: habit?.id ?? null,
         label: habit?.name ?? "",
+        date: dateKey,
       });
       setGold(nextGoldState.gold);
       setRewardedTodoIds(nextGoldState.rewardedTodoIds);
@@ -3212,10 +3216,10 @@ export default function Page() {
         checks: [...habit.checks.filter((check) => check.date !== dateKey), { date: dateKey, done: true }],
       };
       const streak = calculateHabitDayStreak(nextHabit, dateKey);
-      awardHabitGold(streak, sourceElement, habit);
+      awardHabitGold(streak, sourceElement, habit, dateKey);
     } else {
       const streak = calculateHabitDayStreak(habit, dateKey);
-      deductHabitGold(streak, habit);
+      deductHabitGold(streak, habit, dateKey);
     }
     setHabits((prev) =>
       prev.map((h) => {
@@ -3239,15 +3243,16 @@ export default function Page() {
       return checkDate >= weekStart && checkDate <= weekEnd;
     });
     if (!doneInWeek) {
+      const weekEndKey = getDateKey(weekEnd);
       const nextHabit = {
         ...habit,
-        checks: [...habit.checks, { date: getDateKey(weekEnd), done: true }],
+        checks: [...habit.checks, { date: weekEndKey, done: true }],
       };
       const streak = calculateHabitWeekStreak(nextHabit, weekStart, weekEnd);
-      awardHabitGold(streak, sourceElement, habit);
+      awardHabitGold(streak, sourceElement, habit, weekEndKey);
     } else {
       const streak = calculateHabitWeekStreak(habit, weekStart, weekEnd);
-      deductHabitGold(streak, habit);
+      deductHabitGold(streak, habit, getDateKey(weekEnd));
     }
     setHabits((prev) =>
       prev.map((h) => {

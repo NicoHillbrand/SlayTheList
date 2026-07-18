@@ -221,6 +221,14 @@ source of truth.
   with today's deadline, so it's tracked as a prediction and clickable in the
   goals view. Skip the dual-write for negative/constraint predictions ("no video
   games today"), which aren't actionable todos.
+- **Stake gold on predictions by default.** Set `stake: 5` (the app default)
+  when recording a prediction, so the reward loop is live and the payout shows
+  in the daily log. The server escrows it on creation and settles on resolution
+  (quadratic scoring: break-even at 50% confidence, up to 2× back). Pick a
+  realistic `confidence` first — it locks once staked. Don't stake Murphy-Jitsu
+  failure predictions (`murphy: true`); that would reward the bad outcome. The
+  escrow is clamped to the current balance, so glance at `get_gold` if a big
+  batch might overdraw.
 
 ## Backlog sampling
 

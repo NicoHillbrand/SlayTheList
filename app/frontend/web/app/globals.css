@@ -2952,6 +2952,21 @@ body.desktop-app main {
   margin-left: 0.4rem;
 }
 
+/* Net stake earnings on a resolved prediction, shown just left of the
+   confidence %. The coin is an emoji so it always reads gold; only the signed
+   number tints (gold for a gain, pink for a loss). */
+.achievement-pred-earn {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #e9c46a;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.achievement-pred-earn.negative {
+  color: #fda4af;
+}
+
 .achievement-item.prediction .achievement-item-label {
   flex: 1;
 }

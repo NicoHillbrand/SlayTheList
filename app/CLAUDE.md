@@ -41,6 +41,7 @@ Individual rows with full CRUD:
 | Tool | Purpose |
 |------|---------|
 | `get_gold` | Returns the current `GoldState` (`gold` balance + `rewardedTodoIds`). |
+| `list_gold_activity` | Read the gold-activity ledger — what actually earned/spent gold, with per-entry `delta`, `createdAt`, `sourceType`, and `label`. Returns `earnedToday`, `balance`, and `days` (grouped by local day, newest first). `days`: how many recent days (default 7, max 365). `since` (ISO 8601): also returns `sinceEntries` (flat list, `createdAt >= since`) and `earnedSince` (sum of their positive deltas) — use to reconcile UI completions into a session footer. |
 | `award_gold` | Add gold. Requires `amount` (non-negative integer). Optional: `title` — records a named achievement in the daily/shareable log (omit for a silent balance-only bump); `category` — `"Tasks"` \| `"Habits"` \| `"Encouragements"` \| `"Micro"` (small engagement rewards; collapsed into one running "⚡ Micro actions" total in the Tasks section of the log) (unknown/missing → `"Other"`); `source` — which agent submitted it (e.g. `"claude-code"`); `timestamp` — ISO 8601 to backdate; `with_sound: true` plays the gold coin sound in the overlay (best-effort — needs the API server running). |
 | `spend_gold` | Deduct gold (clamps at zero, never negative). Requires `amount`. Optional `with_sound` like above. |
 

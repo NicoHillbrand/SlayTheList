@@ -794,22 +794,34 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>Flips the showBaseOverlay setting through the local API, which
-    /// broadcasts a fresh overlay_state that shows/hides the bar. Keeping the
-    /// setting as the single source of truth keeps the web checkbox in sync.</summary>
+    /// <summary>Toggles the whole overlay — the Base/Friends bar and the gold
+    /// chip together, all-or-nothing — by flipping both settings through the
+    /// local API. The server broadcasts a fresh overlay_state that shows/hides
+    /// both. If either is currently showing, the hotkey hides both; otherwise it
+    /// shows both. Keeping the settings as the single source of truth keeps the
+    /// web checkboxes in sync.</summary>
     private async void ToggleOverlayBar()
     {
-        var next = _lastOverlayState?.ShowBaseOverlay == true ? "false" : "true";
+        var anyVisible = _lastOverlayState?.ShowBaseOverlay == true
+            || _lastOverlayState?.ShowGoldToday == true;
+        var next = anyVisible ? "false" : "true";
         try
         {
-            using var content = new StringContent(
-                JsonSerializer.Serialize(new { value = next }), Encoding.UTF8, "application/json");
-            await _httpClient.PutAsync($"{_apiBaseUrl}/api/settings/showBaseOverlay", content);
+            await Task.WhenAll(
+                SetSetting("showBaseOverlay", next),
+                SetSetting("showGoldToday", next));
         }
         catch
         {
             // API not reachable — nothing to toggle.
         }
+    }
+
+    private async Task SetSetting(string key, string value)
+    {
+        using var content = new StringContent(
+            JsonSerializer.Serialize(new { value }), Encoding.UTF8, "application/json");
+        await _httpClient.PutAsync($"{_apiBaseUrl}/api/settings/{key}", content);
     }
 
     private void UpdateBaseOverlay()

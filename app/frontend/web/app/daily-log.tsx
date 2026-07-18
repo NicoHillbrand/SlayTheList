@@ -158,6 +158,9 @@ type DayGold = {
   // Todos + agent/manual awards, shown with labels.
   tasks: DailyLogEntry[];
   habits: DailyLogEntry[];
+  // Micro-actions (engagement rewards flushed by agents) — always rolled into a
+  // single running-total row at the bottom of Tasks.
+  micro: DailyLogEntry[];
   // Private items (any source) — rolled into a single labelless row under Tasks.
   privateEntries: DailyLogEntry[];
 };
@@ -165,8 +168,42 @@ type DayGold = {
 function buildDayGold(entries: DailyLogEntry[]): DayGold {
   const tasks = entries.filter((e) => (e.sourceType === "todo" || e.sourceType === "manual") && !e.private);
   const habits = entries.filter((e) => e.sourceType === "habit" && !e.private);
+  const micro = entries.filter((e) => e.sourceType === "micro" && !e.private);
   const privateEntries = entries.filter((e) => e.private && !isExcluded(e));
-  return { tasks, habits, privateEntries };
+  return { tasks, habits, micro, privateEntries };
+}
+
+// Collapse a single day's habit-ledger noise. Ticking a habit writes a +N row;
+// un-ticking writes a −N row — so a fumbled tick → untick → tick leaves three
+// rows (+N, −N, +N) even though the only thing that matters is the final state:
+// was the habit done today or not. Group habit rows by name, sum their deltas,
+// and keep one representative row per habit carrying the net gold. Names that net
+// to zero or below (ticked then unticked — not actually done today) drop out
+// entirely. Non-habit rows pass through untouched. Runs per day, before any
+// cross-day aggregation, so range views still count each distinct day once.
+function collapseDailyHabits(entries: DailyLogEntry[]): DailyLogEntry[] {
+  const habits = new Map<string, { rep: DailyLogEntry; total: number }>();
+  const others: DailyLogEntry[] = [];
+  for (const entry of entries) {
+    if (entry.sourceType !== "habit") {
+      others.push(entry);
+      continue;
+    }
+    const key = entry.label || "Habit";
+    const group = habits.get(key);
+    if (group) {
+      group.total += entry.delta;
+      // Prefer the latest positive row as the representative — its id/date back
+      // the move-day picker, so the surviving row always points at a real award.
+      if (entry.delta > 0) group.rep = entry;
+    } else {
+      habits.set(key, { rep: entry, total: entry.delta });
+    }
+  }
+  const collapsed = Array.from(habits.values())
+    .filter((g) => g.total > 0)
+    .map((g) => ({ ...g.rep, delta: g.total }));
+  return [...others, ...collapsed];
 }
 
 // Collapse entries sharing a label into one row (first-seen order kept).
@@ -270,16 +307,18 @@ function PredictionsSection({
                   }}
                 />
               )}
+              {!pending && p.stake != null && (
+                <span
+                  className={`achievement-pred-earn ${net < 0 ? "negative" : ""}`}
+                  title={`Staked ${p.stake}, paid out ${p.payout ?? 0} — net ${net >= 0 ? "+" : "−"}${Math.abs(net)} gold`}
+                >
+                  🪙{net >= 0 ? "+" : ""}
+                  {net}
+                </span>
+              )}
               <span className="achievement-pred-confidence">{p.confidence}%</span>
-              {pending ? (
-                p.stake != null && <span className="achievement-pred-pending">{p.stake} staked</span>
-              ) : (
-                p.stake != null && (
-                  <span className={`achievement-item-delta ${net < 0 ? "negative" : ""}`}>
-                    {net >= 0 ? "+" : ""}
-                    {net}
-                  </span>
-                )
+              {pending && p.stake != null && (
+                <span className="achievement-pred-pending">{p.stake} staked</span>
               )}
             </div>
           );
@@ -426,15 +465,16 @@ function GoldCategories({
   onMoveEntry?: (entryId: string, date: string) => void;
 }) {
   const privateTotal = sumDelta(gold.privateEntries);
-  const taskTotal = sumDelta(gold.tasks) + privateTotal;
-  const showTasks = gold.tasks.length > 0 || gold.privateEntries.length > 0;
+  const microTotal = sumDelta(gold.micro);
+  const taskTotal = sumDelta(gold.tasks) + microTotal + privateTotal;
+  const showTasks = gold.tasks.length > 0 || gold.micro.length > 0 || gold.privateEntries.length > 0;
   return (
     <>
       {showTasks && (
         <CategoryBlock
           icon="✓"
           label="Tasks"
-          count={gold.tasks.length + gold.privateEntries.length}
+          count={gold.tasks.length + gold.micro.length + gold.privateEntries.length}
           total={taskTotal}
           showItems={showItems}
         >
@@ -445,6 +485,15 @@ function GoldCategories({
               <span className="achievement-item-delta">+{entry.delta}</span>
             </div>
           ))}
+          {gold.micro.length > 0 && (
+            <div className="achievement-item">
+              <span className="achievement-item-label">
+                ⚡ Micro actions
+                <span className="achievement-item-mult"> ×{gold.micro.length}</span>
+              </span>
+              <span className="achievement-item-delta">+{microTotal}</span>
+            </div>
+          )}
           {gold.privateEntries.length > 0 && (
             <div className="achievement-item">
               <span className="achievement-item-label is-private">
@@ -651,18 +700,25 @@ export function AchievementSummary({
   const rangeN = isRange ? Math.max(1, parseInt(selected.slice(6), 10) || 7) : 0;
   const scopeKeys = isRange ? Array.from({ length: rangeN }, (_, i) => keyDaysAgo(i)) : [selected];
 
-  // Aggregate gold + predictions over the scope.
-  const scopeEntries = scopeKeys.flatMap((k) => goldByKey.get(k)?.entries ?? []);
+  // Aggregate gold + predictions over the scope. Habit tick/untick noise is
+  // collapsed per day (see collapseDailyHabits) before flattening, so each day
+  // contributes one net row per habit — never a run of +N/−N movements.
+  const scopeEntries = scopeKeys.flatMap((k) => collapseDailyHabits(goldByKey.get(k)?.entries ?? []));
   const gold = buildDayGold(scopeEntries);
   const scopePreds = scopeKeys.flatMap((k) => predsByKey.get(k) ?? []);
 
-  const goldTotal = sumDelta(gold.tasks) + sumDelta(gold.habits) + sumDelta(gold.privateEntries);
+  const goldTotal =
+    sumDelta(gold.tasks) + sumDelta(gold.habits) + sumDelta(gold.micro) + sumDelta(gold.privateEntries);
   const predTotal = scopePreds.reduce((s, p) => s + predictionNet(p), 0);
   const total = goldTotal + predTotal;
 
   const showPredictions = scopePreds.length > 0;
   const nothing =
-    gold.tasks.length === 0 && gold.habits.length === 0 && gold.privateEntries.length === 0 && scopePreds.length === 0;
+    gold.tasks.length === 0 &&
+    gold.habits.length === 0 &&
+    gold.micro.length === 0 &&
+    gold.privateEntries.length === 0 &&
+    scopePreds.length === 0;
   // Single-day heading shows the actual date (weekday + day + month, no year)
   // rather than "Today"/"Yesterday".
   const heading = isRange

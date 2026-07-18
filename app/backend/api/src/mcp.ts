@@ -18,6 +18,8 @@ import {
   getGoldState,
   awardGold,
   deductGold,
+  listGoldActivityDays,
+  getGoldEarnedToday,
 } from "./store.js";
 
 const server = new McpServer({ name: "slaythelist", version: "0.1.0" });
@@ -141,12 +143,52 @@ server.tool(
   },
 );
 
-function mcpCategoryToSourceType(category?: string): "todo" | "habit" | "encouragement" | "prediction" | "manual" {
+server.tool(
+  "list_gold_activity",
+  "Read the gold-activity ledger: what actually earned or spent gold, with per-entry amounts, timestamps, and source. Unlike get_gold (balance only), this lets you see what moved the balance — e.g. reconcile todos the user checked off in the UI this session into the session footer. Entries are grouped by local day, newest first. Pass `since` (ISO timestamp) to also get a flat list of entries recorded at or after that moment (i.e. \"while I've been active\").",
+  {
+    days: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe("How many recent days of ledger to return, newest first. Default 7, max 365."),
+    since: z
+      .string()
+      .optional()
+      .describe("ISO 8601 timestamp. When provided, also returns `sinceEntries` (flat, all entries with createdAt >= since) and `earnedSince` (sum of their positive deltas) — use for session reconciliation."),
+  },
+  async ({ days = 7, since }) => {
+    const clampedDays = Math.min(Math.max(1, Math.trunc(days)), 365);
+    const activityDays = listGoldActivityDays(clampedDays);
+    const result: Record<string, unknown> = {
+      earnedToday: getGoldEarnedToday(),
+      balance: getGoldState().gold,
+      days: activityDays,
+    };
+    const sinceMs = since ? Date.parse(since) : NaN;
+    if (since && !Number.isNaN(sinceMs)) {
+      const sinceEntries = activityDays
+        .flatMap((d) => d.entries)
+        .filter((e) => Date.parse(e.createdAt) >= sinceMs)
+        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
+      result.since = new Date(sinceMs).toISOString();
+      result.sinceEntries = sinceEntries;
+      result.earnedSince = sinceEntries.reduce((sum, e) => (e.delta > 0 ? sum + e.delta : sum), 0);
+    }
+    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+  },
+);
+
+function mcpCategoryToSourceType(
+  category?: string,
+): "todo" | "habit" | "encouragement" | "prediction" | "micro" | "manual" {
   const c = (category ?? "").trim().toLowerCase();
   if (c === "tasks" || c === "task" || c === "todo" || c === "todos") return "todo";
   if (c === "habits" || c === "habit") return "habit";
   if (c === "encouragements" || c === "encouragement" || c === "encourage") return "encouragement";
   if (c === "predictions" || c === "prediction") return "prediction";
+  if (c.startsWith("micro")) return "micro";
   return "manual";
 }
 
@@ -166,7 +208,7 @@ server.tool(
     category: z
       .string()
       .optional()
-      .describe('Which category the entry belongs to: "Tasks", "Habits", "Encouragements", or "Predictions". Unknown/missing falls back to "Other".'),
+      .describe('Which category the entry belongs to: "Tasks", "Habits", "Encouragements", "Predictions", or "Micro" (small engagement/micro-action rewards, shown as one running total in the log). Unknown/missing falls back to "Other".'),
     source: z
       .string()
       .optional()

@@ -599,6 +599,11 @@ export interface GoldActivityContext {
   source?: string | null;
   // ISO timestamp to backdate the entry; defaults to now.
   at?: string | null;
+  // Grouping day (YYYY-MM-DD) this entry belongs under, independent of when it
+  // was recorded. Set it when the thing happened on a different day than the
+  // click — e.g. ticking a habit for a past day. Falls back to the local day of
+  // `at`. Mirrors what updateGoldActivityDate does, but at insert time.
+  date?: string | null;
   // Hidden from shared views (rolled into "Private items").
   private?: boolean;
 }
@@ -618,13 +623,17 @@ export function recordGoldActivity(
 ): void {
   if (!Number.isFinite(delta) || delta === 0) return;
   const at = context.at && !Number.isNaN(Date.parse(context.at)) ? new Date(context.at).toISOString() : new Date().toISOString();
+  // Grouping day: explicit override (validated YYYY-MM-DD) else the local day of
+  // `at`. Keeping this separate from `created_at` means a habit ticked today for
+  // a past day logs under that past day without rewriting when it was recorded.
+  const groupingDate = context.date && /^\d{4}-\d{2}-\d{2}$/.test(context.date) ? context.date : localDateKey(at);
   db.prepare(
     `INSERT INTO gold_activity (id, user_id, date, created_at, delta, source_type, source_id, label, source, private)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     randomUUID(),
     userId ?? "local",
-    localDateKey(at),
+    groupingDate,
     at,
     Math.trunc(delta),
     context.sourceType,
