@@ -1806,6 +1806,13 @@ setInterval(() => {
 
 app.use(errorLogger);
 
+// Overlay visibility is session state, not a sticky preference: hiding the
+// overlay (toggle hotkey or the Settings checkboxes) lasts until the app is
+// restarted, and a fresh start always brings it back. Without this, one hotkey
+// press hides the overlay for good and it is easy to forget it exists.
+setSetting("showGoldToday", "true");
+setSetting("showBaseOverlay", "true");
+
 server.listen(port, () => {
   console.log(`[api] listening on http://localhost:${port}`);
 });

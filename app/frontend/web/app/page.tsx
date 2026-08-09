@@ -6479,6 +6479,9 @@ export default function Page() {
                 />
                 Show overlay bar on screen (gold + base + friends, drag to move)
               </label>
+              <p className="settings-hint">
+                Hiding the overlay (here or with the shortcut) lasts for this session — it comes back the next time the app starts.
+              </p>
               <label className="settings-checkbox-label" style={{ display: "flex", gap: "0.6rem", alignItems: "center", flexWrap: "wrap" }}>
                 <span style={{ minWidth: 180 }}>Overlay bar show/hide shortcut</span>
                 <input
