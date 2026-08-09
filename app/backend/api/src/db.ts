@@ -280,6 +280,12 @@ CREATE TABLE IF NOT EXISTS defense_state (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS crawl_state (
+  id INTEGER PRIMARY KEY CHECK(id = 1),
+  state_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS cloud_connection_state (
   id INTEGER PRIMARY KEY CHECK(id = 1),
   cloud_base_url TEXT,

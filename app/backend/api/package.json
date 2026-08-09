@@ -13,6 +13,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.28.0",
     "@slaythelist/contracts": "0.1.0",
+    "@slaythelist/crawl-engine": "0.1.0",
     "@slaythelist/defense-engine": "0.1.0",
     "better-sqlite3": "^11.8.1",
     "cors": "^2.8.5",

@@ -285,6 +285,30 @@ internal static class NativeMethods
         _ = SetWindowLong32(hWnd, GwlExStyle, current32 | flag);
     }
 
+    // ---- Window dragging by a custom grip ---------------------------------
+    // WPF's Window.DragMove() assumes the window can activate. The overlay
+    // windows are WS_EX_NOACTIVATE so they never steal focus from whatever the
+    // user is working in, so they drag the native way instead: tell Windows the
+    // click landed on the title bar and let it run its own move loop.
+    private const int WmNcLButtonDown = 0x00A1;
+    private const int HtCaption = 0x0002;
+
+    [DllImport("user32.dll")]
+    private static extern bool ReleaseCapture();
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+    /// <summary>Starts a native move-drag for a window that cannot activate.
+    /// Blocks until the user releases the mouse, so callers can persist the new
+    /// position on the next line.</summary>
+    public static void BeginWindowDrag(IntPtr hWnd)
+    {
+        if (hWnd == IntPtr.Zero) return;
+        ReleaseCapture();
+        SendMessage(hWnd, WmNcLButtonDown, (IntPtr)HtCaption, IntPtr.Zero);
+    }
+
     // ---- Global hotkey (RegisterHotKey / WM_HOTKEY) -----------------------
     public const int WmHotkey = 0x0312;
     public const uint ModAlt = 0x0001;

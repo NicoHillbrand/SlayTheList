@@ -76,6 +76,13 @@ import {
   buyDefenseUpgrade,
   runDefenseSandboxAction,
   setDefenseDeathMode,
+  getCrawlSnapshot,
+  playCrawlCardAction,
+  endCrawlTurnAction,
+  chooseCrawlRewardAction,
+  restartCrawlAction,
+  setCrawlLockAction,
+  type CrawlSnapshot,
 } from "./store.js";
 import { referenceImagesDir } from "./db.js";
 import { testDetection, clearRefPixelCache, getDetectionRefs, DETECTION_COMPARE_SIZE, DETECTION_TEMPLATE_WIDTH, DETECTION_TEMPLATE_HEIGHT } from "./image-match.js";
@@ -132,6 +139,7 @@ function buildOverlayState(): OverlayState & {
   goldEarnedToday: number;
   showBaseOverlay: boolean;
   overlayToggleHotkey: string;
+  crawlToggleHotkey: string;
 } {
   const rawInterval = Number(getSetting("detectionIntervalMs"));
   const detectionIntervalMs = Number.isFinite(rawInterval) && rawInterval > 0
@@ -151,6 +159,7 @@ function buildOverlayState(): OverlayState & {
     goldEarnedToday: showGoldToday ? getGoldEarnedToday() : 0,
     showBaseOverlay: getSetting("showBaseOverlay") === "true",
     overlayToggleHotkey: getSetting("overlayToggleHotkey") ?? "",
+    crawlToggleHotkey: getSetting("crawlToggleHotkey") ?? "",
   };
 }
 
@@ -1733,6 +1742,58 @@ app.post("/api/defense/sandbox", (req, res) => {
     return ok(res, runDefenseSandboxAction({ action: "reset" }));
   }
   badRequest(res, "action must be 'skip', 'grant', or 'reset'");
+});
+
+// ---------------------------------------------------------------------------
+// The Crawl — overlay dungeon run. Every route returns the same full snapshot,
+// so the panel replaces its state wholesale and never has to merge.
+// ---------------------------------------------------------------------------
+
+/** Wraps a crawl mutation: engine errors become 400s, not 500s. */
+function crawlRoute(res: express.Response, run: () => CrawlSnapshot) {
+  try {
+    ok(res, run());
+  } catch (err) {
+    badRequest(res, err instanceof Error ? err.message : "crawl action failed");
+  }
+}
+
+app.get("/api/crawl", (_req, res) => {
+  crawlRoute(res, () => getCrawlSnapshot());
+});
+
+app.post("/api/crawl/play", (req, res) => {
+  const handIndex = req.body?.handIndex;
+  if (typeof handIndex !== "number" || !Number.isInteger(handIndex) || handIndex < 0) {
+    return badRequest(res, "handIndex must be a non-negative integer");
+  }
+  crawlRoute(res, () => playCrawlCardAction(handIndex));
+});
+
+app.post("/api/crawl/end-turn", (_req, res) => {
+  crawlRoute(res, () => endCrawlTurnAction());
+});
+
+app.post("/api/crawl/reward", (req, res) => {
+  const cardId = req.body?.cardId;
+  // null is meaningful here: it means "skip the card and keep the deck lean".
+  if (cardId !== null && cardId !== undefined && typeof cardId !== "string") {
+    return badRequest(res, "cardId must be a string or null");
+  }
+  crawlRoute(res, () => chooseCrawlRewardAction(cardId ?? null));
+});
+
+app.post("/api/crawl/restart", (_req, res) => {
+  crawlRoute(res, () => restartCrawlAction());
+});
+
+// The agent's hook: pin a todo so the run stays frozen until it is done.
+app.post("/api/crawl/lock", (req, res) => {
+  const todoId = req.body?.todoId;
+  if (todoId !== null && todoId !== undefined && typeof todoId !== "string") {
+    return badRequest(res, "todoId must be a string or null");
+  }
+  crawlRoute(res, () => setCrawlLockAction(todoId ?? null));
 });
 
 app.get("/api/overlay-state", (_req, res) => {

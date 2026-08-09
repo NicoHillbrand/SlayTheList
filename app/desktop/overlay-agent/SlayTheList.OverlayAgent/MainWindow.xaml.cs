@@ -64,7 +64,13 @@ public partial class MainWindow : Window
         "SlayTheList", "gold-indicator-window.json");
     private OverlayBarWindow? _overlayBarWindow;
     private const int OverlayToggleHotkeyId = 0xB001;
+    private const int CrawlToggleHotkeyId = 0xB002;
     private string _registeredHotkey = "";
+    private string _registeredCrawlHotkey = "";
+    // The Crawl window is a peer of the overlay bar, not a child of it: the two
+    // hotkeys are independent, so showing the crawl must not drag the gold chip
+    // and bar on screen with it, and hiding the bar must not take the crawl down.
+    private OverlayPanelWindow? _crawlWindow;
 
     [DllImport("winmm.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool PlaySound(string? soundName, IntPtr moduleHandle, uint soundFlags);
@@ -93,14 +99,22 @@ public partial class MainWindow : Window
         Closed += (_, _) =>
         {
             _windowSyncTimer.Stop();
-            if (_registeredHotkey.Length > 0 && _overlayWindowHandle != IntPtr.Zero)
+            if (_overlayWindowHandle != IntPtr.Zero)
             {
-                NativeMethods.UnregisterHotKey(_overlayWindowHandle, OverlayToggleHotkeyId);
+                if (_registeredHotkey.Length > 0)
+                {
+                    NativeMethods.UnregisterHotKey(_overlayWindowHandle, OverlayToggleHotkeyId);
+                }
+                if (_registeredCrawlHotkey.Length > 0)
+                {
+                    NativeMethods.UnregisterHotKey(_overlayWindowHandle, CrawlToggleHotkeyId);
+                }
             }
             _httpClient.Dispose();
             _detectionIndicatorWindow?.Close();
             _goldIndicatorWindow?.Close();
             _overlayBarWindow?.Close();
+            _crawlWindow?.Close();
         };
     }
 
@@ -766,32 +780,65 @@ public partial class MainWindow : Window
         UpdateOverlayToggleHotkey();
     }
 
-    /// <summary>Registers (or re-registers) the global hotkey that toggles the
-    /// overlay bar. Called whenever a new overlay state arrives; only acts when
-    /// the configured combo actually changed.</summary>
+    /// <summary>Registers (or re-registers) the global hotkeys. Called whenever
+    /// a new overlay state arrives; each only acts when its combo changed.</summary>
     private void UpdateOverlayToggleHotkey()
     {
-        var combo = _lastOverlayState?.OverlayToggleHotkey ?? "";
-        if (combo == _registeredHotkey || _overlayWindowHandle == IntPtr.Zero)
+        _registeredHotkey = RebindHotkey(
+            OverlayToggleHotkeyId, _registeredHotkey, _lastOverlayState?.OverlayToggleHotkey ?? "");
+        _registeredCrawlHotkey = RebindHotkey(
+            CrawlToggleHotkeyId, _registeredCrawlHotkey, _lastOverlayState?.CrawlToggleHotkey ?? "");
+    }
+
+    /// <summary>Swaps one global hotkey registration. Returns the combo now
+    /// registered, which is `desired` unless there is no window to bind to.</summary>
+    private string RebindHotkey(int id, string current, string desired)
+    {
+        if (desired == current || _overlayWindowHandle == IntPtr.Zero)
         {
-            return;
+            return current;
         }
 
-        if (_registeredHotkey.Length > 0)
+        if (current.Length > 0)
         {
-            NativeMethods.UnregisterHotKey(_overlayWindowHandle, OverlayToggleHotkeyId);
+            NativeMethods.UnregisterHotKey(_overlayWindowHandle, id);
         }
-        _registeredHotkey = combo;
 
-        var parsed = NativeMethods.ParseHotkey(combo);
+        var parsed = NativeMethods.ParseHotkey(desired);
         if (parsed is not null)
         {
             NativeMethods.RegisterHotKey(
                 _overlayWindowHandle,
-                OverlayToggleHotkeyId,
+                id,
                 parsed.Value.Modifiers | NativeMethods.ModNoRepeat,
                 parsed.Value.Vk);
         }
+        return desired;
+    }
+
+    /// <summary>Shows or hides the Crawl window. Deliberately touches no
+    /// settings: the Crawl hotkey means "show me the run" and nothing else, so
+    /// it never pulls the gold chip or the bar on screen, and the overlay
+    /// hotkey never takes the run away.</summary>
+    private void ToggleCrawlPanel()
+    {
+        if (_crawlWindow is null)
+        {
+            var webBaseUrl = Environment.GetEnvironmentVariable("SLAYTHELIST_WEB_URL") ?? "http://localhost:4000";
+            // Its own drag grip and its own remembered position — it does not
+            // dock to the bar, so it never moves when the bar is toggled.
+            _crawlWindow = new OverlayPanelWindow(webBaseUrl, "The Crawl", "crawl-window.json");
+            _crawlWindow.NavigatePanel("crawl");
+            _crawlWindow.Closed += (_, _) => _crawlWindow = null;
+        }
+
+        if (_crawlWindow.IsVisible)
+        {
+            _crawlWindow.Hide();
+            return;
+        }
+
+        _crawlWindow.Show();
     }
 
     /// <summary>Toggles the whole overlay — the Base/Friends bar and the gold
@@ -1296,6 +1343,13 @@ public partial class MainWindow : Window
         {
             handled = true;
             ToggleOverlayBar();
+            return IntPtr.Zero;
+        }
+
+        if (msg == NativeMethods.WmHotkey && wParam.ToInt32() == CrawlToggleHotkeyId)
+        {
+            handled = true;
+            ToggleCrawlPanel();
             return IntPtr.Zero;
         }
 

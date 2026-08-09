@@ -2,6 +2,23 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
+  MOMENTUM_WINDOW_MS,
+  blockedReason as crawlBlockedReason,
+  chooseReward as chooseCrawlReward,
+  createCrawlState,
+  emptyCrawlMeta,
+  endTurn as endCrawlTurn,
+  energyAvailable as crawlEnergyAvailable,
+  normalizeDay as normalizeCrawlDay,
+  playCard as playCrawlCard,
+  restartRun as restartCrawlRun,
+  setLock as setCrawlLock,
+  type CardId as CrawlCardId,
+  type CrawlContext,
+  type CrawlEvent,
+  type CrawlState,
+} from "@slaythelist/crawl-engine";
+import {
   DEFAULT_PARAMS as DEFENSE_BASE_PARAMS,
   advance as advanceDefense,
   buyUpgrade as buyDefenseSlot,
@@ -1358,4 +1375,211 @@ export function runDefenseSandboxAction(input: DefenseSandboxAction): DefenseSna
   const { state: advanced, events } = advanceDefense(next, Date.now(), params);
   saveDefenseRow(true, advanced, wallet);
   return toDefenseSnapshot(true, advanced, wallet, events);
+}
+
+// ---------------------------------------------------------------------------
+// The Crawl — the overlay dungeon run from @slaythelist/crawl-engine, stored as
+// a singleton. The engine is pure and knows nothing about gold or todos; this
+// layer resolves both into a `CrawlContext` before every call, and is the only
+// place gold actually moves (the boss bounty).
+//
+// Energy is a MIRROR of today's ledger, not a deduction: playing cards never
+// lowers the real balance. That keeps the crawl from competing with the lane
+// defense over the same wallet, and means the thing you spend is the day's
+// *work*, which is what the run is meant to measure.
+// ---------------------------------------------------------------------------
+
+export interface CrawlSnapshot {
+  state: CrawlState;
+  /** Energy still spendable today. */
+  energy: number;
+  /** Today's earned gold — the full size of today's pool. */
+  goldEarnedToday: number;
+  /** True when a todo was completed within the momentum window. */
+  momentum: boolean;
+  /** Null when the player can act, otherwise why they cannot. */
+  blocked: string | null;
+  /** The pinned todo, resolved for display. Null when nothing is pinned. */
+  lock: { todoId: string; title: string; done: boolean } | null;
+  /** Events produced by the action that served this snapshot. */
+  events: CrawlEvent[];
+}
+
+type CrawlRow = { state_json: string };
+
+function loadCrawlRow(): CrawlState {
+  const row = db.prepare("SELECT state_json FROM crawl_state WHERE id = 1").get() as
+    | CrawlRow
+    | undefined;
+  if (row) {
+    const parsed = JSON.parse(row.state_json) as Partial<CrawlState> & { version?: number };
+    if (parsed.version === 1) {
+      // Layer the stored blob over a fresh state so a field added to the engine
+      // after this row was written gets its default instead of `undefined`.
+      // Absent JSON keys do not override, so this only fills gaps. Without it a
+      // new boolean silently reads as false-ish everywhere and can brick a run.
+      const defaults = createCrawlState(
+        parsed.seed ?? freshCrawlSeed(),
+        Date.now(),
+        todayKey(),
+        parsed.meta ?? emptyCrawlMeta(),
+      );
+      return { ...defaults, ...parsed };
+    }
+    // Unknown engine version — start over but keep whatever meta survived.
+    const meta = parsed.meta && typeof parsed.meta.bestFloor === "number" ? parsed.meta : emptyCrawlMeta();
+    return createCrawlState(freshCrawlSeed(), Date.now(), todayKey(), meta);
+  }
+  return createCrawlState(freshCrawlSeed(), Date.now(), todayKey(), emptyCrawlMeta());
+}
+
+function saveCrawlRow(state: CrawlState): void {
+  db.prepare(
+    `INSERT INTO crawl_state (id, state_json, updated_at)
+     VALUES (1, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       state_json = excluded.state_json,
+       updated_at = excluded.updated_at`,
+  ).run(JSON.stringify(state), new Date().toISOString());
+}
+
+function freshCrawlSeed(): number {
+  return Math.floor(Math.random() * 0x7fffffff);
+}
+
+function todayKey(): string {
+  return localDateKey(new Date().toISOString());
+}
+
+/** The pinned todo, or null. Reads the live row so "done" is never stale. */
+function resolveCrawlLock(state: CrawlState): CrawlSnapshot["lock"] {
+  if (!state.lockTodoId) return null;
+  const row = db.prepare("SELECT id, title, status FROM todos WHERE id = ?").get(state.lockTodoId) as
+    | { id: string; title: string; status: string }
+    | undefined;
+  if (!row) {
+    // The todo was deleted — treat the lock as satisfied rather than bricking
+    // the run. A lock the player can never clear would be a dead end.
+    return { todoId: state.lockTodoId, title: state.lockTodoTitle ?? "(deleted todo)", done: true };
+  }
+  return { todoId: row.id, title: row.title, done: row.status === "done" };
+}
+
+/** True when any todo was completed within the momentum window. */
+function hasCrawlMomentum(nowMs: number): boolean {
+  const since = new Date(nowMs - MOMENTUM_WINDOW_MS).toISOString();
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM todos
+       WHERE status = 'done' AND completed_at IS NOT NULL AND completed_at >= ?`,
+    )
+    .get(since) as { n: number };
+  return row.n > 0;
+}
+
+function crawlContext(state: CrawlState): CrawlContext {
+  const nowMs = Date.now();
+  const lock = resolveCrawlLock(state);
+  return {
+    goldEarnedToday: getGoldEarnedToday(),
+    today: todayKey(),
+    momentum: hasCrawlMomentum(nowMs),
+    unlocked: lock === null || lock.done,
+    nowMs,
+  };
+}
+
+/**
+ * Describe the world as it stands AFTER an action. The context is rebuilt from
+ * the resulting state rather than reusing the one the mutation ran against —
+ * otherwise pinning a lock would report `blocked: null`, because the pre-action
+ * context was computed while the run was still unlocked.
+ */
+function toCrawlSnapshot(state: CrawlState, events: CrawlEvent[]): CrawlSnapshot {
+  const ctx = crawlContext(state);
+  return {
+    state,
+    energy: crawlEnergyAvailable(state, ctx),
+    goldEarnedToday: ctx.goldEarnedToday,
+    momentum: ctx.momentum,
+    blocked: crawlBlockedReason(state, ctx),
+    lock: resolveCrawlLock(state),
+    events,
+  };
+}
+
+/**
+ * Run one engine mutation, persist the result, and pay out any gold the engine
+ * asked for. All the crawl endpoints funnel through here so the day rollover,
+ * the save, and the bounty can never be forgotten by a caller.
+ */
+function runCrawlAction(
+  mutate: (state: CrawlState, ctx: CrawlContext) => { state: CrawlState; events: CrawlEvent[] },
+): CrawlSnapshot {
+  const loaded = loadCrawlRow();
+  const ctx = crawlContext(loaded);
+  // Apply the midnight reset even when the action itself is a no-op, so an idle
+  // read still rolls the energy pool over to today.
+  const normalized = normalizeCrawlDay(loaded, ctx.today);
+  const { state, events } = mutate(normalized, ctx);
+
+  for (const event of events) {
+    if (event.type === "runWon") {
+      awardGold(event.goldReward, undefined, {
+        sourceType: "manual",
+        label: `The Crawl: felled ${lastSlainName(events) ?? "the boss"}`,
+        source: "crawl",
+      });
+    }
+  }
+
+  saveCrawlRow(state);
+  return toCrawlSnapshot(state, events);
+}
+
+function lastSlainName(events: CrawlEvent[]): string | null {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i];
+    if (event.type === "enemySlain") return event.name;
+  }
+  return null;
+}
+
+export function getCrawlSnapshot(): CrawlSnapshot {
+  return runCrawlAction((state) => ({ state, events: [] }));
+}
+
+export function playCrawlCardAction(handIndex: number): CrawlSnapshot {
+  return runCrawlAction((state, ctx) => playCrawlCard(state, handIndex, ctx));
+}
+
+export function endCrawlTurnAction(): CrawlSnapshot {
+  return runCrawlAction((state, ctx) => endCrawlTurn(state, ctx));
+}
+
+export function chooseCrawlRewardAction(cardId: CrawlCardId | null): CrawlSnapshot {
+  return runCrawlAction((state, ctx) => chooseCrawlReward(state, cardId, ctx));
+}
+
+export function restartCrawlAction(): CrawlSnapshot {
+  return runCrawlAction((state, ctx) =>
+    restartCrawlRun(state, freshCrawlSeed(), ctx.nowMs, ctx.today),
+  );
+}
+
+/**
+ * Pin a todo to the run (or clear the pin with null). This is the agent's hook:
+ * it creates a sub-todo, pins it, and the run stays frozen until that todo is
+ * done. Throws when the todo does not exist, so a typo cannot brick the run.
+ */
+export function setCrawlLockAction(todoId: string | null): CrawlSnapshot {
+  let title: string | null = null;
+  if (todoId) {
+    const row = db.prepare("SELECT title FROM todos WHERE id = ?").get(todoId) as
+      | { title: string }
+      | undefined;
+    if (!row) throw new Error("todo not found");
+    title = row.title;
+  }
+  return runCrawlAction((state) => ({ state: setCrawlLock(state, todoId, title), events: [] }));
 }

@@ -45,6 +45,23 @@ Individual rows with full CRUD:
 | `award_gold` | Add gold. Requires `amount` (non-negative integer). Optional: `title` — records a named achievement in the daily/shareable log (omit for a silent balance-only bump); `category` — `"Tasks"` \| `"Habits"` \| `"Encouragements"` \| `"Micro"` (small engagement rewards; collapsed into one running "⚡ Micro actions" total in the Tasks section of the log) (unknown/missing → `"Other"`); `source` — which agent submitted it (e.g. `"claude-code"`); `timestamp` — ISO 8601 to backdate; `with_sound: true` plays the gold coin sound in the overlay (best-effort — needs the API server running). |
 | `spend_gold` | Deduct gold (clamps at zero, never negative). Requires `amount`. Optional `with_sound` like above. |
 
+### The Crawl (overlay dungeon run)
+
+| Tool | Purpose |
+|------|---------|
+| `get_crawl` | Read the run: floor/room, HP, current enemy, hand and deck, energy left today, and any pinned lock. |
+| `lock_crawl_on_todo` | Pin a todo to the run. While it is not `done` the run is **frozen** — no card can be played, no room entered, whatever the energy. Pass `todo_id: null` to clear. Create the todo with `create_todo` first. |
+
+The design in one line: **energy is the gold you earned today** (a mirror of the
+ledger, expiring at midnight — playing never lowers the real balance), and
+**locks are todos**. Both are minted by real work only. Clearing the boss pays 10
+gold back into the ledger. See `shared/crawl-engine` for the rules and
+`pacing.test.ts` for the balance guards.
+
+When suggesting sub-tasks in a session, `lock_crawl_on_todo` is how a suggestion
+becomes the thing that unlocks the next turn. Use it deliberately: a lock the
+user cannot finish today stalls their run.
+
 ### Habits, Predictions, Reflections
 These are stored as JSON arrays. The pattern for any modification is **read → modify → write**:
 1. Call `list_habits` / `list_predictions` / `list_reflections` to get the current array.
@@ -121,6 +138,29 @@ These are stored as JSON arrays. The pattern for any modification is **read → 
 - **History backfill**: a prediction written already-resolved with both `stake` and `payout` is stored as-is with no gold movement.
 
 The tool result reports `staked`, `paidOut`, `refunded`, and the resulting `gold` balance.
+
+### CrawlState
+
+Full shape in `shared/crawl-engine/src/types.ts`. The fields that matter when
+reasoning about a run:
+
+```json
+{
+  "floor": 1, "room": 0,
+  "status": "fighting | reward | dead | victory",
+  "hp": 40, "maxHp": 40, "block": 0, "strength": 0,
+  "playedThisTurn": false,
+  "deck": ["strike", "..."], "hand": ["..."],
+  "enemy": { "name": "Cellar Rat", "hp": 18, "attack": 4, "turnsUntilHeavy": 3, "boss": false },
+  "energyDay": "YYYY-MM-DD", "energyUsed": 0,
+  "lockTodoId": "uuid | null", "lockTodoTitle": "string | null"
+}
+```
+
+Two rules that are easy to get wrong: HP resets in full every room (it measures
+one fight, not the run), and the enemy only swings in response to a played card
+— `playedThisTurn: false` means nothing can hurt the player, so an idle run is
+never in danger.
 
 ### ReflectionEntry
 ```json

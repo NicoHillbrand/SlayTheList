@@ -210,15 +210,22 @@ public sealed class OverlayBarWindow : Window
     }
 }
 
-/// <summary>A WebView2 content window that hosts a single overlay panel
-/// (?panel=base or ?panel=friends), docked below the bar. Opaque (WebView2 can't
-/// render in a transparent window) with a matching thin gold border. Reports its
-/// content height via postMessage so the window hugs the content.</summary>
+/// <summary>A WebView2 content window that hosts a single overlay panel. Opaque
+/// (WebView2 can't render in a transparent window) with a matching thin gold
+/// border. Reports its content height via postMessage so the window hugs the
+/// content.
+///
+/// Two modes. With no <c>gripTitle</c> it is a dropdown owned by the bar
+/// (?panel=base, ?panel=friends), positioned by the bar. With a
+/// <c>gripTitle</c> it is a standalone window with its own drag grip and its
+/// own remembered position — that is the Crawl window, which has no connection
+/// to the bar at all.</summary>
 internal sealed class OverlayPanelWindow : Window
 {
     private const double PanelWidth = 340;
     private const double MinContentHeight = 48;
     private const double MaxContentHeight = 780;
+    private const double GripHeight = 22;
 
     private static readonly string WebViewDataFolder = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -228,14 +235,24 @@ internal sealed class OverlayPanelWindow : Window
     private readonly WebView2 _webView = new();
     private readonly TextBlock _fallbackText;
     private readonly DispatcherTimer _retryTimer;
+    private readonly string? _boundsPath;
+    private readonly double _chromeHeight;
     private bool _webViewReady;
     private bool _pageLoaded;
     private string _pendingPanel = "base";
     private string _panelUrl = "";
 
-    public OverlayPanelWindow(string webBaseUrl)
+    private sealed record PanelBounds(double Left, double Top);
+
+    public OverlayPanelWindow(string webBaseUrl, string? gripTitle = null, string? boundsFileName = null)
     {
         _webBaseUrl = webBaseUrl;
+        _chromeHeight = gripTitle is null ? 0 : GripHeight;
+        _boundsPath = boundsFileName is null
+            ? null
+            : Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "SlayTheList", boundsFileName);
 
         WindowStyle = WindowStyle.None;
         ResizeMode = ResizeMode.NoResize;
@@ -261,12 +278,32 @@ internal sealed class OverlayPanelWindow : Window
         grid.Children.Add(_fallbackText);
         grid.Children.Add(_webView);
 
+        UIElement body = grid;
+        if (gripTitle is not null)
+        {
+            // WebView2 swallows every mouse event in the client area, so a
+            // standalone window needs its own strip to grab hold of.
+            var panel = new DockPanel { LastChildFill = true };
+            var grip = BuildGrip(gripTitle);
+            DockPanel.SetDock(grip, Dock.Top);
+            panel.Children.Add(grip);
+            panel.Children.Add(grid);
+            body = panel;
+        }
+
         Content = new Border
         {
             BorderBrush = new SolidColorBrush(Color.FromArgb(120, 212, 170, 71)),
             BorderThickness = new Thickness(1),
-            Child = grid,
+            Child = body,
         };
+
+        if (_boundsPath is not null)
+        {
+            Left = SystemParameters.PrimaryScreenWidth - PanelWidth - 40;
+            Top = 130;
+            RestoreSavedBounds();
+        }
 
         _retryTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
         _retryTimer.Tick += (_, _) =>
@@ -293,6 +330,97 @@ internal sealed class OverlayPanelWindow : Window
             _retryTimer.Stop();
             _webView.Dispose();
         };
+    }
+
+    /// <summary>The drag strip for a standalone panel: title on the left, a hide
+    /// button on the right, grab anywhere else to move the window.</summary>
+    private Border BuildGrip(string title)
+    {
+        var label = new TextBlock
+        {
+            Text = title,
+            FontSize = 11,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = new SolidColorBrush(Color.FromRgb(0xf5, 0xc5, 0x42)),
+            VerticalAlignment = VerticalAlignment.Center,
+            IsHitTestVisible = false,
+        };
+
+        var hide = new TextBlock
+        {
+            Text = "✕",
+            FontSize = 11,
+            Foreground = new SolidColorBrush(Color.FromRgb(0x8a, 0x89, 0xa6)),
+            VerticalAlignment = VerticalAlignment.Center,
+            Cursor = Cursors.Hand,
+            Padding = new Thickness(6, 0, 2, 0),
+            ToolTip = "Hide (the run is saved — nothing is lost)",
+        };
+        hide.MouseLeftButtonDown += (_, args) => { args.Handled = true; Hide(); };
+
+        var row = new DockPanel { LastChildFill = true };
+        DockPanel.SetDock(hide, Dock.Right);
+        row.Children.Add(hide);
+        row.Children.Add(label);
+
+        var grip = new Border
+        {
+            Height = GripHeight,
+            Padding = new Thickness(7, 0, 5, 0),
+            Background = new SolidColorBrush(Color.FromRgb(0x1e, 0x1e, 0x38)),
+            Cursor = Cursors.SizeAll,
+            ToolTip = "Drag to move",
+            Child = row,
+        };
+        grip.MouseLeftButtonDown += (_, args) =>
+        {
+            if (args.ButtonState != MouseButtonState.Pressed)
+                return;
+            // Native move loop; blocks until the mouse is released.
+            NativeMethods.BeginWindowDrag(new WindowInteropHelper(this).Handle);
+            SaveBounds();
+        };
+        return grip;
+    }
+
+    private void RestoreSavedBounds()
+    {
+        try
+        {
+            if (_boundsPath is null || !File.Exists(_boundsPath))
+                return;
+            var bounds = JsonSerializer.Deserialize<PanelBounds>(File.ReadAllText(_boundsPath));
+            if (bounds is null)
+                return;
+            var vLeft = SystemParameters.VirtualScreenLeft;
+            var vTop = SystemParameters.VirtualScreenTop;
+            var vRight = vLeft + SystemParameters.VirtualScreenWidth;
+            var vBottom = vTop + SystemParameters.VirtualScreenHeight;
+            // Keep a grabbable sliver on screen even if the display setup changed.
+            Left = Math.Clamp(bounds.Left, vLeft, Math.Max(vLeft, vRight - 80));
+            Top = Math.Clamp(bounds.Top, vTop, Math.Max(vTop, vBottom - 40));
+        }
+        catch
+        {
+            // Corrupt bounds file — fall back to the default position.
+        }
+    }
+
+    private void SaveBounds()
+    {
+        try
+        {
+            if (_boundsPath is null)
+                return;
+            var dir = Path.GetDirectoryName(_boundsPath);
+            if (dir is not null)
+                Directory.CreateDirectory(dir);
+            File.WriteAllText(_boundsPath, JsonSerializer.Serialize(new PanelBounds(Left, Top)));
+        }
+        catch
+        {
+            // Best-effort persistence; ignore write failures.
+        }
     }
 
     /// <summary>Point the panel at base or friends. Navigates immediately if the
@@ -346,7 +474,9 @@ internal sealed class OverlayPanelWindow : Window
                         && doc.RootElement.TryGetProperty("height", out var height)
                         && height.TryGetDouble(out var contentHeight))
                     {
-                        Height = Math.Clamp(contentHeight + 2, MinContentHeight, MaxContentHeight);
+                        // The grip is chrome, not content — the page knows nothing about it.
+                        Height = Math.Clamp(contentHeight + 2, MinContentHeight, MaxContentHeight)
+                            + _chromeHeight;
                     }
                 }
                 catch

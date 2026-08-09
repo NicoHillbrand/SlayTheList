@@ -1,0 +1,372 @@
+/* ============================================================
+   The Crawl — overlay dungeon run.
+   Built for a ~340px panel first; the /crawl page just gives it
+   more breathing room. Dark + gold, self-contained, no assets.
+   ============================================================ */
+
+.root {
+  --bg0: #0a0a12;
+  --bg1: #12121f;
+  --panel: #16162a;
+  --panel2: #1e1e38;
+  --line: #2c2c48;
+  --gold: #f5c542;
+  --gold-dim: #b8942f;
+  --ink: #e8e6f0;
+  --muted: #8a89a6;
+  --good: #7fd88f;
+  --bad: #e46a6a;
+  --energy: #6fb7e8;
+
+  color: var(--ink);
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 12px;
+  container-type: inline-size;
+}
+
+.loading,
+.error {
+  padding: 24px 0;
+  text-align: center;
+  color: var(--muted);
+}
+.error {
+  color: var(--bad);
+}
+
+/* ---------- Status strip ---------- */
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  white-space: nowrap;
+}
+
+.depth {
+  font-weight: 600;
+  color: var(--gold);
+}
+
+.energy {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-weight: 600;
+  color: var(--energy);
+}
+
+.energyDim {
+  color: var(--muted);
+}
+
+.momentum {
+  color: var(--good);
+  font-weight: 600;
+}
+
+.spacer {
+  flex: 1;
+}
+
+/* ---------- Bars ---------- */
+
+.bar {
+  position: relative;
+  height: 7px;
+  border-radius: 4px;
+  background: #0d0d18;
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.barFill {
+  height: 100%;
+  transition: width 220ms ease;
+}
+
+.hpFill {
+  background: linear-gradient(90deg, #d05555, #e88b6a);
+}
+
+.enemyFill {
+  background: linear-gradient(90deg, #8a4f9e, #c471d6);
+}
+
+.blockPip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: #8fc7f0;
+  font-weight: 600;
+}
+
+/* ---------- Enemy ---------- */
+
+.enemy {
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: linear-gradient(180deg, var(--panel2), var(--panel));
+  margin-bottom: 8px;
+}
+
+.enemyBoss {
+  border-color: var(--gold-dim);
+  box-shadow: 0 0 0 1px rgba(245, 197, 66, 0.15) inset;
+}
+
+.enemyTop {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 5px;
+}
+
+.enemyGlyph {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.enemyName {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.enemyHp {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.intent {
+  margin-top: 5px;
+  color: var(--muted);
+}
+
+.intentHeavy {
+  color: var(--bad);
+  font-weight: 600;
+}
+
+/* ---------- Player ---------- */
+
+.player {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.playerHp {
+  flex: 1;
+}
+
+/* ---------- Hand ---------- */
+
+.hand {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 5px;
+  margin-bottom: 8px;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 3px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: linear-gradient(180deg, var(--panel2), #14142a);
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+  text-align: center;
+  min-height: 74px;
+  transition: transform 120ms ease, border-color 120ms ease;
+}
+
+.card:hover:not(:disabled) {
+  transform: translateY(-2px);
+  border-color: var(--gold-dim);
+}
+
+.card:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.cardGlyph {
+  font-size: 17px;
+  line-height: 1;
+}
+
+.cardName {
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.1;
+}
+
+.cardCost {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--energy);
+}
+
+.cardCostFree {
+  color: var(--good);
+}
+
+.cardEmpty {
+  border-style: dashed;
+  opacity: 0.3;
+  cursor: default;
+}
+
+/* ---------- Buttons ---------- */
+
+.actions {
+  display: flex;
+  gap: 6px;
+}
+
+.btn {
+  flex: 1;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--panel2);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--gold-dim);
+  color: var(--gold);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btnPrimary {
+  border-color: var(--gold-dim);
+  color: var(--gold);
+}
+
+/* ---------- Banners ---------- */
+
+.banner {
+  padding: 7px 9px;
+  border-radius: 7px;
+  margin-bottom: 8px;
+  line-height: 1.35;
+}
+
+.bannerLock {
+  border: 1px solid #6a5320;
+  background: rgba(245, 197, 66, 0.08);
+  color: var(--gold);
+}
+
+.bannerDry {
+  border: 1px solid var(--line);
+  background: rgba(111, 183, 232, 0.07);
+  color: #9dc9e8;
+}
+
+.bannerTitle {
+  font-weight: 700;
+  display: block;
+  margin-bottom: 1px;
+}
+
+.bannerNote {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* ---------- Reward / end states ---------- */
+
+.rewardHead {
+  font-weight: 600;
+  color: var(--gold);
+  margin-bottom: 6px;
+}
+
+.rewardRow {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 5px;
+  margin-bottom: 8px;
+}
+
+.rewardCard {
+  min-height: 96px;
+  justify-content: flex-start;
+}
+
+.cardText {
+  font-size: 9px;
+  color: var(--muted);
+  line-height: 1.2;
+}
+
+.endState {
+  text-align: center;
+  padding: 14px 6px;
+}
+
+.endGlyph {
+  font-size: 32px;
+  line-height: 1;
+  margin-bottom: 6px;
+}
+
+.endTitle {
+  font-weight: 700;
+  font-size: 14px;
+  margin-bottom: 3px;
+}
+
+.endTitleWin {
+  color: var(--gold);
+}
+
+.endTitleLose {
+  color: var(--bad);
+}
+
+.endNote {
+  color: var(--muted);
+  margin-bottom: 10px;
+  line-height: 1.4;
+}
+
+/* ---------- Log ---------- */
+
+.log {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+  min-height: 16px;
+}
+
+.logHit {
+  color: var(--bad);
+}
+.logGood {
+  color: var(--good);
+}

@@ -53,6 +53,11 @@ public sealed class OverlayPayload
     /// overlay bar. Empty = no hotkey.</summary>
     [JsonPropertyName("overlayToggleHotkey")]
     public string OverlayToggleHotkey { get; set; } = string.Empty;
+
+    /// <summary>Global hotkey that opens the Crawl panel directly, showing the
+    /// overlay first if it is hidden. Empty = no hotkey.</summary>
+    [JsonPropertyName("crawlToggleHotkey")]
+    public string CrawlToggleHotkey { get; set; } = string.Empty;
 }
 
 public sealed class GameWindowHint

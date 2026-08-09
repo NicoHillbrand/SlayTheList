@@ -934,6 +934,75 @@ function SortableHabitRow({
   );
 }
 
+/**
+ * A settings row that captures a global hotkey combo. Click the field, press a
+ * combo (at least one modifier plus a main key), Esc clears it. The value is
+ * written straight to the named app setting; the desktop agent picks it up on
+ * the next overlay_state broadcast and re-registers.
+ */
+function HotkeyCaptureRow({
+  label,
+  settingKey,
+  value,
+  onChange,
+  hint,
+}: {
+  label: string;
+  settingKey: string;
+  value: string;
+  onChange: (combo: string) => void;
+  hint?: string;
+}) {
+  const [capturing, setCapturing] = useState(false);
+
+  return (
+    <label
+      className="settings-checkbox-label"
+      style={{ display: "flex", gap: "0.6rem", alignItems: "center", flexWrap: "wrap" }}
+    >
+      <span style={{ minWidth: 180 }}>{label}</span>
+      <input
+        type="text"
+        readOnly
+        value={capturing ? "Press keys… (Esc to clear)" : value || "Not set"}
+        onFocus={() => setCapturing(true)}
+        onBlur={() => setCapturing(false)}
+        onKeyDown={async (event) => {
+          event.preventDefault();
+          // Capture before any await — React nulls out currentTarget once the handler yields.
+          const input = event.currentTarget;
+          if (event.key === "Escape") {
+            onChange("");
+            await setAppSetting(settingKey, "");
+            input.blur();
+            return;
+          }
+          // Ignore lone modifier presses — wait for a real main key.
+          if (["Control", "Alt", "Shift", "Meta"].includes(event.key)) return;
+          const mods: string[] = [];
+          if (event.ctrlKey) mods.push("Ctrl");
+          if (event.altKey) mods.push("Alt");
+          if (event.shiftKey) mods.push("Shift");
+          if (event.metaKey) mods.push("Win");
+          // Normalize the main key to what the agent's parser accepts.
+          let main = "";
+          if (event.key === " ") main = "Space";
+          else if (/^[a-zA-Z]$/.test(event.key)) main = event.key.toUpperCase();
+          else if (/^[0-9]$/.test(event.key)) main = event.key;
+          else if (/^F([1-9]|1[0-2])$/.test(event.key)) main = event.key;
+          if (!main || mods.length === 0) return; // need a modifier + main key
+          const combo = [...mods, main].join("+");
+          onChange(combo);
+          await setAppSetting(settingKey, combo);
+          input.blur();
+        }}
+        style={{ minWidth: 220, cursor: "pointer" }}
+        title={hint ?? "Click and press a combo like Ctrl+Shift+B. Needs at least one modifier. Esc clears."}
+      />
+    </label>
+  );
+}
+
 export default function Page() {
   const [todos, setTodos] = useState<Todo[]>([]);
   const [zones, setZones] = useState<LockZone[]>([]);
@@ -996,7 +1065,7 @@ export default function Page() {
   const [showGoldToday, setShowGoldTodayState] = useState(false);
   const [showBaseOverlay, setShowBaseOverlayState] = useState(false);
   const [overlayToggleHotkey, setOverlayToggleHotkey] = useState("");
-  const [capturingHotkey, setCapturingHotkey] = useState(false);
+  const [crawlToggleHotkey, setCrawlToggleHotkey] = useState("");
   const [detectionIntervalMs, setDetectionIntervalMs] = useState(100);
   const [showTodoDuration, setShowTodoDuration] = useState(true);
   const [showCompletionProgress, setShowCompletionProgress] = useState(true);
@@ -1253,6 +1322,8 @@ export default function Page() {
         setShowBaseOverlayState(baseOverlaySetting.value === "true");
         const hotkeySetting = await getAppSetting("overlayToggleHotkey");
         setOverlayToggleHotkey(hotkeySetting.value ?? "");
+        const crawlHotkeySetting = await getAppSetting("crawlToggleHotkey");
+        setCrawlToggleHotkey(crawlHotkeySetting.value ?? "");
         const intervalSetting = await getAppSetting("detectionIntervalMs");
         const parsedInterval = Number(intervalSetting.value);
         if (Number.isFinite(parsedInterval) && parsedInterval > 0) {
@@ -3887,6 +3958,9 @@ export default function Page() {
                 <button type="button" className="goals-subtab" onClick={() => window.location.href = "/base"}>
                   Base
                 </button>
+                <button type="button" className="goals-subtab" onClick={() => window.location.href = "/crawl"}>
+                  Crawl
+                </button>
               </nav>
               <div className="goals-filters">
                 <button
@@ -4086,6 +4160,9 @@ export default function Page() {
                 </button>
                 <button type="button" className="goals-subtab" onClick={() => window.location.href = "/base"}>
                   Base
+                </button>
+                <button type="button" className="goals-subtab" onClick={() => window.location.href = "/crawl"}>
+                  Crawl
                 </button>
               </nav>
               <div className="goals-filters">
@@ -4553,6 +4630,9 @@ export default function Page() {
                 </button>
                 <button type="button" className="goals-subtab" onClick={() => window.location.href = "/base"}>
                   Base
+                </button>
+                <button type="button" className="goals-subtab" onClick={() => window.location.href = "/crawl"}>
+                  Crawl
                 </button>
               </nav>
               <div className="goals-filters">
@@ -5120,6 +5200,9 @@ export default function Page() {
                 <button type="button" className="goals-subtab" onClick={() => window.location.href = "/base"}>
                   Base
                 </button>
+                <button type="button" className="goals-subtab" onClick={() => window.location.href = "/crawl"}>
+                  Crawl
+                </button>
               </nav>
               <div className="goals-filters">
                 <button
@@ -5291,6 +5374,13 @@ export default function Page() {
                 onClick={() => window.location.href = "/base"}
               >
                 Base
+              </button>
+              <button
+                type="button"
+                className="goals-subtab"
+                onClick={() => window.location.href = "/crawl"}
+              >
+                Crawl
               </button>
             </nav>
           </div>
@@ -6231,6 +6321,9 @@ export default function Page() {
                 <button type="button" className="goals-subtab" onClick={() => window.location.href = "/base"}>
                   Base
                 </button>
+                <button type="button" className="goals-subtab" onClick={() => window.location.href = "/crawl"}>
+                  Crawl
+                </button>
               </nav>
               <button
                 type="button"
@@ -6482,47 +6575,24 @@ export default function Page() {
               <p className="settings-hint">
                 Hiding the overlay (here or with the shortcut) lasts for this session — it comes back the next time the app starts.
               </p>
-              <label className="settings-checkbox-label" style={{ display: "flex", gap: "0.6rem", alignItems: "center", flexWrap: "wrap" }}>
-                <span style={{ minWidth: 180 }}>Overlay bar show/hide shortcut</span>
-                <input
-                  type="text"
-                  readOnly
-                  value={capturingHotkey ? "Press keys… (Esc to clear)" : overlayToggleHotkey || "Not set"}
-                  onFocus={() => setCapturingHotkey(true)}
-                  onBlur={() => setCapturingHotkey(false)}
-                  onKeyDown={async (event) => {
-                    event.preventDefault();
-                    // Capture before any await — React nulls out currentTarget once the handler yields.
-                    const input = event.currentTarget;
-                    if (event.key === "Escape") {
-                      setOverlayToggleHotkey("");
-                      await setAppSetting("overlayToggleHotkey", "");
-                      input.blur();
-                      return;
-                    }
-                    // Ignore lone modifier presses — wait for a real main key.
-                    if (["Control", "Alt", "Shift", "Meta"].includes(event.key)) return;
-                    const mods: string[] = [];
-                    if (event.ctrlKey) mods.push("Ctrl");
-                    if (event.altKey) mods.push("Alt");
-                    if (event.shiftKey) mods.push("Shift");
-                    if (event.metaKey) mods.push("Win");
-                    // Normalize the main key to what the agent's parser accepts.
-                    let main = "";
-                    if (event.key === " ") main = "Space";
-                    else if (/^[a-zA-Z]$/.test(event.key)) main = event.key.toUpperCase();
-                    else if (/^[0-9]$/.test(event.key)) main = event.key;
-                    else if (/^F([1-9]|1[0-2])$/.test(event.key)) main = event.key;
-                    if (!main || mods.length === 0) return; // need a modifier + main key
-                    const combo = [...mods, main].join("+");
-                    setOverlayToggleHotkey(combo);
-                    await setAppSetting("overlayToggleHotkey", combo);
-                    input.blur();
-                  }}
-                  style={{ minWidth: 220, cursor: "pointer" }}
-                  title="Click and press a combo like Ctrl+Shift+B. Needs at least one modifier. Esc clears."
-                />
-              </label>
+              <HotkeyCaptureRow
+                label="Overlay bar show/hide shortcut"
+                settingKey="overlayToggleHotkey"
+                value={overlayToggleHotkey}
+                onChange={setOverlayToggleHotkey}
+              />
+              <HotkeyCaptureRow
+                label="Open The Crawl shortcut"
+                settingKey="crawlToggleHotkey"
+                value={crawlToggleHotkey}
+                onChange={setCrawlToggleHotkey}
+                hint="Opens the dungeon run panel directly, showing the overlay first if it is hidden. Click and press a combo like Ctrl+Shift+D. Esc clears."
+              />
+              <p className="settings-hint">
+                The Crawl is a dungeon run you play in seconds at a time. Cards cost energy, and
+                energy is the gold you earned today — it expires at midnight and never touches your
+                balance.
+              </p>
               <label className="settings-checkbox-label">
                 <input
                   type="checkbox"

@@ -2,9 +2,15 @@
 
 /**
  * Overlay panels rendered inside the desktop overlay agent's WebView2 windows.
- * The desktop bar is now a native pill (Base/Friends buttons); each button opens
+ * The desktop bar is a native pill (Base/Friends buttons); each button opens
  * this route with ?panel=base|friends to show just that panel in its own window.
- * With no ?panel (direct browser view) it falls back to the original full bar
+ *
+ * ?panel=crawl is served the same way but is NOT part of that bar: the Crawl is
+ * a standalone always-on-top window with its own hotkey, its own drag grip, and
+ * its own remembered position, so it is deliberately absent from the buttons
+ * below. Reach it with the hotkey, or /crawl in a browser.
+ *
+ * With no ?panel (direct browser view) this falls back to the original full bar
  * (gold + buttons). Reports its content height to the C# host via
  * window.chrome.webview.postMessage so the host window hugs the content.
  */
@@ -22,6 +28,7 @@ import {
   sendFeedHeart,
 } from "../../lib/api";
 import { CoinIcon } from "../../lib/combat/icons";
+import { CrawlView } from "../../lib/crawl/CrawlView";
 import { BaseOverlayMini } from "../base/OverlayMini";
 import styles from "../base/base.module.css";
 
@@ -192,12 +199,14 @@ export default function OverlayTaskbarPage() {
   const [panel, setPanel] = useState<"none" | "base" | "friends">("none");
   const [gold, setGold] = useState<number | null>(null);
   const [goldToday, setGoldToday] = useState(0);
-  // The desktop bar hosts each panel in its own window via ?panel=base|friends.
+  // The desktop bar hosts each panel in its own window via ?panel=base|friends|crawl.
   // `undefined` = not yet read (first client render); `null` = no param (browser).
-  const [panelParam, setPanelParam] = useState<"base" | "friends" | null | undefined>(undefined);
+  const [panelParam, setPanelParam] = useState<"base" | "friends" | "crawl" | null | undefined>(
+    undefined,
+  );
   useEffect(() => {
     const value = new URLSearchParams(window.location.search).get("panel");
-    setPanelParam(value === "base" || value === "friends" ? value : null);
+    setPanelParam(value === "base" || value === "friends" || value === "crawl" ? value : null);
   }, []);
 
   // Keep the hosting window sized to the content.
@@ -263,6 +272,7 @@ export default function OverlayTaskbarPage() {
       {/* Desktop bar: a single panel per window. */}
       {panelParam === "base" && <BaseOverlayMini />}
       {panelParam === "friends" && <FriendsPanel />}
+      {panelParam === "crawl" && <CrawlView compact />}
 
       {/* Direct browser view (no ?panel): the original full bar. */}
       {panelParam === null && (

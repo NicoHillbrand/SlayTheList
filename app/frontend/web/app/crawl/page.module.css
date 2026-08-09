@@ -1,0 +1,57 @@
+/* /crawl — full-window chrome around the shared CrawlView. */
+
+.page {
+  min-height: 100vh;
+  color: #e8e6f0;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  background: radial-gradient(120% 90% at 50% -10%, #1c1c34 0%, #12121f 45%, #0a0a12 100%);
+}
+
+.shell {
+  max-width: 520px;
+  margin: 0 auto;
+  padding: 28px 20px 60px;
+}
+
+.head {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.title {
+  margin: 0 0 4px;
+  font-size: 22px;
+  font-weight: 700;
+  color: #f5c542;
+  letter-spacing: 0.02em;
+}
+
+.sub {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #8a89a6;
+}
+
+.back {
+  margin-left: auto;
+  flex: none;
+  color: #8a89a6;
+  text-decoration: none;
+  font-size: 13px;
+}
+.back:hover {
+  color: #e8e6f0;
+}
+
+/* The panel is deliberately held to the overlay's width so the layout you
+   tune here is the layout you get in the 340px window. */
+.panel {
+  max-width: 340px;
+  padding: 12px;
+  border: 1px solid #2c2c48;
+  border-radius: 10px;
+  background: #16162a;
+}

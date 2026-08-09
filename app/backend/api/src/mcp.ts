@@ -20,6 +20,8 @@ import {
   deductGold,
   listGoldActivityDays,
   getGoldEarnedToday,
+  getCrawlSnapshot,
+  setCrawlLockAction,
 } from "./store.js";
 
 const server = new McpServer({ name: "slaythelist", version: "0.1.0" });
@@ -489,6 +491,55 @@ server.tool(
     const state = getAccountabilityState();
     saveAccountabilityState({ ...state, walkthroughs });
     return { content: [{ type: "text" as const, text: JSON.stringify({ saved: true, count: walkthroughs.length }) }] };
+  },
+);
+
+// ---------------------------------------------------------------------------
+// The Crawl — the overlay dungeon run
+// ---------------------------------------------------------------------------
+
+server.tool(
+  "get_crawl",
+  "Read the state of The Crawl, the overlay dungeon run: floor and room, HP, the current enemy, the hand and deck, how much energy is left today (energy = gold earned today, it expires at midnight), and whether a todo is currently pinned as a lock. Use it to see how the run is doing before suggesting what to pin next.",
+  {},
+  async () => {
+    const snapshot = getCrawlSnapshot();
+    return { content: [{ type: "text" as const, text: JSON.stringify(snapshot, null, 2) }] };
+  },
+);
+
+server.tool(
+  "lock_crawl_on_todo",
+  "Pin a todo to The Crawl. While the pinned todo is not done, the run is FROZEN — no card can be played and no room can be entered, regardless of energy. This is the hard gate for turning a sub-task you just suggested into the thing that unlocks the next turn. Create the todo with create_todo first, then pass its id here. Pass todo_id: null to clear the lock. Use it deliberately: a lock the user cannot finish today stalls their run.",
+  {
+    todo_id: z
+      .string()
+      .nullable()
+      .describe("Id of the todo that must be completed before the run resumes. Null clears the lock."),
+  },
+  async ({ todo_id }) => {
+    try {
+      const snapshot = setCrawlLockAction(todo_id);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(
+              { locked: snapshot.lock, blocked: snapshot.blocked, energy: snapshot.energy },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    } catch (err) {
+      return {
+        content: [
+          { type: "text" as const, text: err instanceof Error ? err.message : "lock failed" },
+        ],
+        isError: true,
+      };
+    }
   },
 );
 
