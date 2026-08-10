@@ -13,16 +13,17 @@
  * All state comes from the server as whole snapshots; the component never
  * computes game state, only renders it.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   FLOORS,
   HAND_SIZE,
+  MOMENTUM_DAMAGE,
   ROOMS_PER_FLOOR,
   getCard,
   type CardId,
-  type CrawlEvent,
 } from "@slaythelist/crawl-engine";
 import {
+  EVENTS_URL,
   chooseReward,
   endTurn,
   fetchCrawl,
@@ -32,63 +33,34 @@ import {
 } from "./data";
 import styles from "./crawl.module.css";
 
-/** Re-poll while idle so a todo finished elsewhere unlocks the run promptly. */
-const POLL_MS = 20_000;
+/**
+ * Backstop poll only. Energy arriving the moment you earn gold is what makes
+ * the panel feel alive, and that comes over the event socket — this just covers
+ * a dropped connection or an API that was down when the panel opened.
+ */
+const POLL_MS = 60_000;
+/** Backoff before retrying a dropped event socket. */
+const RECONNECT_MS = 3_000;
 
 function pct(value: number, max: number): number {
   if (max <= 0) return 0;
   return Math.max(0, Math.min(100, (value / max) * 100));
 }
 
-/** One line of feedback for the last action. Keeps the panel from feeling mute. */
-function describeEvents(events: CrawlEvent[]): { text: string; tone: "good" | "hit" | "" } | null {
-  if (events.length === 0) return null;
-  const parts: string[] = [];
-  let tone: "good" | "hit" | "" = "";
-
-  for (const event of events) {
-    switch (event.type) {
-      case "cardPlayed":
-        if (event.damage > 0) parts.push(`Hit for ${event.damage}.`);
-        break;
-      case "enemySlain":
-        parts.push(`${event.name} falls.`);
-        tone = "good";
-        break;
-      case "playerHit":
-        parts.push(
-          event.amount > 0
-            ? `${event.heavy ? "Heavy blow" : "Struck"} for ${event.amount}.`
-            : "Blocked it all.",
-        );
-        if (event.amount > 0) tone = "hit";
-        break;
-      case "floorCleared":
-        parts.push(`Floor ${event.floor} cleared. You catch your breath.`);
-        tone = "good";
-        break;
-      case "runWon":
-        parts.push(`The dungeon is yours. +${event.goldReward} gold.`);
-        tone = "good";
-        break;
-      case "died":
-        parts.push(`You fall on floor ${event.floor}.`);
-        tone = "hit";
-        break;
-    }
-  }
-  return parts.length > 0 ? { text: parts.join(" "), tone } : null;
-}
-
 export function CrawlView({ compact = false }: { compact?: boolean }) {
   const [snap, setSnap] = useState<CrawlSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [log, setLog] = useState<{ text: string; tone: "good" | "hit" | "" } | null>(null);
+
+  // A refresh landing mid-action would clobber the action's own result with a
+  // snapshot taken before it, so refreshes stand down while one is in flight.
+  const busyRef = useRef(false);
 
   const load = useCallback(async () => {
+    if (busyRef.current) return;
     try {
       const next = await fetchCrawl();
+      if (busyRef.current) return;
       setSnap(next);
       setError(null);
     } catch (e) {
@@ -102,18 +74,62 @@ export function CrawlView({ compact = false }: { compact?: boolean }) {
     return () => clearInterval(timer);
   }, [load]);
 
+  // Live updates: the API broadcasts on every gold and todo mutation, so energy
+  // appears the moment you earn it and a lock clears the moment you tick it off.
+  useEffect(() => {
+    let socket: WebSocket | null = null;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let disposed = false;
+
+    function connect() {
+      if (disposed) return;
+      try {
+        socket = new WebSocket(EVENTS_URL);
+        socket.onmessage = (event) => {
+          try {
+            const message = JSON.parse(String(event.data)) as { type?: string };
+            // Every gold/todo mutation republishes the overlay state. Rather
+            // than read it, treat it purely as "something changed" and ask the
+            // API for the run — it is the only thing that knows the whole shape.
+            if (message?.type === "overlay_state") void load();
+          } catch {
+            // Not JSON we recognise — ignore it.
+          }
+        };
+        socket.onclose = () => {
+          if (!disposed) retry = setTimeout(connect, RECONNECT_MS);
+        };
+        socket.onerror = () => socket?.close();
+      } catch {
+        retry = setTimeout(connect, RECONNECT_MS);
+      }
+    }
+
+    connect();
+    return () => {
+      disposed = true;
+      if (retry) clearTimeout(retry);
+      // Drop the reconnect handler first, or closing here schedules a retry.
+      if (socket) {
+        socket.onclose = null;
+        socket.close();
+      }
+    };
+  }, [load]);
+
   /** Run an action, adopt the returned snapshot, and surface what happened. */
   const act = useCallback(async (action: () => Promise<CrawlSnapshot>) => {
     setBusy(true);
+    busyRef.current = true;
     try {
       const next = await action();
       setSnap(next);
       setError(null);
-      setLog(describeEvents(next.events));
     } catch (e) {
       setError(e instanceof Error ? e.message : "action failed");
     } finally {
       setBusy(false);
+      busyRef.current = false;
     }
   }, []);
 
@@ -135,7 +151,13 @@ export function CrawlView({ compact = false }: { compact?: boolean }) {
           Floor {Math.min(state.floor, FLOORS)}/{FLOORS} · room {Math.min(state.room + 1, ROOMS_PER_FLOOR)}
         </span>
         <span className={styles.spacer} />
-        {snap.momentum && <span className={styles.momentum} title="A todo finished in the last hour: +3 damage">⚡</span>}
+        {/* Not a second ⚡: momentum is a damage bonus, energy is the spendable
+            pool. They read as the same thing if they share a glyph. */}
+        {snap.momentum && (
+          <span className={styles.momentum} title={`Todo finished in the last hour: +${MOMENTUM_DAMAGE} damage`}>
+            ⚔+{MOMENTUM_DAMAGE}
+          </span>
+        )}
         <span
           className={energy > 0 ? styles.energy : `${styles.energy} ${styles.energyDim}`}
           title={`Energy is the gold you earned today (${snap.goldEarnedToday}). It expires at midnight and never lowers your balance.`}
@@ -146,19 +168,15 @@ export function CrawlView({ compact = false }: { compact?: boolean }) {
 
       {locked && (
         <div className={`${styles.banner} ${styles.bannerLock}`}>
-          <span className={styles.bannerTitle}>🔒 Locked</span>
-          {lock.title}
-          <div className={styles.bannerNote}>Finish it to unlock the run.</div>
+          🔒 {lock.title}
         </div>
       )}
 
       {state.status === "dead" && (
         <div className={styles.endState}>
           <div className={styles.endGlyph}>💀</div>
-          <div className={`${styles.endTitle} ${styles.endTitleLose}`}>You fell on floor {state.floor}</div>
-          <div className={styles.endNote}>
-            Deepest run: floor {state.meta.bestFloor}. Starting over costs nothing but the ground.
-          </div>
+          <div className={`${styles.endTitle} ${styles.endTitleLose}`}>Fell on floor {state.floor}</div>
+          <div className={styles.endNote}>Best: floor {state.meta.bestFloor}</div>
           <button className={`${styles.btn} ${styles.btnPrimary}`} disabled={busy} onClick={() => void act(restartRun)}>
             Descend again
           </button>
@@ -170,8 +188,7 @@ export function CrawlView({ compact = false }: { compact?: boolean }) {
           <div className={styles.endGlyph}>👑</div>
           <div className={`${styles.endTitle} ${styles.endTitleWin}`}>The Hollow King has fallen</div>
           <div className={styles.endNote}>
-            +10 gold, paid into your real balance. {state.meta.runsWon} run
-            {state.meta.runsWon === 1 ? "" : "s"} cleared.
+            +10 gold · {state.meta.runsWon} run{state.meta.runsWon === 1 ? "" : "s"} cleared
           </div>
           <button className={`${styles.btn} ${styles.btnPrimary}`} disabled={busy} onClick={() => void act(restartRun)}>
             Descend again
@@ -206,7 +223,7 @@ export function CrawlView({ compact = false }: { compact?: boolean }) {
           </div>
           <div className={styles.actions}>
             <button className={styles.btn} disabled={busy || locked} onClick={() => void act(() => chooseReward(null))}>
-              Skip — keep the deck lean
+              Skip
             </button>
           </div>
         </>
@@ -279,12 +296,7 @@ export function CrawlView({ compact = false }: { compact?: boolean }) {
 
           {!locked && energy === 0 && !state.hand.some((id) => (getCard(id)?.cost ?? 1) === 0) && (
             <div className={`${styles.banner} ${styles.bannerDry}`}>
-              <span className={styles.bannerTitle}>Out of energy</span>
-              Energy is the gold you earn today. Go do something, then come back.
-              <div className={styles.bannerNote}>
-                The enemy only swings after you play, so nothing happens while you are away — the
-                fight waits exactly here.
-              </div>
+              Out of energy — earn gold to keep going.
             </div>
           )}
 
@@ -305,13 +317,6 @@ export function CrawlView({ compact = false }: { compact?: boolean }) {
         </>
       )}
 
-      {log && (
-        <div
-          className={`${styles.log} ${log.tone === "hit" ? styles.logHit : log.tone === "good" ? styles.logGood : ""}`}
-        >
-          {log.text}
-        </div>
-      )}
       {error && <div className={styles.log}>⚠ {error}</div>}
       {!compact && (
         <div className={styles.log}>

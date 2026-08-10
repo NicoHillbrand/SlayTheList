@@ -11,6 +11,13 @@ import type { CardId, CrawlEvent, CrawlState } from "@slaythelist/crawl-engine";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8788";
 
+/**
+ * The API's event socket. It broadcasts `overlay_state` on every mutation that
+ * can move gold or todos, which is precisely what changes the run's energy,
+ * locks, and momentum — so the panel listens instead of waiting for a poll.
+ */
+export const EVENTS_URL = `${API_BASE.replace(/^http/, "ws")}/ws`;
+
 export interface CrawlSnapshot {
   state: CrawlState;
   /** Energy still spendable today. */

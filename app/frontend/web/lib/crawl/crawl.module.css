@@ -363,10 +363,3 @@
   line-height: 1.4;
   min-height: 16px;
 }
-
-.logHit {
-  color: var(--bad);
-}
-.logGood {
-  color: var(--good);
-}
