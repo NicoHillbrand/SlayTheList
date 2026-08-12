@@ -33,7 +33,7 @@ Individual rows with full CRUD:
 |------|---------|
 | `list_todos` | List todos. `status`: `"active"` (default) \| `"done"` \| `"all"`. `include_archived`: bool, default false. |
 | `create_todo` | Create a todo. Requires `title`. Optional: `context`, `deadline_at` (ISO 8601). |
-| `update_todo` | Patch a todo by `id`. Optional: `title`, `context`, `status`, `deadline_at` (null to clear). |
+| `update_todo` | Patch a todo by `id`. Optional: `title`, `context`, `status`, `deadline_at` (null to clear). Setting `status: "done"` on a not-yet-completed todo **pays `GOLD_PER_TODO` (5) automatically** and records it in `rewardedTodoIds` — do not follow up with `award_gold`, that double-counts. |
 | `delete_todo` | Permanently delete a todo by `id`. |
 
 ### Gold

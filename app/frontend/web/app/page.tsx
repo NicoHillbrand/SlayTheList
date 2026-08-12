@@ -199,6 +199,8 @@ const DEFAULT_OPTIONAL_REFLECTION_QUESTIONS: ReflectionQuestion[] = [
   },
 ];
 
+// Optimistic copy of the server's payout. The authority is GOLD_PER_TODO in
+// backend/api/src/store.ts, which pays on every completion path; keep in sync.
 const GOLD_PER_TODO = 5;
 const ZONE_IMAGE_OVERRIDES_STORAGE_KEY = "slaythelist.zoneImageOverrides";
 const AI_EXPAND_PROVIDER_STORAGE_KEY = "slaythelist.ai.expandProvider";

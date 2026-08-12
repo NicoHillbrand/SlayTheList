@@ -233,6 +233,10 @@ export function createTodo(title: string, options?: { deadlineAt?: string | null
   return todo;
 }
 
+// Gold paid out for completing a todo. The web client has its own copy of this
+// value for the optimistic UI; the server is the one that actually pays.
+export const GOLD_PER_TODO = 5;
+
 export function updateTodo(
   id: string,
   patch: Partial<Pick<Todo, "title" | "context" | "status" | "indent" | "deadlineAt" | "archivedAt" | "pushCount" | "visibility">>,
@@ -291,6 +295,16 @@ export function updateTodo(
   if (next.archivedAt) {
     // Keep requirement rows tidy: archived todos should not stay bound to lock zones.
     db.prepare("DELETE FROM lock_zone_requirements WHERE todo_id = ?").run(id);
+  }
+  if (shouldSetCompleted) {
+    // Completing a todo pays the same gold on every path (UI toggle, REST PATCH,
+    // MCP update_todo). awardTodoGold dedupes on rewardedTodoIds, so the web
+    // client's follow-up award-todo call is a no-op rather than a double award.
+    awardTodoGold(id, GOLD_PER_TODO, undefined, {
+      sourceType: "todo",
+      sourceId: id,
+      label: next.title,
+    });
   }
   return next;
 }
