@@ -226,17 +226,14 @@ function CurrentStepLine({ step }: { step: CurrentStep }) {
         padding: "7px 9px 7px 10px",
         borderRadius: 7,
         // A card, not a footnote: this is the instruction the panel exists to
-        // carry, so it earns a surface and a gold edge. Top-lit and ringed like
-        // the enemy plate and the cards below, so it belongs to the same object
-        // family — but with no lift and nothing that moves, since it is the one
-        // element on screen that is never clicked.
-        background: dim
-          ? "#1a1a2e"
-          : "linear-gradient(180deg, #26264a 0%, #1c1c36 100%)",
-        borderLeft: `2px solid ${dim ? "#4a4a68" : "#d4aa47"}`,
-        boxShadow: dim
-          ? "inset 0 0 0 1px rgba(44,44,72,0.5)"
-          : "inset 0 1px 0 rgba(255,255,255,0.07), inset 0 0 0 1px rgba(44,44,72,0.7)",
+        // carry, so it earns a surface and a gold edge. Same lightness step and
+        // hairline ring as the enemy plate and the cards, so it belongs to the
+        // same object family — and the same blue-black, since a violet tint here
+        // made it the loudest block on screen by hue alone. No lift: it is the
+        // one element up there that is never clicked.
+        background: dim ? "#191930" : "linear-gradient(180deg, #1f1f36 0%, #1a1a2e 100%)",
+        borderLeft: `2px solid ${dim ? "#4a4a68" : "#b8942f"}`,
+        boxShadow: `inset 0 0 0 1px rgba(44,44,72,${dim ? 0.5 : 0.85})`,
         fontSize: 11,
         lineHeight: 1.4,
         color: dim ? "#6a6a88" : "#8a89a6",
@@ -254,10 +251,9 @@ function CurrentStepLine({ step }: { step: CurrentStep }) {
             color: dim ? "#5a5a78" : "#b8942f",
           }}
         >
-          <span>Now</span>
-          {/* The age appears only once it matters, so a dimmed card reads as old
-              rather than as broken. */}
-          {dim && <span style={{ letterSpacing: 0 }}>· {timeAgo(step.setAt)} ago</span>}
+          {/* Once it is stale the age REPLACES the label rather than joining it:
+              "Now · 1h ago" contradicts itself, and the age is the honest word. */}
+          {dim ? <span style={{ letterSpacing: 0 }}>{timeAgo(step.setAt)} ago</span> : <span>Now</span>}
         </div>
         <div
           title={step.subtitle ? `${step.text}\n${step.subtitle}` : step.text}

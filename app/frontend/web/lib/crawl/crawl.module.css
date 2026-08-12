@@ -90,38 +90,39 @@
 
 .bar {
   position: relative;
-  height: 8px;
-  border-radius: 5px;
+  height: 7px;
+  border-radius: 4px;
   background: #0c0c17;
-  box-shadow:
-    inset 0 1px 2px rgba(0, 0, 0, 0.7),
-    inset 0 0 0 1px rgba(44, 44, 72, 0.55);
+  box-shadow: inset 0 0 0 1px rgba(44, 44, 72, 0.7);
   overflow: hidden;
 }
 
+/* No gloss highlight on the fill. A white top edge on a saturated bar is what
+   makes a dark panel look like plastic. */
 .barFill {
   height: 100%;
-  border-radius: 5px;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  border-radius: 4px;
   transition: width 220ms ease;
 }
 
+/* Both fills are deliberately DESATURATED — dark enough to sit inside a
+   blue-black panel rather than glow out of it. The bright --good / --bad tokens
+   are for text, where they are a few pixels; across a full-width bar the same
+   value reads as arcade candy and fights the gold. Hue still carries whose bar
+   it is: rose is the thing hitting you, sage is you. */
 .hpFill {
-  background: linear-gradient(180deg, #a8e8b6 0%, var(--good) 55%, #4f9a62 100%);
+  background: #5f9370;
 }
 
 .enemyFill {
-  background: linear-gradient(180deg, #f08a8a 0%, var(--bad) 55%, #b64a4a 100%);
+  background: #a8515a;
 }
 
 .blockPip {
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  padding: 1px 5px;
-  border-radius: 4px;
-  background: #14243a;
-  color: #9ec8f0;
+  color: #7fa8cc;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
@@ -131,6 +132,9 @@
 /* The enemy gets a lit plate rather than a flat box — it is the thing you are
    looking at, and at this size a border alone made it read as another list row.
    The light comes from the top-left corner only, consistently with the cards. */
+/* Raised, not tinted. The plate reads as a surface through a small lightness
+   step and a hairline ring — every value stays in the panel's own blue-black
+   family, so it matches the title bar instead of drifting violet. */
 .enemy {
   display: flex;
   align-items: center;
@@ -138,10 +142,8 @@
   padding: 9px;
   border: 0;
   border-radius: 8px;
-  background: radial-gradient(125% 145% at 12% 0%, #2a2144 0%, #1a1a30 62%);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.06),
-    inset 0 0 0 1px rgba(44, 44, 72, 0.7);
+  background: linear-gradient(180deg, #1f1f36 0%, #1a1a2e 100%);
+  box-shadow: inset 0 0 0 1px rgba(44, 44, 72, 0.85);
   margin-bottom: 8px;
 }
 
@@ -153,12 +155,11 @@
   min-width: 0;
 }
 
+/* The boss is marked with the accent, not a different hue: same surface, gold
+   ring. Gold is the panel's one accent and this is the one place it means
+   "this fight is different". */
 .enemyBoss {
-  background: radial-gradient(125% 145% at 12% 0%, #3a2c46 0%, #1d182e 62%);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.08),
-    inset 0 0 0 1px rgba(184, 148, 47, 0.55),
-    0 0 12px rgba(245, 197, 66, 0.07);
+  box-shadow: inset 0 0 0 1px rgba(184, 148, 47, 0.6);
 }
 
 .enemyTop {
@@ -179,8 +180,8 @@
   font-size: 20px;
   line-height: 1;
   border-radius: 7px;
-  background: #0f0f1e;
-  box-shadow: inset 0 0 0 1px #32325a;
+  background: #12121f;
+  box-shadow: inset 0 0 0 1px rgba(44, 44, 72, 0.9);
 }
 
 .enemyName {
@@ -253,10 +254,10 @@
   padding: 9px 4px 8px;
   border: 0;
   border-radius: 7px;
-  background: linear-gradient(180deg, #262646 0%, #1a1a32 100%);
+  background: linear-gradient(180deg, #1f1f36 0%, #17172c 100%);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.07),
-    0 1px 2px rgba(0, 0, 0, 0.45);
+    inset 0 0 0 1px rgba(44, 44, 72, 0.85),
+    0 1px 2px rgba(0, 0, 0, 0.4);
   color: var(--ink);
   font: inherit;
   cursor: pointer;
@@ -268,8 +269,7 @@
 .card:hover:not(:disabled) {
   transform: translateY(-2px);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.12),
-    0 0 0 1px var(--gold-dim),
+    inset 0 0 0 1px var(--gold-dim),
     0 4px 10px rgba(0, 0, 0, 0.5);
 }
 
@@ -363,20 +363,20 @@
   cursor: not-allowed;
 }
 
-/* The commit action is solid gold, not an outline. There is exactly one of these
-   on screen at a time, which is what lets it be the loudest thing in the panel
-   without the panel getting loud. */
+/* Gold-edged, not gold-filled. A solid mustard slab across the full width was
+   more saturated colour than everything else in the panel combined, and it also
+   spends gold — which in this app means EARNED — on a button that is free to
+   press. Gold stays a line and a label. */
 .btnPrimary {
-  border: 0;
-  background: linear-gradient(180deg, #e0b752 0%, var(--gold-dim) 100%);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3);
-  color: #241c02;
+  border-color: var(--gold-dim);
+  background: #1f1f38;
+  color: var(--gold);
   font-weight: 700;
 }
 
 .btnPrimary:hover:not(:disabled) {
-  background: linear-gradient(180deg, #ecc45e 0%, #c39c33 100%);
-  color: #241c02;
+  border-color: var(--gold);
+  background: #262642;
 }
 
 /* ---------- Banners ---------- */
