@@ -250,6 +250,9 @@ internal sealed class OverlayPanelWindow : Window
     private readonly DispatcherTimer? _saveBoundsTimer;
     private bool _webViewReady;
     private bool _pageLoaded;
+    /// <summary>Re-entrancy guard for FitHeightToContent, which sets Height and so
+    /// fires SizeChanged straight back into itself.</summary>
+    private bool _fittingHeight;
     private string _pendingPanel = "base";
     private string _panelUrl = "";
     /// <summary>Last height the page reported, in CSS pixels (so zoom-independent).
@@ -293,7 +296,14 @@ internal sealed class OverlayPanelWindow : Window
             WindowChrome.SetWindowChrome(this, new WindowChrome
             {
                 CaptionHeight = 0,
-                ResizeBorderThickness = new Thickness(ResizeBorder),
+                // WIDTH ONLY. The height is not the user's to set: it is derived
+                // from the content, so the panel always hugs the page exactly.
+                // Letting the bottom edge be dragged just produced a band of dead
+                // background below the buttons, and there was nothing to put in
+                // it. Scaling the width already resizes the whole panel (see
+                // ApplyZoom), which is the only resize that keeps the proportions
+                // the layout was designed at.
+                ResizeBorderThickness = new Thickness(ResizeBorder, 0, ResizeBorder, 0),
                 CornerRadius = new CornerRadius(0),
                 GlassFrameThickness = new Thickness(0),
                 UseAeroCaptionButtons = false,
@@ -347,7 +357,14 @@ internal sealed class OverlayPanelWindow : Window
             SizeChanged += (_, args) =>
             {
                 if (Math.Abs(args.NewSize.Width - args.PreviousSize.Width) < 0.5)
+                {
+                    // Height moved on its own — a DPI change, a restored bound, or
+                    // anything else that got past the disabled bottom edge. Snap it
+                    // back to the content rather than leaving dead space, which is
+                    // what this used to do by returning early here.
+                    FitHeightToContent();
                     return;
+                }
                 ApplyZoom();
                 _saveBoundsTimer?.Stop();
                 _saveBoundsTimer?.Start();
@@ -459,7 +476,7 @@ internal sealed class OverlayPanelWindow : Window
     /// grip, so both are added here.</summary>
     private void FitHeightToContent()
     {
-        if (_contentHeightCss <= 0)
+        if (_contentHeightCss <= 0 || _fittingHeight)
             return;
         var zoom = _webViewReady ? _webView.ZoomFactor : 1;
         var content = Math.Clamp(_contentHeightCss + 2, MinContentHeight, MaxContentHeight) * zoom;
@@ -468,7 +485,22 @@ internal sealed class OverlayPanelWindow : Window
         var chrome = ActualHeight > 0 && _webView.ActualHeight > 0
             ? ActualHeight - _webView.ActualHeight
             : _chromeHeight;
-        Height = content + chrome;
+        var target = content + chrome;
+        // Setting Height re-enters through SizeChanged, and `chrome` is measured
+        // from a layout that is still settling, so two passes can disagree by a
+        // fraction and oscillate. Ignore sub-pixel differences and guard the
+        // re-entry outright.
+        if (Math.Abs(Height - target) < 0.5)
+            return;
+        _fittingHeight = true;
+        try
+        {
+            Height = target;
+        }
+        finally
+        {
+            _fittingHeight = false;
+        }
     }
 
     private void RestoreSavedBounds()
