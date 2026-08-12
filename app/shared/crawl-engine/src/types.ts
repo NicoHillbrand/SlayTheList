@@ -6,10 +6,13 @@
  * whole point — the overlay is glanced at for seconds at a time, so no state
  * may depend on the player staying present.
  *
- * Two scarce resources, both minted by real work and neither by playing:
+ * Three scarce resources, all minted by real work and none by playing:
  *  - ENERGY pays for cards, and equals the gold you earned *today* (it expires
  *    at midnight and never banks). This is a mirror of the ledger, not a
  *    deduction: playing never lowers your real gold balance.
+ *  - DRAW CREDITS pay for extra cards, and come from micro-actions measured in
+ *    tenths of gold. They also expire at midnight. Micro buys OPTIONS (a wider
+ *    hand); finished work buys POWER (the energy to play what's in it).
  *  - KEYS are specific todos the agent pins to the run. A pinned run is frozen
  *    until that todo is `done`, however much energy you have.
  *
@@ -136,12 +139,23 @@ export interface CrawlState {
   rewardChoices: CardId[];
 
   /**
-   * Local day (YYYY-MM-DD) that `energyUsed` belongs to. When the server sees a
-   * different day it zeroes `energyUsed` — that is how today's energy expires.
+   * Local day (YYYY-MM-DD) that `energyUsed` and `drawsUsed` belong to. When the
+   * server sees a different day it zeroes both — that is how today's energy and
+   * draw credits expire.
    */
   energyDay: string;
   /** Energy already spent today. Available = goldEarnedToday - energyUsed. */
   energyUsed: number;
+  /**
+   * Extra cards already drawn today off micro-gold. Credits available =
+   * floor(microTenthsToday / MICRO_TENTHS_PER_DRAW) - drawsUsed.
+   *
+   * Counted separately from `energyUsed` because the two buy different things:
+   * spending energy is a move in the fight, spending a draw credit only widens
+   * the hand you make that move from. Keeping them apart is what stops a pile of
+   * micro-actions from substituting for finishing something.
+   */
+  drawsUsed: number;
 
   /**
    * A todo the agent pinned to the run. While it is set and not yet done, the
@@ -166,6 +180,12 @@ export interface CrawlState {
 export interface CrawlContext {
   /** Gold earned today, from the ledger. The day's total energy budget. */
   goldEarnedToday: number;
+  /**
+   * Micro-action tenths earned today, from the micro counter. The day's total
+   * draw-credit budget. Tenths that have already rolled over into whole gold
+   * still count here — the rollover pays energy, it does not consume the tenths.
+   */
+  microTenthsToday: number;
   /** Local day key, so the engine can detect and apply the midnight reset. */
   today: string;
   /** True when a todo was completed recently — worth bonus damage. */
@@ -177,6 +197,8 @@ export interface CrawlContext {
 
 export type CrawlEvent =
   | { type: "cardPlayed"; cardId: CardId; damage: number }
+  /** An extra card pulled off a micro-gold draw credit, not off a turn. */
+  | { type: "cardDrawn"; cardId: CardId }
   | { type: "enemySlain"; name: string; boss: boolean }
   | { type: "playerHit"; amount: number; heavy: boolean }
   | { type: "floorCleared"; floor: number }

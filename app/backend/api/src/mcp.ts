@@ -20,6 +20,7 @@ import {
   deductGold,
   listGoldActivityDays,
   getGoldEarnedToday,
+  awardMicroTenths,
   getCrawlSnapshot,
   setCrawlLockAction,
 } from "./store.js";
@@ -238,6 +239,35 @@ server.tool(
     const state = awardGold(amount, undefined, activity);
     if (with_sound) await fireSoundEvent("gold");
     return { content: [{ type: "text" as const, text: JSON.stringify(state, null, 2) }] };
+  },
+);
+
+server.tool(
+  "award_micro",
+  "Record micro-actions in tenths of a gold — the fast sub-tick between finished todos. Use it for the small stuff a session generates (a decision made, a message sent, a file read) instead of tracking 0.1 increments yourself: the count lives on the server, so it survives the session and is exact. Every 3 tenths buys one extra card draw in The Crawl (micro buys OPTIONS), and every 10 tenths roll over into 1 real gold automatically (do not call award_gold for the rollover). Unspent tenths expire at midnight.",
+  {
+    tenths: z
+      .number()
+      .int()
+      .positive()
+      .describe("How many tenths of a gold to record. 1 tenth = one micro-action = 0.1 gold."),
+    label: z
+      .string()
+      .optional()
+      .describe('What the micro-actions were, for the ledger entry written when they roll over into whole gold. Defaults to "Micro actions".'),
+    source: z
+      .string()
+      .optional()
+      .describe('Which agent submitted this (e.g. "claude-code"). Optional.'),
+    with_sound: z
+      .boolean()
+      .optional()
+      .describe("If true, play the gold coin sound in the overlay UI. Defaults to false."),
+  },
+  async ({ tenths, label, source, with_sound = false }) => {
+    const result = awardMicroTenths(tenths, { label: label ?? null, source: source ?? null });
+    if (with_sound) await fireSoundEvent("gold");
+    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
   },
 );
 
@@ -500,7 +530,7 @@ server.tool(
 
 server.tool(
   "get_crawl",
-  "Read the state of The Crawl, the overlay dungeon run: floor and room, HP, the current enemy, the hand and deck, how much energy is left today (energy = gold earned today, it expires at midnight), and whether a todo is currently pinned as a lock. Use it to see how the run is doing before suggesting what to pin next.",
+  "Read the state of The Crawl, the overlay dungeon run: floor and room, HP, the current enemy, the hand and deck, how much energy is left today (energy = gold earned today, it expires at midnight), how many extra card draws today's micro-actions have bought (drawCredits, from award_micro), and whether a todo is currently pinned as a lock. Use it to see how the run is doing before suggesting what to pin next.",
   {},
   async () => {
     const snapshot = getCrawlSnapshot();

@@ -108,6 +108,22 @@ CREATE TABLE IF NOT EXISTS gold_state (
   updated_at TEXT NOT NULL
 );
 
+-- Micro-actions, in tenths of a gold. Day-scoped: the day column is the local
+-- date the counters belong to, and a read on a later day starts them over, so
+-- unspent tenths expire at midnight exactly like today's energy does.
+--
+-- tenths only ever grows within a day; the rollover into whole gold is tracked by
+-- the gold_paid watermark rather than by subtracting from it. Draw credits are
+-- floor(tenths / MICRO_TENTHS_PER_DRAW), so decrementing would walk them
+-- backwards every tenth gold and desync the crawl's own drawsUsed counter.
+CREATE TABLE IF NOT EXISTS micro_state (
+  id INTEGER PRIMARY KEY CHECK(id = 1),
+  day TEXT NOT NULL,
+  tenths INTEGER NOT NULL DEFAULT 0,
+  gold_paid INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS gold_activity (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL DEFAULT 'local',

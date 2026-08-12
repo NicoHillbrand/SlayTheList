@@ -79,10 +79,13 @@ import {
   getCrawlSnapshot,
   playCrawlCardAction,
   endCrawlTurnAction,
+  drawCrawlCardAction,
   chooseCrawlRewardAction,
   restartCrawlAction,
   setCrawlLockAction,
   type CrawlSnapshot,
+  getMicroState,
+  awardMicroTenths,
 } from "./store.js";
 import { referenceImagesDir } from "./db.js";
 import { testDetection, clearRefPixelCache, getDetectionRefs, DETECTION_COMPARE_SIZE, DETECTION_TEMPLATE_WIDTH, DETECTION_TEMPLATE_HEIGHT } from "./image-match.js";
@@ -768,6 +771,26 @@ app.post("/api/gold/deduct", (req, res) => {
     return badRequest(res, "amount must be a non-negative integer");
   }
   ok(res, deductGold(amount, undefined, parseActivity(req.body?.activity)));
+  if (withSound) broadcastPlaySound("gold");
+  broadcastOverlayState();
+  triggerCloudSnapshotSync();
+});
+
+app.get("/api/micro", (_req, res) => {
+  ok(res, getMicroState());
+});
+
+// Record micro-actions in tenths of a gold. Ten tenths roll into one real gold
+// automatically; three buy a card draw in the crawl.
+app.post("/api/micro/award", (req, res) => {
+  const tenths = req.body?.tenths;
+  const withSound = req.body?.withSound === true;
+  if (typeof tenths !== "number" || !Number.isInteger(tenths) || tenths < 1) {
+    return badRequest(res, "tenths must be a positive integer");
+  }
+  const label = typeof req.body?.label === "string" ? req.body.label : null;
+  const source = typeof req.body?.source === "string" ? req.body.source : null;
+  ok(res, awardMicroTenths(tenths, { label, source }));
   if (withSound) broadcastPlaySound("gold");
   broadcastOverlayState();
   triggerCloudSnapshotSync();
@@ -1772,6 +1795,11 @@ app.post("/api/crawl/play", (req, res) => {
 
 app.post("/api/crawl/end-turn", (_req, res) => {
   crawlRoute(res, () => endCrawlTurnAction());
+});
+
+// Spend one micro-gold draw credit. No body: a draw is always exactly one card.
+app.post("/api/crawl/draw", (_req, res) => {
+  crawlRoute(res, () => drawCrawlCardAction());
 });
 
 app.post("/api/crawl/reward", (req, res) => {

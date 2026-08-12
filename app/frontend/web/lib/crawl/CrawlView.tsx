@@ -17,6 +17,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   FLOORS,
   HAND_SIZE,
+  MICRO_TENTHS_PER_DRAW,
   MOMENTUM_DAMAGE,
   ROOMS_PER_FLOOR,
   getCard,
@@ -25,6 +26,7 @@ import {
 import {
   EVENTS_URL,
   chooseReward,
+  drawCard,
   endTurn,
   fetchCrawl,
   playCard,
@@ -140,9 +142,12 @@ export function CrawlView({ compact = false }: { compact?: boolean }) {
     return <div className={styles.root}><div className={styles.loading}>Lighting a torch…</div></div>;
   }
 
-  const { state, energy, lock } = snap;
+  const { state, energy, lock, drawCredits } = snap;
   const locked = lock !== null && !lock.done;
   const roomsCleared = (state.floor - 1) * ROOMS_PER_FLOOR + state.room;
+  // Micro draws overflow the hand on purpose, so the row grows past HAND_SIZE
+  // rather than hiding the cards it bought.
+  const handSlots = Math.max(HAND_SIZE, state.hand.length);
 
   return (
     <div className={styles.root}>
@@ -156,6 +161,17 @@ export function CrawlView({ compact = false }: { compact?: boolean }) {
         {snap.momentum && (
           <span className={styles.momentum} title={`Todo finished in the last hour: +${MOMENTUM_DAMAGE} damage`}>
             ⚔+{MOMENTUM_DAMAGE}
+          </span>
+        )}
+        {/* Draw credits sit next to energy but never share its ⚡: they buy
+            cards, not plays, and reading them as spendable energy would be the
+            one wrong idea about this pool. */}
+        {drawCredits > 0 && (
+          <span
+            className={styles.drawCredits}
+            title={`${drawCredits} extra card draw${drawCredits === 1 ? "" : "s"} from today's micro-actions (${snap.microTenthsToday} tenths, ${MICRO_TENTHS_PER_DRAW} per draw). Draws widen your hand; energy is what plays from it.`}
+          >
+            🃏{drawCredits}
           </span>
         )}
         <span
@@ -265,7 +281,7 @@ export function CrawlView({ compact = false }: { compact?: boolean }) {
           </div>
 
           <div className={styles.hand}>
-            {Array.from({ length: HAND_SIZE }, (_, i) => {
+            {Array.from({ length: handSlots }, (_, i) => {
               const id: CardId | undefined = state.hand[i];
               const card = id ? getCard(id) : undefined;
               if (!card) {
@@ -301,6 +317,16 @@ export function CrawlView({ compact = false }: { compact?: boolean }) {
           )}
 
           <div className={styles.actions}>
+            {drawCredits > 0 && (
+              <button
+                className={styles.btn}
+                disabled={busy || locked}
+                onClick={() => void act(drawCard)}
+                title={`Spend one micro-gold credit to draw a card, even above ${HAND_SIZE}. Costs no energy and does not give the enemy a turn.`}
+              >
+                🃏 Draw ({drawCredits})
+              </button>
+            )}
             <button
               className={styles.btn}
               disabled={busy || locked || !state.playedThisTurn}

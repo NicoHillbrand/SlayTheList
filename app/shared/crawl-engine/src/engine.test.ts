@@ -4,6 +4,7 @@ import {
   HAND_SIZE,
   HEAVY_EVERY,
   HEAVY_MULTIPLIER,
+  MICRO_TENTHS_PER_DRAW,
   MOMENTUM_DAMAGE,
   ROOMS_PER_FLOOR,
   START_HP,
@@ -15,6 +16,8 @@ import {
   canEndTurn,
   chooseReward,
   createCrawlState,
+  drawCreditsAvailable,
+  drawExtraCard,
   endTurn,
   energyAvailable,
   playCard,
@@ -29,6 +32,7 @@ const NOW = 1_770_000_000_000;
 function ctx(over: Partial<CrawlContext> = {}): CrawlContext {
   return {
     goldEarnedToday: 25,
+    microTenthsToday: 0,
     today: TODAY,
     momentum: false,
     unlocked: true,
@@ -94,6 +98,87 @@ describe("energy", () => {
     const state = withHand(fresh(), ["ward"]);
     const result = playCard(state, 0, ctx({ goldEarnedToday: 0 }));
     expect(result.state.block).toBe(getCard("ward")!.effect.block);
+  });
+});
+
+describe("micro-gold draw credits", () => {
+  const TENTHS = MICRO_TENTHS_PER_DRAW;
+
+  it("is today's tenths over the ratio, minus what the run already drew", () => {
+    const state = fresh();
+    expect(drawCreditsAvailable(state, ctx({ microTenthsToday: TENTHS * 2 }))).toBe(2);
+    expect(drawCreditsAvailable({ ...state, drawsUsed: 1 }, ctx({ microTenthsToday: TENTHS * 2 }))).toBe(1);
+  });
+
+  it("rounds down: a partial credit buys nothing", () => {
+    expect(drawCreditsAvailable(fresh(), ctx({ microTenthsToday: TENTHS - 1 }))).toBe(0);
+  });
+
+  it("expires at midnight instead of banking", () => {
+    const drawn = { ...fresh(), drawsUsed: 2 };
+    expect(drawCreditsAvailable(drawn, ctx({ microTenthsToday: TENTHS * 3 }))).toBe(1);
+    // New day: the pool is what today's micro bought, with no carry-over debt.
+    expect(
+      drawCreditsAvailable(drawn, ctx({ today: "2026-08-10", microTenthsToday: TENTHS })),
+    ).toBe(1);
+  });
+
+  it("draws a card and spends exactly one credit", () => {
+    const state = withHand(fresh(), ["strike"]);
+    const { state: next, events } = drawExtraCard(state, ctx({ microTenthsToday: TENTHS }));
+    expect(next.hand).toHaveLength(2);
+    expect(next.drawsUsed).toBe(1);
+    expect(events[0]).toMatchObject({ type: "cardDrawn", cardId: next.hand[1] });
+    expect(drawCreditsAvailable(next, ctx({ microTenthsToday: TENTHS }))).toBe(0);
+  });
+
+  it("overflows past the hand cap — that is the whole effect", () => {
+    const full = fresh();
+    expect(full.hand).toHaveLength(HAND_SIZE);
+    const { state: next } = drawExtraCard(full, ctx({ microTenthsToday: TENTHS }));
+    expect(next.hand).toHaveLength(HAND_SIZE + 1);
+  });
+
+  it("costs no energy and does not provoke the enemy", () => {
+    const state = fresh();
+    const { state: next } = drawExtraCard(state, ctx({ microTenthsToday: TENTHS }));
+    expect(next.energyUsed).toBe(state.energyUsed);
+    expect(next.playedThisTurn).toBe(false);
+    expect(canEndTurn(next)).toBe(false);
+  });
+
+  it("refuses without a full credit", () => {
+    const state = fresh();
+    const result = drawExtraCard(state, ctx({ microTenthsToday: TENTHS - 1 }));
+    expect(result.state).toEqual(state);
+    expect(result.events).toHaveLength(0);
+  });
+
+  it("refuses while the run is locked, however much micro was earned", () => {
+    const locked = setLock(fresh(), "todo-1", "Finish the thing");
+    const result = drawExtraCard(locked, ctx({ microTenthsToday: TENTHS * 5, unlocked: false }));
+    expect(result.state).toEqual(locked);
+    expect(result.events).toHaveLength(0);
+  });
+
+  it("does not burn the credit when there is nothing left to draw", () => {
+    const empty = { ...fresh(), drawPile: [], discard: [] };
+    const result = drawExtraCard(empty, ctx({ microTenthsToday: TENTHS }));
+    expect(result.state.drawsUsed).toBe(0);
+    expect(result.events).toHaveLength(0);
+  });
+
+  it("reshuffles the discard when the draw pile is dry", () => {
+    const state = { ...fresh(), drawPile: [], discard: ["ember", "hex"] };
+    const { state: next } = drawExtraCard(state, ctx({ microTenthsToday: TENTHS }));
+    expect(next.hand).toHaveLength(state.hand.length + 1);
+    expect(next.discard).toHaveLength(0);
+  });
+
+  it("survives a restart: dying is not a draw refund", () => {
+    const used = { ...fresh(), drawsUsed: 2 };
+    const { state: next } = restartRun(used, 77, NOW, TODAY);
+    expect(next.drawsUsed).toBe(2);
   });
 });
 

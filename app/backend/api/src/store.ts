@@ -6,6 +6,8 @@ import {
   blockedReason as crawlBlockedReason,
   chooseReward as chooseCrawlReward,
   createCrawlState,
+  drawCreditsAvailable as crawlDrawCreditsAvailable,
+  drawExtraCard as drawCrawlExtraCard,
   emptyCrawlMeta,
   endTurn as endCrawlTurn,
   energyAvailable as crawlEnergyAvailable,
@@ -809,6 +811,98 @@ export function spendGold(amount: number, userId?: string, activity?: GoldActivi
 }
 
 // ---------------------------------------------------------------------------
+// Micro-gold — small engagement rewards, counted in tenths of a gold.
+//
+// This exists because a finished todo (5 gold) is a slow tick, and the crawl had
+// nothing finer to respond to. Micro-actions are the sub-tick. They are kept in
+// tenths rather than as floats so the count is exact and server-owned: before
+// this, the 0.1 increments lived only in an agent's chat footer, were rebuilt
+// from zero every session, and validated nothing.
+//
+// What a tenth buys, and the reason it is two separate things:
+//   - DRAW CREDITS in the crawl, at MICRO_TENTHS_PER_DRAW each. The fast loop.
+//   - one whole GOLD per ten tenths, paid into the real ledger, which makes it
+//     energy like any other earning.
+// Draws are the point; the gold rollover is there so nothing earned evaporates.
+// ---------------------------------------------------------------------------
+
+/** Tenths that make one whole gold. The definition of "a tenth", not a dial. */
+export const MICRO_TENTHS_PER_GOLD = 10;
+
+export interface MicroState {
+  /** Local day these counters belong to. */
+  day: string;
+  /** Tenths earned today. Grows only; never decremented by the rollover. */
+  tenths: number;
+  /** Whole gold already rolled over from today's tenths (a watermark). */
+  goldPaid: number;
+}
+
+type MicroRow = { day: string; tenths: number; gold_paid: number };
+
+/**
+ * Today's micro counters. A row from an earlier day reads as a fresh zeroed day
+ * — that is how unspent tenths expire at midnight. The stale row is left alone
+ * until the next award writes over it, so a read never mutates.
+ */
+export function getMicroState(): MicroState {
+  const row = db.prepare("SELECT day, tenths, gold_paid FROM micro_state WHERE id = 1").get() as
+    | MicroRow
+    | undefined;
+  const today = localDateKey(new Date().toISOString());
+  if (!row || row.day !== today) return { day: today, tenths: 0, goldPaid: 0 };
+  return { day: row.day, tenths: row.tenths, goldPaid: row.gold_paid };
+}
+
+export interface MicroAwardResult extends MicroState {
+  /** Whole gold paid into the ledger by this call (usually 0). */
+  goldAwarded: number;
+  /** Resulting real gold balance. */
+  gold: number;
+}
+
+/**
+ * Record `tenths` micro-gold and roll any completed whole gold into the ledger.
+ *
+ * The rollover is a watermark comparison rather than a subtraction, so a single
+ * award of 25 tenths pays 2 gold in one go and the draw-credit count stays
+ * monotonic across the boundary.
+ */
+export function awardMicroTenths(
+  tenths: number,
+  options?: { label?: string | null; source?: string | null },
+): MicroAwardResult {
+  const delta = Math.max(0, Math.floor(tenths));
+  const current = getMicroState();
+  const nextTenths = current.tenths + delta;
+  const owed = Math.floor(nextTenths / MICRO_TENTHS_PER_GOLD) - current.goldPaid;
+  const goldAwarded = Math.max(0, owed);
+  const nextGoldPaid = current.goldPaid + goldAwarded;
+
+  db.prepare(
+    `INSERT INTO micro_state (id, day, tenths, gold_paid, updated_at)
+     VALUES (1, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       day = excluded.day,
+       tenths = excluded.tenths,
+       gold_paid = excluded.gold_paid,
+       updated_at = excluded.updated_at`,
+  ).run(current.day, nextTenths, nextGoldPaid, new Date().toISOString());
+
+  let gold = getGoldState().gold;
+  if (goldAwarded > 0) {
+    // One ledger entry per whole gold crossed, tagged `micro` so the daily log
+    // collapses it into the single running "⚡ Micro actions" line.
+    gold = awardGold(goldAwarded, undefined, {
+      sourceType: "micro",
+      label: options?.label?.trim() || "Micro actions",
+      source: options?.source ?? null,
+    }).gold;
+  }
+  return { day: current.day, tenths: nextTenths, goldPaid: nextGoldPaid, goldAwarded, gold };
+}
+
+// ---------------------------------------------------------------------------
 // Game States
 // ---------------------------------------------------------------------------
 
@@ -1409,6 +1503,10 @@ export interface CrawlSnapshot {
   energy: number;
   /** Today's earned gold — the full size of today's pool. */
   goldEarnedToday: number;
+  /** Extra card draws still available off today's micro-actions. */
+  drawCredits: number;
+  /** Today's micro-action tenths — the full size of the draw pool. */
+  microTenthsToday: number;
   /** True when a todo was completed within the momentum window. */
   momentum: boolean;
   /** Null when the player can act, otherwise why they cannot. */
@@ -1496,6 +1594,7 @@ function crawlContext(state: CrawlState): CrawlContext {
   const lock = resolveCrawlLock(state);
   return {
     goldEarnedToday: getGoldEarnedToday(),
+    microTenthsToday: getMicroState().tenths,
     today: todayKey(),
     momentum: hasCrawlMomentum(nowMs),
     unlocked: lock === null || lock.done,
@@ -1515,6 +1614,8 @@ function toCrawlSnapshot(state: CrawlState, events: CrawlEvent[]): CrawlSnapshot
     state,
     energy: crawlEnergyAvailable(state, ctx),
     goldEarnedToday: ctx.goldEarnedToday,
+    drawCredits: crawlDrawCreditsAvailable(state, ctx),
+    microTenthsToday: ctx.microTenthsToday,
     momentum: ctx.momentum,
     blocked: crawlBlockedReason(state, ctx),
     lock: resolveCrawlLock(state),
@@ -1569,6 +1670,11 @@ export function playCrawlCardAction(handIndex: number): CrawlSnapshot {
 
 export function endCrawlTurnAction(): CrawlSnapshot {
   return runCrawlAction((state, ctx) => endCrawlTurn(state, ctx));
+}
+
+/** Spend one micro-gold draw credit for an extra card. */
+export function drawCrawlCardAction(): CrawlSnapshot {
+  return runCrawlAction((state, ctx) => drawCrawlExtraCard(state, ctx));
 }
 
 export function chooseCrawlRewardAction(cardId: CrawlCardId | null): CrawlSnapshot {

@@ -42,14 +42,21 @@ Individual rows with full CRUD:
 |------|---------|
 | `get_gold` | Returns the current `GoldState` (`gold` balance + `rewardedTodoIds`). |
 | `list_gold_activity` | Read the gold-activity ledger — what actually earned/spent gold, with per-entry `delta`, `createdAt`, `sourceType`, and `label`. Returns `earnedToday`, `balance`, and `days` (grouped by local day, newest first). `days`: how many recent days (default 7, max 365). `since` (ISO 8601): also returns `sinceEntries` (flat list, `createdAt >= since`) and `earnedSince` (sum of their positive deltas) — use to reconcile UI completions into a session footer. |
-| `award_gold` | Add gold. Requires `amount` (non-negative integer). Optional: `title` — records a named achievement in the daily/shareable log (omit for a silent balance-only bump); `category` — `"Tasks"` \| `"Habits"` \| `"Encouragements"` \| `"Micro"` (small engagement rewards; collapsed into one running "⚡ Micro actions" total in the Tasks section of the log) (unknown/missing → `"Other"`); `source` — which agent submitted it (e.g. `"claude-code"`); `timestamp` — ISO 8601 to backdate; `with_sound: true` plays the gold coin sound in the overlay (best-effort — needs the API server running). |
+| `award_gold` | Add gold. Requires `amount` (non-negative integer). Optional: `title` — records a named achievement in the daily/shareable log (omit for a silent balance-only bump); `category` — `"Tasks"` \| `"Habits"` \| `"Encouragements"` \| `"Micro"` (small engagement rewards; collapsed into one running "⚡ Micro actions" total in the Tasks section of the log) (unknown/missing → `"Other"`); `source` — which agent submitted it (e.g. `"claude-code"`); `timestamp` — ISO 8601 to backdate; `with_sound: true` plays the gold coin sound — see the caveat below. |
+| `award_micro` | Record micro-actions in **tenths** of a gold — the fast sub-tick between finished todos. Requires `tenths` (positive integer). Optional `label`, `source`, `with_sound`. Ten tenths **roll over into 1 real gold automatically** (do not follow up with `award_gold`); every `MICRO_TENTHS_PER_DRAW` (3) buys one extra card draw in The Crawl. Unspent tenths expire at midnight. Returns `tenths`, `goldPaid` (today's rollover watermark), `goldAwarded` (paid by this call), and the resulting `gold`. |
 | `spend_gold` | Deduct gold (clamps at zero, never negative). Requires `amount`. Optional `with_sound` like above. |
+
+**`with_sound` caveat:** it broadcasts a `play_sound` event over the API's
+WebSocket, and the only listener is the **main web app window** (`page.tsx`). The
+overlay panels do not listen, so with just the overlay open the flag is silently a
+no-op. It has never been otherwise — the listener was added in one place when the
+event was introduced and nothing removed it.
 
 ### The Crawl (overlay dungeon run)
 
 | Tool | Purpose |
 |------|---------|
-| `get_crawl` | Read the run: floor/room, HP, current enemy, hand and deck, energy left today, and any pinned lock. |
+| `get_crawl` | Read the run: floor/room, HP, current enemy, hand and deck, energy left today, `drawCredits` / `microTenthsToday` (extra draws bought by `award_micro`), and any pinned lock. |
 | `lock_crawl_on_todo` | Pin a todo to the run. While it is not `done` the run is **frozen** — no card can be played, no room entered, whatever the energy. Pass `todo_id: null` to clear. Create the todo with `create_todo` first. |
 
 The design in one line: **energy is the gold you earned today** (a mirror of the
@@ -57,6 +64,14 @@ ledger, expiring at midnight — playing never lowers the real balance), and
 **locks are todos**. Both are minted by real work only. Clearing the boss pays 10
 gold back into the ledger. See `shared/crawl-engine` for the rules and
 `pacing.test.ts` for the balance guards.
+
+**Micro-gold buys draws, not energy.** `award_micro` mints draw credits at 3
+tenths each, and spending one (`POST /api/crawl/draw`) pulls a card *above* the
+normal `HAND_SIZE` cap — that overflow is the "extend your turn" effect. It costs
+no energy and does not give the enemy a turn. Cards still cost energy to play, so
+a day of nothing but micro-actions widens the hand and advances the run not at
+all; `pacing.test.ts` guards exactly that. Micro buys OPTIONS, finished work buys
+POWER.
 
 When suggesting sub-tasks in a session, `lock_crawl_on_todo` is how a suggestion
 becomes the thing that unlocks the next turn. Use it deliberately: a lock the
@@ -152,7 +167,7 @@ reasoning about a run:
   "playedThisTurn": false,
   "deck": ["strike", "..."], "hand": ["..."],
   "enemy": { "name": "Cellar Rat", "hp": 18, "attack": 4, "turnsUntilHeavy": 3, "boss": false },
-  "energyDay": "YYYY-MM-DD", "energyUsed": 0,
+  "energyDay": "YYYY-MM-DD", "energyUsed": 0, "drawsUsed": 0,
   "lockTodoId": "uuid | null", "lockTodoTitle": "string | null"
 }
 ```
@@ -161,6 +176,9 @@ Two rules that are easy to get wrong: HP resets in full every room (it measures
 one fight, not the run), and the enemy only swings in response to a played card
 — `playedThisTurn: false` means nothing can hurt the player, so an idle run is
 never in danger.
+
+`energyDay` covers both daily pools: `energyUsed` and `drawsUsed` are zeroed
+together when the day rolls over.
 
 ### ReflectionEntry
 ```json

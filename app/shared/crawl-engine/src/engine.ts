@@ -16,6 +16,11 @@
  *  2. ENERGY IS NOT PER-TURN. It is a shared daily pool (today's earned gold),
  *     so a turn is only as big as the work behind it, and a productive day
  *     buys a long push rather than a fixed three actions.
+ *
+ * A third, smaller pool sits alongside energy: DRAW CREDITS, minted by
+ * micro-actions in tenths of gold. They buy cards rather than plays, so the fast
+ * trickle of small wins widens what you can choose from without ever standing in
+ * for the finished work that pays to actually swing.
  */
 import {
   BOSS_GOLD_REWARD,
@@ -24,6 +29,7 @@ import {
   HAND_SIZE,
   HEAVY_EVERY,
   HEAVY_MULTIPLIER,
+  MICRO_TENTHS_PER_DRAW,
   MOMENTUM_DAMAGE,
   REWARD_CHOICES,
   REWARD_POOL,
@@ -94,6 +100,7 @@ export function createCrawlState(
     rewardChoices: [],
     energyDay: today,
     energyUsed: 0,
+    drawsUsed: 0,
     lockTodoId: null,
     lockTodoTitle: null,
     rolls: 1,
@@ -102,18 +109,32 @@ export function createCrawlState(
 }
 
 /**
- * Apply the midnight reset. Today's energy pool expires rather than banking,
- * so crossing into a new local day zeroes what this run has spent.
+ * Apply the midnight reset. Today's pools expire rather than banking, so
+ * crossing into a new local day zeroes what this run has spent from both.
  */
 export function normalizeDay(state: CrawlState, today: string): CrawlState {
   if (state.energyDay === today) return state;
-  return { ...state, energyDay: today, energyUsed: 0 };
+  return { ...state, energyDay: today, energyUsed: 0, drawsUsed: 0 };
 }
 
 /** Energy still spendable today: what you earned, minus what this run used. */
 export function energyAvailable(state: CrawlState, ctx: CrawlContext): number {
   const day = normalizeDay(state, ctx.today);
   return Math.max(0, Math.floor(ctx.goldEarnedToday) - day.energyUsed);
+}
+
+/**
+ * Extra card draws still available today: what today's micro-actions bought,
+ * minus what this run already pulled. Mirrors `energyAvailable` exactly, against
+ * the other pool.
+ */
+export function drawCreditsAvailable(state: CrawlState, ctx: CrawlContext): number {
+  const day = normalizeDay(state, ctx.today);
+  // Coerced rather than trusted: a caller that omits the field should read as
+  // "no credits", not poison every later comparison with NaN.
+  const tenths = Number.isFinite(ctx.microTenthsToday) ? Math.max(0, ctx.microTenthsToday) : 0;
+  const earned = Math.floor(tenths / MICRO_TENTHS_PER_DRAW);
+  return Math.max(0, earned - day.drawsUsed);
 }
 
 /** Why the player cannot act right now, or null when they can. */
@@ -126,14 +147,19 @@ export function blockedReason(state: CrawlState, ctx: CrawlContext): string | nu
   return null;
 }
 
-function drawCards(state: CrawlState, count: number): CrawlState {
+/**
+ * Move `count` cards from the draw pile into the hand, reshuffling the discard
+ * when the pile runs dry. Stops at HAND_SIZE unless `overflow` is set, which is
+ * how a micro-gold draw pushes the hand past its normal cap.
+ */
+function drawCards(state: CrawlState, count: number, overflow = false): CrawlState {
   let { hand, drawPile, discard, rolls } = state;
   hand = [...hand];
   drawPile = [...drawPile];
   discard = [...discard];
 
   for (let i = 0; i < count; i += 1) {
-    if (hand.length >= HAND_SIZE) break;
+    if (!overflow && hand.length >= HAND_SIZE) break;
     if (drawPile.length === 0) {
       if (discard.length === 0) break;
       rolls += 1;
@@ -200,6 +226,36 @@ export function playCard(state: CrawlState, handIndex: number, ctx: CrawlContext
 
   if (enemy.hp <= 0) return resolveEnemyDeath(next, events);
   return { state: next, events };
+}
+
+/**
+ * Spend one micro-gold draw credit to pull a single extra card.
+ *
+ * Deliberately allowed to push the hand past HAND_SIZE — that overflow IS the
+ * effect, the "extend your turn" the credits are for. A run whose energy is
+ * spent gains nothing from this, which is the intended shape: micro-actions
+ * widen the choice, finished work is still the only thing that pays to act.
+ *
+ * Does not touch `playedThisTurn`, so drawing never provokes the enemy: a credit
+ * spent is not a move made.
+ */
+export function drawExtraCard(state: CrawlState, ctx: CrawlContext): CrawlResult {
+  const base = normalizeDay(state, ctx.today);
+  if (blockedReason(base, ctx) !== null) return { state: base, events: [] };
+  if (base.status !== "fighting") return { state: base, events: [] };
+  if (drawCreditsAvailable(base, ctx) < 1) return { state: base, events: [] };
+  // Nothing left anywhere to draw: refuse rather than burn the credit on a no-op.
+  if (base.drawPile.length === 0 && base.discard.length === 0) return { state: base, events: [] };
+
+  const drawn = drawCards(base, 1, true);
+  const cardId = drawn.hand[drawn.hand.length - 1];
+  if (drawn.hand.length === base.hand.length || cardId === undefined) {
+    return { state: base, events: [] };
+  }
+  return {
+    state: { ...drawn, drawsUsed: base.drawsUsed + 1 },
+    events: [{ type: "cardDrawn", cardId }],
+  };
 }
 
 /** Enemy at 0 HP: hand the player their reward, or end the run on the boss. */
@@ -340,10 +396,13 @@ export function chooseReward(
 
 /** Start a fresh run, carrying meta forward. Free: death costs progress, not gold. */
 export function restartRun(state: CrawlState, seed: number, nowMs: number, today: string): CrawlResult {
-  // Carry today's spend across the restart so dying is not an energy refund.
+  // Carry today's spend across the restart so dying refunds neither pool.
   const day = normalizeDay(state, today);
   const fresh = createCrawlState(seed, nowMs, today, day.meta);
-  return { state: { ...fresh, energyUsed: day.energyUsed }, events: [] };
+  return {
+    state: { ...fresh, energyUsed: day.energyUsed, drawsUsed: day.drawsUsed },
+    events: [],
+  };
 }
 
 /** Pin a todo to the run. Blocks all actions until that todo is done. */

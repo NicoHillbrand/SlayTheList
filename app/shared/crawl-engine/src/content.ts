@@ -14,7 +14,12 @@ export const FLOORS = 5;
 export const ROOMS_PER_FLOOR = 2;
 
 export const START_HP = 40;
-/** Cards held at once. Small: the panel is ~340px wide. */
+/**
+ * Cards held at once. Small: the panel is ~340px wide.
+ *
+ * This caps what a TURN refills to, not what a hand may contain. Micro-gold
+ * draws deliberately overflow it — see `drawExtraCard`.
+ */
 export const HAND_SIZE = 4;
 /**
  * Cards drawn after the enemy's swing. This refills the hand rather than
@@ -27,6 +32,18 @@ export const HAND_SIZE = 4;
  * Cards you did not play still persist; this only tops the hand back up.
  */
 export const DRAW_PER_TURN = HAND_SIZE;
+
+/**
+ * Micro-action tenths that buy one extra card draw.
+ *
+ * Three micro-actions per card. The ratio has to sit below the ten tenths that
+ * make a whole gold, or micro-gold would be strictly worse than waiting for the
+ * rollover: at 3 a day's micro trickle hands out options several times before it
+ * has produced a single point of energy, which is the faster loop this exists
+ * for. Raise it and micro stops registering between todos; lower it and the hand
+ * fills up faster than energy can ever empty it.
+ */
+export const MICRO_TENTHS_PER_DRAW = 3;
 
 /** Bonus damage on every attack while a todo was completed recently. */
 export const MOMENTUM_DAMAGE = 3;

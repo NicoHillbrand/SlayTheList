@@ -24,6 +24,10 @@ export interface CrawlSnapshot {
   energy: number;
   /** Today's earned gold — the full size of today's pool. */
   goldEarnedToday: number;
+  /** Extra card draws still available off today's micro-actions. */
+  drawCredits: number;
+  /** Today's micro-action tenths — the full size of the draw pool. */
+  microTenthsToday: number;
   /** True when a todo was completed within the momentum window. */
   momentum: boolean;
   /** Null when the player can act, otherwise why they cannot. */
@@ -66,6 +70,11 @@ export function playCard(handIndex: number): Promise<CrawlSnapshot> {
 
 export function endTurn(): Promise<CrawlSnapshot> {
   return api<CrawlSnapshot>("/api/crawl/end-turn", { method: "POST" });
+}
+
+/** Spend one micro-gold draw credit on an extra card. */
+export function drawCard(): Promise<CrawlSnapshot> {
+  return api<CrawlSnapshot>("/api/crawl/draw", { method: "POST" });
 }
 
 /** `cardId` null skips the reward and keeps the deck lean. */

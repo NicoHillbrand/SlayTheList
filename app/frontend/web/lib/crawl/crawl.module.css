@@ -61,6 +61,17 @@
   color: var(--muted);
 }
 
+/* Draw credits are micro-GOLD, so they stay in the gold family — dimmed, since
+   they are tenths. Deliberately not --energy blue: that colour means "spendable
+   on a play", and these are not. */
+.drawCredits {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-weight: 600;
+  color: var(--gold-dim);
+}
+
 .momentum {
   color: var(--good);
   font-weight: 600;

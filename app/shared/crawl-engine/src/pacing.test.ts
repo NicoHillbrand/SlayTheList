@@ -14,8 +14,23 @@
  * winnable, the run is too hard.
  */
 import { describe, expect, it } from "vitest";
-import { FLOORS, ROOMS_PER_FLOOR, START_HP, TOTAL_ROOMS, getCard } from "./content.js";
-import { canEndTurn, chooseReward, createCrawlState, endTurn, playCard } from "./engine.js";
+import {
+  FLOORS,
+  HAND_SIZE,
+  MICRO_TENTHS_PER_DRAW,
+  ROOMS_PER_FLOOR,
+  START_HP,
+  TOTAL_ROOMS,
+  getCard,
+} from "./content.js";
+import {
+  canEndTurn,
+  chooseReward,
+  createCrawlState,
+  drawExtraCard,
+  endTurn,
+  playCard,
+} from "./engine.js";
 import type { CardId, CrawlContext, CrawlState } from "./types.js";
 
 const TODAY = "2026-08-09";
@@ -37,8 +52,8 @@ const REWARD_RANK: CardId[] = [
 /** Energy the reference player banks before opening a turn. Roughly a hand. */
 const BURST_TARGET = 6;
 
-function ctx(goldEarnedToday: number): CrawlContext {
-  return { goldEarnedToday, today: TODAY, momentum: false, unlocked: true, nowMs: NOW };
+function ctx(goldEarnedToday: number, microTenthsToday = 0): CrawlContext {
+  return { goldEarnedToday, microTenthsToday, today: TODAY, momentum: false, unlocked: true, nowMs: NOW };
 }
 
 interface RunOutcome {
@@ -167,6 +182,40 @@ describe("a run costs days of real work", () => {
     const lean = playReferenceRun(42, 10).energySpent;
     const rich = playReferenceRun(42, 60).energySpent;
     expect(Math.abs(rich - lean) / Math.max(lean, 1)).toBeLessThan(0.6);
+  });
+});
+
+describe("micro-gold buys options, not power", () => {
+  it("a day of nothing but micro-actions cannot advance the run at all", () => {
+    // The failure this guards against: micro-gold quietly becoming a second
+    // energy source, so a session of small ticks substitutes for finishing
+    // something. No gold earned today means no card can be played, however many
+    // draw credits are banked.
+    let state = createCrawlState(42, NOW, TODAY);
+    const rich = ctx(0, MICRO_TENTHS_PER_DRAW * 20);
+    for (let i = 0; i < 20; i += 1) {
+      const drawn = drawExtraCard(state, rich);
+      if (drawn.state === state) break;
+      state = drawn.state;
+    }
+    // A big hand, and nothing to do with it: every card in the deck costs energy
+    // except the free ones, which are rewards the player has not been offered yet.
+    expect(state.hand.length).toBeGreaterThan(HAND_SIZE);
+    for (let i = 0; i < state.hand.length; i += 1) {
+      expect(playCard(state, i, rich).events).toHaveLength(0);
+    }
+    expect(state.room).toBe(0);
+    expect(state.floor).toBe(1);
+  });
+
+  it("costs a finished todo's worth of micro to match one todo's energy", () => {
+    // Ten tenths make a gold, so a 5-gold todo is 50 micro-actions. Micro should
+    // stay the faster loop, not the cheaper one: at 3 tenths a draw, those same
+    // 50 tenths hand out 16 draws long before they add 5 energy.
+    const todoWorthInTenths = 50;
+    const draws = Math.floor(todoWorthInTenths / MICRO_TENTHS_PER_DRAW);
+    expect(draws).toBeGreaterThan(HAND_SIZE * 2);
+    expect(MICRO_TENTHS_PER_DRAW).toBeLessThan(10);
   });
 });
 
