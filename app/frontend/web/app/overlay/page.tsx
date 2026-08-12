@@ -232,43 +232,67 @@ function CurrentStepLine({ step }: { step: CurrentStep }) {
     <div
       style={{
         display: "flex",
-        alignItems: "baseline",
-        gap: 6,
-        marginBottom: 6,
+        alignItems: "flex-start",
+        gap: 8,
+        marginBottom: 8,
         minWidth: 0,
+        padding: "7px 8px 7px 9px",
+        borderRadius: 7,
+        // A card, not a footnote: this is the instruction the panel exists to
+        // carry. It earns a surface and a gold edge — but a FLAT surface with no
+        // shadow and nothing that moves, so it reads as important without
+        // competing with the fight below it for motion or contrast.
+        background: dim ? "rgba(30,30,56,0.5)" : "#1e1e38",
+        borderLeft: `2px solid ${dim ? "#4a4a68" : "#d4aa47"}`,
         fontSize: 11,
-        lineHeight: 1.35,
+        lineHeight: 1.4,
         color: dim ? "#6a6a88" : "#8a89a6",
       }}
     >
-      <span aria-hidden style={{ color: dim ? "#4a4a68" : "#6a6a88" }}>
-        ▸
-      </span>
       <div style={{ minWidth: 0, flex: 1 }}>
         <div
-          title={
-            step.subtitle
-              ? `${step.text}\n${step.subtitle}`
-              : step.text
-          }
           style={{
+            display: "flex",
+            alignItems: "baseline",
+            gap: 6,
+            fontSize: 9,
+            letterSpacing: "0.09em",
+            textTransform: "uppercase",
+            color: dim ? "#5a5a78" : "#b8942f",
+          }}
+        >
+          <span>Now</span>
+          {/* The age appears only once it matters, so a dimmed card reads as old
+              rather than as broken. */}
+          {dim && <span style={{ letterSpacing: 0 }}>· {timeAgo(step.setAt)} ago</span>}
+        </div>
+        <div
+          title={step.subtitle ? `${step.text}\n${step.subtitle}` : step.text}
+          style={{
+            marginTop: 1,
+            fontSize: 12.5,
+            fontWeight: 600,
             whiteSpace: "nowrap",
             overflow: "hidden",
             textOverflow: "ellipsis",
-            color: dim ? "#7a7a98" : "#c9c7d8",
+            color: dim ? "#8a89a6" : "#e8e6f0",
           }}
         >
           {step.text}
         </div>
         {step.subtitle && (
-          <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          <div
+            style={{
+              marginTop: 1,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
             {step.subtitle}
           </div>
         )}
       </div>
-      {/* The age is shown once it matters, so a dimmed line is explained rather
-          than just looking broken. */}
-      {dim && <span style={{ whiteSpace: "nowrap" }}>{timeAgo(step.setAt)}</span>}
       <button
         type="button"
         title="Hide this step"
@@ -282,8 +306,9 @@ function CurrentStepLine({ step }: { step: CurrentStep }) {
         }}
         style={{
           font: "inherit",
+          fontSize: 13,
           lineHeight: 1,
-          padding: "0 2px",
+          padding: "1px 2px",
           border: "none",
           background: "none",
           color: "#5a5a78",
@@ -310,6 +335,13 @@ export default function OverlayTaskbarPage() {
   useEffect(() => {
     const value = new URLSearchParams(window.location.search).get("panel");
     setPanelParam(value === "base" || value === "friends" || value === "crawl" ? value : null);
+  }, []);
+
+  // Drop the app's background artwork on this route — see body.overlay-surface.
+  // Without it the window's leftover pixels show the main app's image.
+  useEffect(() => {
+    document.body.classList.add("overlay-surface");
+    return () => document.body.classList.remove("overlay-surface");
   }, []);
 
   // Keep the hosting window sized to the content.

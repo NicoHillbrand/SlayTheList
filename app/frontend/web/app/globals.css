@@ -26,6 +26,24 @@ body.desktop-app {
   background-position: calc(100% + 115px) center;
 }
 
+/*
+ * Overlay panels render inside the desktop agent's WebView2 windows, and those
+ * windows hug their content: the panel root drops the 100vh min-height so the
+ * host can size the window to the panel exactly. That leaves any leftover pixel
+ * — the rounding slack in the fit, the gap under a short panel — painted by the
+ * BODY, and the body is carrying the main app's artwork. The result was a strip
+ * of the app background showing along the bottom edge of the panel.
+ *
+ * So the overlay surface drops the artwork and paints the panel colour flat.
+ * #16162a is not arbitrary: it is the WPF window Background in
+ * OverlayPanelWindow, so the page, the window, and any slack between them are
+ * the same colour and no seam can appear whatever the fit rounds to.
+ */
+body.overlay-surface {
+  background-image: none;
+  background-color: #16162a;
+}
+
 main {
   max-width: 1120px;
   margin: 0 auto;

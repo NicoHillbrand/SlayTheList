@@ -10,6 +10,48 @@ internal static class NativeMethods
     private const int WsExNoActivate = 0x08000000;
     private const int WsExTransparent = 0x00000020;
 
+    /// <summary>DWMWA_WINDOW_CORNER_PREFERENCE.</summary>
+    private const int DwmwaWindowCornerPreference = 33;
+    /// <summary>DWMWCP_ROUND — the standard Windows 11 corner radius.</summary>
+    private const int DwmwcpRound = 2;
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(
+        IntPtr hwnd, int attribute, ref int value, int valueSize);
+
+    /// <summary>
+    /// Ask the compositor to round this window's corners.
+    ///
+    /// Needed because these panels are WindowStyle.None: Windows 11 rounds
+    /// ordinary windows on its own, but a chromeless one keeps hard corners
+    /// unless it opts back in. Doing it through DWM rather than a CSS radius is
+    /// what makes it a real rounded WINDOW — the corners are clipped by the
+    /// compositor, so nothing of the page shows outside the curve. A CSS radius
+    /// cannot achieve that here, since AllowsTransparency must stay false for
+    /// WebView2 and the square window would still paint behind the curve.
+    ///
+    /// No-ops before Windows 11 (the attribute is simply unsupported), which is
+    /// why the HRESULT is ignored.
+    /// </summary>
+    public static void EnableRoundedCorners(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero)
+            return;
+        var preference = DwmwcpRound;
+        try
+        {
+            DwmSetWindowAttribute(hwnd, DwmwaWindowCornerPreference, ref preference, sizeof(int));
+        }
+        catch (DllNotFoundException)
+        {
+            // No dwmapi (very old Windows): square corners, nothing else breaks.
+        }
+        catch (EntryPointNotFoundException)
+        {
+            // Ditto.
+        }
+    }
+
     [DllImport("user32.dll")]
     public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
 

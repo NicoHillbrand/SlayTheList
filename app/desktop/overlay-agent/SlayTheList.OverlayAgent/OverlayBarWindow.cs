@@ -370,6 +370,10 @@ internal sealed class OverlayPanelWindow : Window
         {
             var handle = new WindowInteropHelper(this).Handle;
             NativeMethods.EnableNoActivate(handle);
+            // WindowStyle.None opts out of the Windows 11 rounding, so ask for it
+            // back explicitly — a hard-cornered floating panel reads as unfinished
+            // next to every other window on the desktop.
+            NativeMethods.EnableRoundedCorners(handle);
             // Not excluded from capture — screenshottable, like the gold indicator.
         };
 
