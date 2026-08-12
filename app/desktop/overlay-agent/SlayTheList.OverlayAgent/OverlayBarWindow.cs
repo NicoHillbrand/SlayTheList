@@ -238,6 +238,12 @@ internal sealed class OverlayPanelWindow : Window
     /// scaling the whole panel down.
     /// </summary>
     private double ChromeWidth => 2 + (_resizable ? 2 * ResizeBorder : 0);
+    /// <summary>
+    /// Window height consumed by things that are not the page: the grip strip when
+    /// there is one, plus the 1px frame top and bottom. Derived rather than
+    /// measured — see FitHeightToContent for why measuring made the panel flicker.
+    /// </summary>
+    private double ChromeHeight => _chromeHeight + 2;
     private const double MinContentHeight = 48;
     private const double MaxContentHeight = 780;
     private const double GripHeight = 22;
@@ -512,16 +518,16 @@ internal sealed class OverlayPanelWindow : Window
             return;
         var zoom = _webViewReady ? _webView.ZoomFactor : 1;
         var content = Math.Clamp(_contentHeightCss + 2, MinContentHeight, MaxContentHeight) * zoom;
-        // Whatever the window wraps around the WebView (grip + resize frame),
-        // measured rather than assumed so the window always hugs the content.
-        var chrome = ActualHeight > 0 && _webView.ActualHeight > 0
-            ? ActualHeight - _webView.ActualHeight
-            : _chromeHeight;
-        var target = content + chrome;
-        // Setting Height re-enters through SizeChanged, and `chrome` is measured
-        // from a layout that is still settling, so two passes can disagree by a
-        // fraction and oscillate. Ignore sub-pixel differences and guard the
-        // re-entry outright.
+        // DERIVED, not measured. This used to be `ActualHeight - webView.ActualHeight`,
+        // which reads a layout that is still settling: during a width drag each pass
+        // measured a slightly different value, so every drag step set the height two
+        // or three times and the bottom edge visibly flickered. The window wraps the
+        // WebView in exactly two known things — the grip strip and the 1px frame top
+        // and bottom — so computing it makes every pass agree and the height move
+        // once per drag step.
+        var target = content + ChromeHeight;
+        // Setting Height re-enters through SizeChanged, so ignore sub-pixel
+        // differences as well as guarding the re-entry outright.
         if (Math.Abs(Height - target) < 0.5)
             return;
         _fittingHeight = true;
