@@ -83,6 +83,7 @@ import {
   deleteBlock,
   getAppSetting,
   setAppSetting,
+  SHOW_CURRENT_STEP_SETTING_KEY,
   getVaultVersion,
   pullVaultData,
   pushVaultData,
@@ -1066,6 +1067,7 @@ export default function Page() {
   const [screenDetectionEnabled, setScreenDetectionEnabledState] = useState(true);
   const [showGoldToday, setShowGoldTodayState] = useState(false);
   const [showBaseOverlay, setShowBaseOverlayState] = useState(false);
+  const [showCurrentStep, setShowCurrentStepState] = useState(true);
   const [overlayToggleHotkey, setOverlayToggleHotkey] = useState("");
   const [crawlToggleHotkey, setCrawlToggleHotkey] = useState("");
   const [detectionIntervalMs, setDetectionIntervalMs] = useState(100);
@@ -1322,6 +1324,10 @@ export default function Page() {
         setShowGoldTodayState(goldTodaySetting.value === "true");
         const baseOverlaySetting = await getAppSetting("showBaseOverlay");
         setShowBaseOverlayState(baseOverlaySetting.value === "true");
+        // Defaults to shown: the step only appears when an agent writes one, so
+        // an unset key should not mean "silently off".
+        const currentStepSetting = await getAppSetting(SHOW_CURRENT_STEP_SETTING_KEY);
+        setShowCurrentStepState(currentStepSetting.value !== "false");
         const hotkeySetting = await getAppSetting("overlayToggleHotkey");
         setOverlayToggleHotkey(hotkeySetting.value ?? "");
         const crawlHotkeySetting = await getAppSetting("crawlToggleHotkey");
@@ -6573,6 +6579,18 @@ export default function Page() {
                   }}
                 />
                 Show overlay bar on screen (gold + base + friends, drag to move)
+              </label>
+              <label className="settings-checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={showCurrentStep}
+                  onChange={async (event) => {
+                    const val = event.target.checked;
+                    setShowCurrentStepState(val);
+                    await setAppSetting(SHOW_CURRENT_STEP_SETTING_KEY, String(val));
+                  }}
+                />
+                Show the agent&apos;s current step line in the overlay
               </label>
               <p className="settings-hint">
                 Hiding the overlay (here or with the shortcut) lasts for this session — it comes back the next time the app starts.

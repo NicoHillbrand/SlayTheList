@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import {
+  currentStepAge,
   habitSchema,
   predictionSchema,
   predictionStakePayout,
@@ -23,6 +24,8 @@ import {
   awardMicroTenths,
   getCrawlSnapshot,
   setCrawlLockAction,
+  getCurrentStep,
+  setCurrentStep,
 } from "./store.js";
 
 const server = new McpServer({ name: "slaythelist", version: "0.1.0" });
@@ -39,6 +42,19 @@ async function fireSoundEvent(sound: string = "gold"): Promise<void> {
     });
   } catch {
     // Sound is best-effort; the API server may not be running.
+  }
+}
+
+/**
+ * Ask the API to re-broadcast overlay state. This server writes straight to
+ * SQLite, so it cannot push to the overlay itself — without this a change waits
+ * for the next 5s heartbeat. Best-effort: the API may not be running.
+ */
+async function pokeOverlay(): Promise<void> {
+  try {
+    await fetch(`${apiBaseUrl}/api/overlay/refresh`, { method: "POST" });
+  } catch {
+    // The DB write already landed; the overlay just picks it up a beat later.
   }
 }
 
@@ -570,6 +586,55 @@ server.tool(
         isError: true,
       };
     }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Current step
+// ---------------------------------------------------------------------------
+
+server.tool(
+  "set_current_step",
+  "Write the one-line 'what to do right now' shown in the overlay, so the driver-mode next step is visible where the user is already looking instead of only in this chat. Pass text: null to clear it. Setting a new step replaces the old one — there is only ever one. This is a DISPLAY only: it gates nothing, freezes no run, and nothing checks whether it was done (use lock_crawl_on_todo when you actually want a gate). Keep it to one short imperative line; the overlay truncates rather than wraps. It ages on purpose — dimmed after 45 minutes, hidden after 4 hours — so clear or refresh it rather than leaving a stale instruction sitting there.",
+  {
+    text: z
+      .string()
+      .nullable()
+      .describe("The instruction, one short line. Null (or empty) clears the current step."),
+    subtitle: z
+      .string()
+      .optional()
+      .describe("Optional quieter second line — the why, or what done looks like."),
+    source: z
+      .string()
+      .optional()
+      .describe('Which agent wrote it (e.g. "claude-code"). Shown small next to the step.'),
+  },
+  async ({ text, subtitle, source }) => {
+    const step = setCurrentStep(text, { subtitle: subtitle ?? null, source: source ?? null });
+    // Best-effort nudge so the overlay updates now rather than on the next
+    // heartbeat. Writing straight to SQLite cannot broadcast on its own.
+    await pokeOverlay();
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify(step === null ? { cleared: true } : step, null, 2),
+        },
+      ],
+    };
+  },
+);
+
+server.tool(
+  "get_current_step",
+  "Read the current step line, or null when none is set. Returns `age`: \"fresh\", \"stale\" (over 45 min, shown dimmed) or \"expired\" (over 4 hours, not rendered at all — the value is still stored, so this is your cue to refresh or clear it).",
+  {},
+  async () => {
+    const step = getCurrentStep();
+    const payload =
+      step === null ? { step: null } : { step, age: currentStepAge(step.setAt, Date.now()) };
+    return { content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }] };
   },
 );
 

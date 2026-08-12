@@ -3,6 +3,7 @@ import type {
   Block,
   BlockUnlockMode,
   CloudConnectionStatus,
+  CurrentStep,
   DetectedGameState,
   FeedHeart,
   FriendFeedItem,
@@ -385,6 +386,24 @@ export async function clearZoneGoldUnlock(zoneId: string) {
 
 export async function getOverlayState() {
   return request<OverlayState>("/api/overlay-state");
+}
+
+/** Settings key for the overlay's current-step line. "false" hides it entirely. */
+export const SHOW_CURRENT_STEP_SETTING_KEY = "showCurrentStep";
+
+export async function getCurrentStep() {
+  return request<{ step: CurrentStep | null }>("/api/current-step");
+}
+
+/** `text: null` clears the step. */
+export async function setCurrentStep(
+  text: string | null,
+  options?: { subtitle?: string | null; source?: string | null },
+) {
+  return request<{ step: CurrentStep | null }>("/api/current-step", {
+    method: "PUT",
+    body: JSON.stringify({ text, ...options }),
+  });
 }
 
 export async function getAccountabilityState() {

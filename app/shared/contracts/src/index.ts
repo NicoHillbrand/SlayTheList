@@ -652,6 +652,59 @@ export const playSoundPayloadSchema = z.object({
 export type PlaySoundPayload = z.infer<typeof playSoundPayloadSchema>;
 
 // ---------------------------------------------------------------------------
+// Current step — one line of "what you are meant to be doing right now",
+// written by an agent and shown in the overlay.
+//
+// Deliberately NOT a lock: it gates nothing, freezes nothing, and no code
+// checks whether it was done. `lock_crawl_on_todo` is the gate. This is a
+// display affordance so the driver-mode next step is visible where the user is
+// already looking instead of only in a chat window.
+//
+// `doneAt` is unused by the display and always null for now. It is here so a
+// completion state (and a payout hanging off it) can be added without a
+// migration or a shape change — see the driver-mode objectives work.
+// ---------------------------------------------------------------------------
+
+export const currentStepSchema = z.object({
+  /** The instruction. One short line; the UI truncates rather than wraps. */
+  text: z.string().min(1),
+  /** Optional quieter second line (e.g. why, or the expected outcome). */
+  subtitle: z.string().nullable().default(null),
+  /** Which agent wrote it, shown small. Null for in-app writes. */
+  source: z.string().nullable().default(null),
+  /** ISO timestamp. Drives ageing — a stale step must not look authoritative. */
+  setAt: z.string(),
+  /** Reserved for the later completion/payout work. Always null today. */
+  doneAt: z.string().nullable().default(null),
+});
+export type CurrentStep = z.infer<typeof currentStepSchema>;
+
+/**
+ * After this long, the step is shown dimmed: still there, no longer trusted.
+ * A step you set before lunch should not still read as "do this now".
+ */
+export const CURRENT_STEP_DIM_AFTER_MS = 45 * 60 * 1000;
+/**
+ * After this long it is not rendered at all. The value is still stored, so an
+ * agent can read it back and decide to refresh or clear it — but a stale
+ * instruction sitting in the overlay is worse than an empty overlay.
+ */
+export const CURRENT_STEP_HIDE_AFTER_MS = 4 * 60 * 60 * 1000;
+
+export type CurrentStepAge = "fresh" | "stale" | "expired";
+
+/** How much to trust a step, from its age. Shared so server and UI agree. */
+export function currentStepAge(setAt: string, nowMs: number): CurrentStepAge {
+  const age = nowMs - Date.parse(setAt);
+  // An unparseable or future timestamp is treated as fresh rather than hidden:
+  // failing open on a clock oddity beats silently swallowing the instruction.
+  if (!Number.isFinite(age)) return "fresh";
+  if (age >= CURRENT_STEP_HIDE_AFTER_MS) return "expired";
+  if (age >= CURRENT_STEP_DIM_AFTER_MS) return "stale";
+  return "fresh";
+}
+
+// ---------------------------------------------------------------------------
 // Cloud Vault (E2E encrypted full-data sync)
 // ---------------------------------------------------------------------------
 

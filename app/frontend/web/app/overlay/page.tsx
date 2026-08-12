@@ -15,7 +15,8 @@
  * window.chrome.webview.postMessage so the host window hugs the content.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { FeedHeart, FriendFeedItem } from "@slaythelist/contracts";
+import type { CurrentStep, FeedHeart, FriendFeedItem } from "@slaythelist/contracts";
+import { currentStepAge } from "@slaythelist/contracts";
 import {
   FEED_WINDOW_SETTING_KEY,
   getAppSetting,
@@ -24,6 +25,7 @@ import {
   getGoldState,
   listCloudFriends,
   listGoldActivity,
+  overlayWebSocketUrl,
   removeFeedHeart,
   sendFeedHeart,
 } from "../../lib/api";
@@ -194,11 +196,112 @@ function FriendsPanel() {
   );
 }
 
+/** Remembers which step the user waved off, by the exact moment it was set. */
+const STEP_DISMISSED_KEY = "slaythelist.currentStep.dismissedAt";
+
+/**
+ * The agent's "do this now" line.
+ *
+ * Built to lose an attention contest with the run below it, on purpose: the
+ * overlay works by keeping Nico in the work, so a second thing shouting is worse
+ * than no second thing. Hence one line, truncated not wrapped, muted, no border,
+ * no background, and nothing that moves. It is context, not the game.
+ *
+ * Ageing is the other half of that: an instruction from three hours ago is worse
+ * than none, so it dims, then stops rendering. Dismissal is keyed to `setAt`, so
+ * waving one off does not suppress the next one.
+ */
+function CurrentStepLine({ step }: { step: CurrentStep }) {
+  const [dismissedAt, setDismissedAt] = useState<string | null>(null);
+  useEffect(() => {
+    try {
+      setDismissedAt(window.localStorage.getItem(STEP_DISMISSED_KEY));
+    } catch {
+      // Private mode / storage disabled: dismissal just does not persist.
+    }
+  }, []);
+
+  // Recomputed on render, which the overlay-state push already triggers — no
+  // timer here, nothing in the overlay is allowed to tick on its own.
+  const age = currentStepAge(step.setAt, Date.now());
+  if (age === "expired") return null;
+  if (dismissedAt === step.setAt) return null;
+
+  const dim = age === "stale";
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "baseline",
+        gap: 6,
+        marginBottom: 6,
+        minWidth: 0,
+        fontSize: 11,
+        lineHeight: 1.35,
+        color: dim ? "#6a6a88" : "#8a89a6",
+      }}
+    >
+      <span aria-hidden style={{ color: dim ? "#4a4a68" : "#6a6a88" }}>
+        ▸
+      </span>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div
+          title={
+            step.subtitle
+              ? `${step.text}\n${step.subtitle}`
+              : step.text
+          }
+          style={{
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            color: dim ? "#7a7a98" : "#c9c7d8",
+          }}
+        >
+          {step.text}
+        </div>
+        {step.subtitle && (
+          <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {step.subtitle}
+          </div>
+        )}
+      </div>
+      {/* The age is shown once it matters, so a dimmed line is explained rather
+          than just looking broken. */}
+      {dim && <span style={{ whiteSpace: "nowrap" }}>{timeAgo(step.setAt)}</span>}
+      <button
+        type="button"
+        title="Hide this step"
+        onClick={() => {
+          try {
+            window.localStorage.setItem(STEP_DISMISSED_KEY, step.setAt);
+          } catch {
+            // Non-persistent dismissal is still worth honouring for this render.
+          }
+          setDismissedAt(step.setAt);
+        }}
+        style={{
+          font: "inherit",
+          lineHeight: 1,
+          padding: "0 2px",
+          border: "none",
+          background: "none",
+          color: "#5a5a78",
+          cursor: "pointer",
+        }}
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
 export default function OverlayTaskbarPage() {
   const rootRef = useRef<HTMLDivElement>(null);
   const [panel, setPanel] = useState<"none" | "base" | "friends">("none");
   const [gold, setGold] = useState<number | null>(null);
   const [goldToday, setGoldToday] = useState(0);
+  const [currentStep, setCurrentStep] = useState<CurrentStep | null>(null);
   // The desktop bar hosts each panel in its own window via ?panel=base|friends|crawl.
   // `undefined` = not yet read (first client render); `null` = no param (browser).
   const [panelParam, setPanelParam] = useState<"base" | "friends" | "crawl" | null | undefined>(
@@ -245,6 +348,57 @@ export default function OverlayTaskbarPage() {
     };
   }, []);
 
+  // The current step arrives by push, never by poll: the API broadcasts overlay
+  // state on every mutation AND immediately on connect, so this listener alone
+  // covers both the first paint and every later change. `currentStep` is already
+  // null in the payload when the user has the display switched off, so there is
+  // nothing to check here.
+  useEffect(() => {
+    let socket: WebSocket | null = null;
+    let retry: number | undefined;
+    let stopped = false;
+    let backoffMs = 1000;
+
+    function connect() {
+      if (stopped) return;
+      try {
+        socket = new WebSocket(overlayWebSocketUrl());
+      } catch {
+        return; // Bad URL; nothing to retry against.
+      }
+      socket.onopen = () => {
+        backoffMs = 1000;
+      };
+      socket.onmessage = (event) => {
+        try {
+          const parsed = JSON.parse(event.data) as {
+            type?: string;
+            payload?: { currentStep?: CurrentStep | null };
+          };
+          if (parsed.type === "overlay_state") {
+            setCurrentStep(parsed.payload?.currentStep ?? null);
+          }
+        } catch {
+          // Ignore non-JSON frames.
+        }
+      };
+      socket.onclose = () => {
+        if (stopped) return;
+        retry = window.setTimeout(() => {
+          backoffMs = Math.min(backoffMs * 2, 16_000);
+          connect();
+        }, backoffMs);
+      };
+    }
+    connect();
+
+    return () => {
+      stopped = true;
+      if (retry !== undefined) window.clearTimeout(retry);
+      socket?.close();
+    };
+  }, []);
+
   const barButton = (key: "base" | "friends", label: string) => (
     <button
       type="button"
@@ -269,6 +423,14 @@ export default function OverlayTaskbarPage() {
     // minHeight: 0 overrides the module's 100vh so the reported height is the
     // actual content height (the host window hugs the content).
     <div ref={rootRef} className={styles.root} style={{ padding: 8, overflow: "hidden", minHeight: 0 }}>
+      {/* Only on the surfaces that are open while working: the always-on-top
+          crawl window and the browser bar. The base/friends windows are
+          transient popups, and repeating the step in each one is the clutter
+          this feature is most likely to die of. */}
+      {currentStep !== null && (panelParam === "crawl" || panelParam === null) && (
+        <CurrentStepLine step={currentStep} />
+      )}
+
       {/* Desktop bar: a single panel per window. */}
       {panelParam === "base" && <BaseOverlayMini />}
       {panelParam === "friends" && <FriendsPanel />}

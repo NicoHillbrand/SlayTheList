@@ -77,6 +77,37 @@ When suggesting sub-tasks in a session, `lock_crawl_on_todo` is how a suggestion
 becomes the thing that unlocks the next turn. Use it deliberately: a lock the
 user cannot finish today stalls their run.
 
+### Current step (overlay display)
+
+| Tool | Purpose |
+|------|---------|
+| `set_current_step` | Write the one-line "what to do right now" shown in the overlay. Requires `text` (`null` clears it). Optional `subtitle`, `source`. Setting a new step **replaces** the old one — there is only ever one. |
+| `get_current_step` | Read it back, or `null`. Also returns `age`: `"fresh"` \| `"stale"` (>45 min, shown dimmed) \| `"expired"` (>4 h, not rendered — your cue to refresh or clear). |
+
+**This is a display, not a gate.** It freezes nothing, gates no card or room, and
+nothing checks whether it was done. `lock_crawl_on_todo` is the hard freeze; this
+just puts the driver-mode next step where the user is already looking instead of
+only in the chat window.
+
+The design constraint is *not adding noise*, since a second thing competing for
+attention makes the overlay worse rather than better. So: one short imperative
+line (truncated, never wrapped), quieter than the run itself, nothing animated,
+dismissable, and switchable off entirely via the `showCurrentStep` setting. It
+also **ages on purpose** — dimmed after 45 minutes, gone after 4 hours — because a
+stale instruction is worse than none. Keep it current or clear it.
+
+Thresholds and the `currentStepAge()` helper live in `shared/contracts`. The
+stored shape carries a `doneAt` that is always null today; it is there so a
+completion state and a payout can be added later (the driver-mode objectives work)
+without a migration.
+
+**It never polls.** The step rides the `overlay_state` WebSocket broadcast, which
+the API already sends on every mutation and immediately on socket connect, so the
+overlay gets it pushed. An MCP write talks straight to SQLite and so cannot
+broadcast; `set_current_step` therefore pokes `POST /api/overlay/refresh`
+(best-effort) to make it land at once instead of on the next 5s heartbeat. That
+endpoint is general — it is the way any MCP write can reach an open UI.
+
 ### Habits, Predictions, Reflections
 These are stored as JSON arrays. The pattern for any modification is **read → modify → write**:
 1. Call `list_habits` / `list_predictions` / `list_reflections` to get the current array.

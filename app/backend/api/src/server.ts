@@ -23,6 +23,7 @@ import {
   socialSettingsSchema,
   statusChipSchema,
   vaultPushRequestSchema,
+  type CurrentStep,
   type EventEnvelope,
   type OverlayState,
 } from "@slaythelist/contracts";
@@ -86,6 +87,9 @@ import {
   type CrawlSnapshot,
   getMicroState,
   awardMicroTenths,
+  getCurrentStep,
+  setCurrentStep,
+  SHOW_CURRENT_STEP_SETTING,
 } from "./store.js";
 import { referenceImagesDir } from "./db.js";
 import { testDetection, clearRefPixelCache, getDetectionRefs, DETECTION_COMPARE_SIZE, DETECTION_TEMPLATE_WIDTH, DETECTION_TEMPLATE_HEIGHT } from "./image-match.js";
@@ -143,6 +147,7 @@ function buildOverlayState(): OverlayState & {
   showBaseOverlay: boolean;
   overlayToggleHotkey: string;
   crawlToggleHotkey: string;
+  currentStep: CurrentStep | null;
 } {
   const rawInterval = Number(getSetting("detectionIntervalMs"));
   const detectionIntervalMs = Number.isFinite(rawInterval) && rawInterval > 0
@@ -163,6 +168,10 @@ function buildOverlayState(): OverlayState & {
     showBaseOverlay: getSetting("showBaseOverlay") === "true",
     overlayToggleHotkey: getSetting("overlayToggleHotkey") ?? "",
     crawlToggleHotkey: getSetting("crawlToggleHotkey") ?? "",
+    // Rides the overlay-state broadcast rather than getting its own poll: this
+    // payload already goes out on every mutation and on socket connect, so the
+    // step lands in the overlay without the client ever asking for it.
+    currentStep: getSetting(SHOW_CURRENT_STEP_SETTING) === "false" ? null : getCurrentStep(),
   };
 }
 
@@ -1826,6 +1835,35 @@ app.post("/api/crawl/lock", (req, res) => {
 
 app.get("/api/overlay-state", (_req, res) => {
   ok(res, buildOverlayState());
+});
+
+// The current step: one line of "do this now", written by an agent. Reading is
+// unfiltered by the display toggle — an agent should see what it wrote even if
+// the user has the overlay display switched off.
+// Re-broadcast the overlay state. The MCP server talks straight to SQLite and so
+// cannot push anything itself; this is how a write made over MCP reaches an open
+// overlay without waiting for the next heartbeat.
+app.post("/api/overlay/refresh", (_req, res) => {
+  broadcastOverlayState();
+  ok(res, { broadcast: true });
+});
+
+app.get("/api/current-step", (_req, res) => {
+  ok(res, { step: getCurrentStep() });
+});
+
+// `text: null` (or an empty string) clears it. Broadcasts so the overlay updates
+// immediately instead of waiting for the next 5s heartbeat.
+app.put("/api/current-step", (req, res) => {
+  const text = req.body?.text;
+  if (text !== null && text !== undefined && typeof text !== "string") {
+    return badRequest(res, "text must be a string or null");
+  }
+  const subtitle = typeof req.body?.subtitle === "string" ? req.body.subtitle : null;
+  const source = typeof req.body?.source === "string" ? req.body.source : null;
+  const step = setCurrentStep(text ?? null, { subtitle, source });
+  ok(res, { step });
+  broadcastOverlayState();
 });
 
 const server = createServer(app);

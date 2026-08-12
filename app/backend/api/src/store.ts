@@ -32,10 +32,12 @@ import {
   type DefenseState,
 } from "@slaythelist/defense-engine";
 import { db, referenceImagesDir } from "./db.js";
+import { currentStepSchema } from "@slaythelist/contracts";
 import type {
   AccountabilityState,
   Block,
   BlockUnlockMode,
+  CurrentStep,
   DetectedGameState,
   GameState,
   GameStateDetectionRegion,
@@ -1298,6 +1300,63 @@ export function getSetting(key: string): string | null {
 
 export function setSetting(key: string, value: string): void {
   db.prepare("INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, value);
+}
+
+// ---------------------------------------------------------------------------
+// Current step — the one line an agent writes for the overlay. See
+// `currentStepSchema` in contracts for what it is and, more importantly, what
+// it deliberately is not (it gates nothing).
+// ---------------------------------------------------------------------------
+
+/** Settings key for the overlay toggle. Absent/anything-but-"false" = shown. */
+export const SHOW_CURRENT_STEP_SETTING = "showCurrentStep";
+
+/** The step, or null when none is set. Never throws on a malformed row. */
+export function getCurrentStep(): CurrentStep | null {
+  const row = db.prepare("SELECT step_json FROM current_step WHERE id = 1").get() as
+    | { step_json: string }
+    | undefined;
+  if (!row) return null;
+  try {
+    const parsed = currentStepSchema.safeParse(JSON.parse(row.step_json));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Write the step, or clear it with `text: null`. Always replaces — there is one
+ * current step, and a new one supersedes the old rather than queueing behind it.
+ *
+ * `setAt` is stamped here rather than taken from the caller, so the age the UI
+ * dims on is always the moment the server was actually told.
+ */
+export function setCurrentStep(
+  text: string | null,
+  options?: { subtitle?: string | null; source?: string | null },
+): CurrentStep | null {
+  const trimmed = text?.trim();
+  if (!trimmed) {
+    db.prepare("DELETE FROM current_step WHERE id = 1").run();
+    return null;
+  }
+  const step: CurrentStep = {
+    text: trimmed.slice(0, 300),
+    subtitle: options?.subtitle?.trim()?.slice(0, 300) || null,
+    source: options?.source?.trim()?.slice(0, 80) || null,
+    setAt: new Date().toISOString(),
+    doneAt: null,
+  };
+  const now = step.setAt;
+  db.prepare(
+    `INSERT INTO current_step (id, step_json, updated_at)
+     VALUES (1, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       step_json = excluded.step_json,
+       updated_at = excluded.updated_at`,
+  ).run(JSON.stringify(step), now);
+  return step;
 }
 
 // ---------------------------------------------------------------------------

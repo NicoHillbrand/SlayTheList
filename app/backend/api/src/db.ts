@@ -279,6 +279,16 @@ CREATE TABLE IF NOT EXISTS app_settings (
   value TEXT NOT NULL
 );
 
+-- The single "what to do right now" line an agent writes for the overlay. One
+-- value, not a list: there is exactly one current step, and setting a new one
+-- replaces it. Stored as JSON so a completion state and a payout can be added
+-- later without a migration. An absent row means no step is set.
+CREATE TABLE IF NOT EXISTS current_step (
+  id INTEGER PRIMARY KEY CHECK(id = 1),
+  step_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS base_state (
   id INTEGER PRIMARY KEY CHECK(id = 1),
   placements_json TEXT NOT NULL DEFAULT '[]',
