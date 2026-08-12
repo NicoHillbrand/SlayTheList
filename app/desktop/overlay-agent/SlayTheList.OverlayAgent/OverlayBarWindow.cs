@@ -230,11 +230,27 @@ internal sealed class OverlayPanelWindow : Window
     private const double PanelWidth = 340;
     private const double MinPanelWidth = 190;
     private const double MaxPanelWidth = 510;
+    /// <summary>
+    /// Window width consumed by things that are not the page: the 1px frame on
+    /// each side, plus the resize band the WebView is held off (resizable windows
+    /// only). Added to every width so the PAGE gets its designed width and the
+    /// zoom lands on 1.0 at the default size, rather than the inset quietly
+    /// scaling the whole panel down.
+    /// </summary>
+    private double ChromeWidth => 2 + (_resizable ? 2 * ResizeBorder : 0);
     private const double MinContentHeight = 48;
     private const double MaxContentHeight = 780;
     private const double GripHeight = 22;
-    /// <summary>Grab width for the resize edges and corners.</summary>
-    private const double ResizeBorder = 7;
+    /// <summary>
+    /// Grab width for the resize edges.
+    ///
+    /// This only works because the WebView is inset by the same amount — see the
+    /// margin where `grid` is built. WebView2 lives in a child HWND that swallows
+    /// every mouse message over it, so the parent never gets WM_NCHITTEST there:
+    /// a resize border drawn *under* the WebView is unreachable no matter how wide
+    /// it is. The two numbers have to move together.
+    /// </summary>
+    private const double ResizeBorder = 10;
 
     private static readonly string WebViewDataFolder = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -282,12 +298,12 @@ internal sealed class OverlayPanelWindow : Window
         ShowInTaskbar = false;
         // AllowsTransparency must stay false: WebView2 cannot render in a layered window.
         Background = new SolidColorBrush(Color.FromRgb(22, 22, 42));
-        Width = PanelWidth;
+        Width = PanelWidth + ChromeWidth;
         Height = 120;
         if (_resizable)
         {
-            MinWidth = MinPanelWidth;
-            MaxWidth = MaxPanelWidth;
+            MinWidth = MinPanelWidth + ChromeWidth;
+            MaxWidth = MaxPanelWidth + ChromeWidth;
             // WindowStyle.None + ResizeMode.CanResize leaves the system drawing a
             // pale non-client frame around the window (a white bar along the top,
             // a dead band at the bottom). WindowChrome keeps the window resizable
@@ -322,6 +338,16 @@ internal sealed class OverlayPanelWindow : Window
         var grid = new Grid();
         grid.Children.Add(_fallbackText);
         grid.Children.Add(_webView);
+        if (_resizable)
+        {
+            // Hold the WebView off the left and right edges by exactly the resize
+            // border, so that band is WPF surface the window can hit-test instead
+            // of child-HWND territory that eats the mouse. Without this the only
+            // grabbable strip is the 1px Border and the edge is almost impossible
+            // to catch. Invisible: the exposed strip is the window's own
+            // background, which is the same colour the page paints.
+            grid.Margin = new Thickness(ResizeBorder, 0, ResizeBorder, 0);
+        }
 
         UIElement body = grid;
         if (gripTitle is not null)
@@ -345,7 +371,7 @@ internal sealed class OverlayPanelWindow : Window
 
         if (_boundsPath is not null)
         {
-            Left = SystemParameters.PrimaryScreenWidth - PanelWidth - 40;
+            Left = SystemParameters.PrimaryScreenWidth - PanelWidth - ChromeWidth - 40;
             Top = 130;
             RestoreSavedBounds();
             _saveBoundsTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
@@ -512,8 +538,12 @@ internal sealed class OverlayPanelWindow : Window
             var bounds = JsonSerializer.Deserialize<PanelBounds>(File.ReadAllText(_boundsPath));
             if (bounds is null)
                 return;
+            // Saved widths are window widths, so they clamp against the window
+            // range — which now includes the resize band. A width saved before that
+            // band existed is still inside the range and simply reads as a slightly
+            // narrower panel, so old bounds files stay usable.
             if (_resizable && bounds.Width > 0)
-                Width = Math.Clamp(bounds.Width, MinPanelWidth, MaxPanelWidth);
+                Width = Math.Clamp(bounds.Width, MinWidth, MaxWidth);
             var vLeft = SystemParameters.VirtualScreenLeft;
             var vTop = SystemParameters.VirtualScreenTop;
             var vRight = vLeft + SystemParameters.VirtualScreenWidth;
