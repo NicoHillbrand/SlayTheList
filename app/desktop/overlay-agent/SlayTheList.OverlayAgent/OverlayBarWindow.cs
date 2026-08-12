@@ -262,6 +262,26 @@ internal sealed class OverlayPanelWindow : Window
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "SlayTheList", "webview2");
 
+    /// <summary>
+    /// The panel colour, #16162a, in the one place it is defined on this side.
+    ///
+    /// It has to be painted on EVERY surface behind the WebView, not just the
+    /// window: WebView2 draws into a child HWND that resizes instantly while its
+    /// renderer produces the next frame a beat later, and whatever is behind it
+    /// shows through in the meantime. With the control and its container left at
+    /// WPF's default that gap flashed grey on every drag. Same value as the page's
+    /// own background, so the lag becomes invisible rather than merely brief.
+    /// </summary>
+    private static readonly Color PanelColor = Color.FromRgb(0x16, 0x16, 0x2a);
+    private static readonly SolidColorBrush PanelBrush = CreateFrozen(PanelColor);
+
+    private static SolidColorBrush CreateFrozen(Color color)
+    {
+        var brush = new SolidColorBrush(color);
+        brush.Freeze();
+        return brush;
+    }
+
     private readonly string _webBaseUrl;
     private readonly WebView2 _webView = new();
     private readonly TextBlock _fallbackText;
@@ -303,7 +323,7 @@ internal sealed class OverlayPanelWindow : Window
         Focusable = false;
         ShowInTaskbar = false;
         // AllowsTransparency must stay false: WebView2 cannot render in a layered window.
-        Background = new SolidColorBrush(Color.FromRgb(22, 22, 42));
+        Background = PanelBrush;
         Width = PanelWidth + ChromeWidth;
         Height = 120;
         if (_resizable)
@@ -345,9 +365,13 @@ internal sealed class OverlayPanelWindow : Window
         // after initialization, so it covers the whole gap from the window
         // appearing to the first frame of the page. Left at its default it flashes
         // white; the panel colour makes the gap invisible.
-        _webView.DefaultBackgroundColor = System.Drawing.Color.FromArgb(255, 22, 22, 42);
-
-        var grid = new Grid();
+        _webView.DefaultBackgroundColor =
+            System.Drawing.Color.FromArgb(255, PanelColor.R, PanelColor.G, PanelColor.B);
+        // The control itself is an HwndHost and has no WPF Background to set, so
+        // the surface that shows between the HWND resizing and the renderer
+        // catching up is its CONTAINER. Painting the grid is what removes the grey
+        // flash; leaving it at WPF's default is what caused it.
+        var grid = new Grid { Background = PanelBrush };
         grid.Children.Add(_fallbackText);
         grid.Children.Add(_webView);
         if (_resizable)
