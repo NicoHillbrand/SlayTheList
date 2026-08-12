@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   FLOORS,
+  HAND_LIMIT,
   HAND_SIZE,
   HEAVY_EVERY,
   HEAVY_MULTIPLIER,
@@ -133,11 +134,29 @@ describe("micro-gold draw credits", () => {
     expect(drawCreditsAvailable(next, ctx({ microTenthsToday: TENTHS }))).toBe(0);
   });
 
-  it("overflows past the hand cap — that is the whole effect", () => {
+  it("overflows past the turn refill — that is the whole effect", () => {
     const full = fresh();
     expect(full.hand).toHaveLength(HAND_SIZE);
     const { state: next } = drawExtraCard(full, ctx({ microTenthsToday: TENTHS }));
     expect(next.hand).toHaveLength(HAND_SIZE + 1);
+  });
+
+  it("stops at HAND_LIMIT and keeps the unspent credit banked", () => {
+    // The row has to stay one row: five cards is what fits at 340px, so drawing
+    // past it would make the panel taller instead of better.
+    let state = fresh();
+    const rich = ctx({ microTenthsToday: TENTHS * 6 });
+    for (let i = 0; i < 6; i += 1) state = drawExtraCard(state, rich).state;
+    expect(state.hand).toHaveLength(HAND_LIMIT);
+    // Refused before the credit was taken, so it is still there for later.
+    expect(state.drawsUsed).toBe(HAND_LIMIT - HAND_SIZE);
+    expect(drawCreditsAvailable(state, rich)).toBeGreaterThan(0);
+  });
+
+  it("a turn refill never reaches the overflow limit on its own", () => {
+    // Only micro-gold can push a hand to five; ending a turn tops up to four.
+    const emptied = { ...armed(fresh()), hand: [] };
+    expect(endTurn(emptied, ctx()).state.hand).toHaveLength(HAND_SIZE);
   });
 
   it("costs no energy and does not provoke the enemy", () => {

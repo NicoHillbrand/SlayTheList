@@ -76,11 +76,15 @@ the crawl freezes on a todo any more.
 
 **Micro-gold buys draws, not energy.** `award_micro` mints draw credits at 3
 tenths each, and spending one (`POST /api/crawl/draw`) pulls a card *above* the
-normal `HAND_SIZE` cap — that overflow is the "extend your turn" effect. It costs
-no energy and does not give the enemy a turn. Cards still cost energy to play, so
-a day of nothing but micro-actions widens the hand and advances the run not at
-all; `pacing.test.ts` guards exactly that. Micro buys OPTIONS, finished work buys
-POWER.
+`HAND_SIZE` (4) a turn refills to — that overflow is the "extend your turn"
+effect. It costs no energy and does not give the enemy a turn. Cards still cost
+energy to play, so a day of nothing but micro-actions widens the hand and advances
+the run not at all; `pacing.test.ts` guards exactly that. Micro buys OPTIONS,
+finished work buys POWER.
+
+Draws stop at `HAND_LIMIT` (5) and refuse rather than spending the credit, so it
+stays banked. Five is not a balance number — it is what fits on one row at 340px,
+and a hand that wraps makes the window taller every time you draw.
 
 When suggesting sub-tasks in a session, `ward_crawl_on_todo` is how a suggestion
 becomes the thing that earns a good turn. It is now safe to use freely — a ward

@@ -15,12 +15,22 @@ export const ROOMS_PER_FLOOR = 2;
 
 export const START_HP = 40;
 /**
- * Cards held at once. Small: the panel is ~340px wide.
+ * Cards a TURN refills to. Small: the panel is ~340px wide.
  *
- * This caps what a TURN refills to, not what a hand may contain. Micro-gold
- * draws deliberately overflow it — see `drawExtraCard`.
+ * This is not the maximum a hand may contain — micro-gold draws go past it, up
+ * to HAND_LIMIT.
  */
 export const HAND_SIZE = 4;
+/**
+ * The hard ceiling, micro draws included. Draws are refused at this point rather
+ * than growing the hand further.
+ *
+ * Five because that is what still fits on ONE ROW at 340px. A hand that wraps to
+ * a second row makes the panel taller every time you draw, and this thing sits on
+ * top of real work — height is the most expensive thing it can spend. So the
+ * "extend your turn" effect is one extra card, not an unbounded pile.
+ */
+export const HAND_LIMIT = 5;
 /**
  * Cards drawn after the enemy's swing. This refills the hand rather than
  * topping it up by one, and that has to stay true: drawing one per turn caps

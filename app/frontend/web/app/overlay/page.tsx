@@ -197,16 +197,22 @@ function FriendsPanel() {
 }
 
 /**
- * The agent's "do this now" line.
+ * The agent's "do this now" line. ONE line, and everything else on hover.
+ *
+ * No label, no timestamp, no subtitle, no dismiss. Its position at the top of the
+ * panel and its gold edge already say what it is, so a "NOW" caption was a second
+ * row spent restating the obvious — and this thing sits on top of real work, where
+ * height is the most expensive thing it can spend. The subtitle and the age moved
+ * into the tooltip: the instruction is what you need at a glance, the detail is
+ * what you ask for.
  *
  * There is deliberately no dismiss control. A step the user can swat away says
  * nothing about whether the work happened, so retiring it belongs to the agent
- * that set it: `complete_current_step` (or the next step replacing it) is what
- * takes it off screen. The server withholds a completed step from this surface
- * entirely, so anything that arrives here is still outstanding.
+ * that set it — `complete_current_step`, or the next step replacing it. The server
+ * withholds a completed step, so anything arriving here is still outstanding.
  *
- * Ageing is the backstop for an agent that forgets: an instruction from three
- * hours ago is worse than none, so it dims and then stops rendering.
+ * Ageing survives as the backstop for an agent that forgets, but silently: the
+ * card dims, and after four hours it stops rendering.
  */
 function CurrentStepLine({ step }: { step: CurrentStep }) {
   // Recomputed on render, which the overlay-state push already triggers — no
@@ -215,73 +221,33 @@ function CurrentStepLine({ step }: { step: CurrentStep }) {
   if (age === "expired") return null;
 
   const dim = age === "stale";
+  const detail = [step.text, step.subtitle, `set ${timeAgo(step.setAt)} ago`]
+    .filter(Boolean)
+    .join("\n");
   return (
     <div
+      title={detail}
       style={{
-        display: "flex",
-        alignItems: "flex-start",
-        gap: 8,
         marginBottom: 8,
         minWidth: 0,
-        padding: "7px 9px 7px 10px",
+        padding: "6px 9px 6px 10px",
         borderRadius: 7,
-        // A card, not a footnote: this is the instruction the panel exists to
-        // carry, so it earns a surface and a gold edge. Same lightness step and
-        // hairline ring as the enemy plate and the cards, so it belongs to the
-        // same object family — and the same blue-black, since a violet tint here
-        // made it the loudest block on screen by hue alone. No lift: it is the
-        // one element up there that is never clicked.
+        // Same lightness step and hairline ring as the enemy plate and the cards,
+        // so it belongs to the same object family. No lift: it is the one element
+        // up there that is never clicked.
         background: dim ? "#191930" : "linear-gradient(180deg, #1f1f36 0%, #1a1a2e 100%)",
         borderLeft: `2px solid ${dim ? "#4a4a68" : "#b8942f"}`,
         boxShadow: `inset 0 0 0 1px rgba(44,44,72,${dim ? 0.5 : 0.85})`,
-        fontSize: 11,
-        lineHeight: 1.4,
-        color: dim ? "#6a6a88" : "#8a89a6",
+        fontSize: 12.5,
+        fontWeight: 600,
+        lineHeight: 1.35,
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        color: dim ? "#8a89a6" : "#e8e6f0",
       }}
     >
-      <div style={{ minWidth: 0, flex: 1 }}>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "baseline",
-            gap: 6,
-            fontSize: 9,
-            letterSpacing: "0.09em",
-            textTransform: "uppercase",
-            color: dim ? "#5a5a78" : "#b8942f",
-          }}
-        >
-          {/* Once it is stale the age REPLACES the label rather than joining it:
-              "Now · 1h ago" contradicts itself, and the age is the honest word. */}
-          {dim ? <span style={{ letterSpacing: 0 }}>{timeAgo(step.setAt)} ago</span> : <span>Now</span>}
-        </div>
-        <div
-          title={step.subtitle ? `${step.text}\n${step.subtitle}` : step.text}
-          style={{
-            marginTop: 1,
-            fontSize: 12.5,
-            fontWeight: 600,
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            color: dim ? "#8a89a6" : "#e8e6f0",
-          }}
-        >
-          {step.text}
-        </div>
-        {step.subtitle && (
-          <div
-            style={{
-              marginTop: 1,
-              whiteSpace: "nowrap",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-            }}
-          >
-            {step.subtitle}
-          </div>
-        )}
-      </div>
+      {step.text}
     </div>
   );
 }

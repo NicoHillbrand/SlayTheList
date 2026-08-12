@@ -26,6 +26,7 @@ import {
   BOSS_GOLD_REWARD,
   DRAW_PER_TURN,
   FLOORS,
+  HAND_LIMIT,
   HAND_SIZE,
   HEAVY_EVERY,
   HEAVY_MULTIPLIER,
@@ -179,8 +180,9 @@ export function blockedReason(state: CrawlState, _ctx: CrawlContext): string | n
 
 /**
  * Move `count` cards from the draw pile into the hand, reshuffling the discard
- * when the pile runs dry. Stops at HAND_SIZE unless `overflow` is set, which is
- * how a micro-gold draw pushes the hand past its normal cap.
+ * when the pile runs dry. Stops at HAND_SIZE, or at the hard HAND_LIMIT when
+ * `overflow` is set — which is how a micro-gold draw goes past the turn refill
+ * without letting the hand grow without end.
  */
 function drawCards(state: CrawlState, count: number, overflow = false): CrawlState {
   let { hand, drawPile, discard, rolls } = state;
@@ -188,8 +190,9 @@ function drawCards(state: CrawlState, count: number, overflow = false): CrawlSta
   drawPile = [...drawPile];
   discard = [...discard];
 
+  const cap = overflow ? HAND_LIMIT : HAND_SIZE;
   for (let i = 0; i < count; i += 1) {
-    if (!overflow && hand.length >= HAND_SIZE) break;
+    if (hand.length >= cap) break;
     if (drawPile.length === 0) {
       if (discard.length === 0) break;
       rolls += 1;
@@ -271,9 +274,11 @@ export function playCard(state: CrawlState, handIndex: number, ctx: CrawlContext
  * Spend one micro-gold draw credit to pull a single extra card.
  *
  * Deliberately allowed to push the hand past HAND_SIZE — that overflow IS the
- * effect, the "extend your turn" the credits are for. A run whose energy is
- * spent gains nothing from this, which is the intended shape: micro-actions
- * widen the choice, finished work is still the only thing that pays to act.
+ * effect, the "extend your turn" the credits are for — but only as far as
+ * HAND_LIMIT, so the card row never wraps and the panel never grows. A run whose
+ * energy is spent gains nothing from this, which is the intended shape:
+ * micro-actions widen the choice, finished work is still the only thing that pays
+ * to act.
  *
  * Does not touch `playedThisTurn`, so drawing never provokes the enemy: a credit
  * spent is not a move made.
@@ -283,6 +288,9 @@ export function drawExtraCard(state: CrawlState, ctx: CrawlContext): CrawlResult
   if (blockedReason(base, ctx) !== null) return { state: base, events: [] };
   if (base.status !== "fighting") return { state: base, events: [] };
   if (drawCreditsAvailable(base, ctx) < 1) return { state: base, events: [] };
+  // Hand already full: refuse before spending the credit, so it stays banked for
+  // after the next card is played.
+  if (base.hand.length >= HAND_LIMIT) return { state: base, events: [] };
   // Nothing left anywhere to draw: refuse rather than burn the credit on a no-op.
   if (base.drawPile.length === 0 && base.discard.length === 0) return { state: base, events: [] };
 

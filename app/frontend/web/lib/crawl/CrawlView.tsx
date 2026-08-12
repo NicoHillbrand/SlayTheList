@@ -16,11 +16,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   FLOORS,
-  HAND_SIZE,
+  HAND_LIMIT,
   MICRO_TENTHS_PER_DRAW,
   MOMENTUM_DAMAGE,
   ROOMS_PER_FLOOR,
-  WARD_AMOUNT,
   getCard,
   type CardId,
 } from "@slaythelist/crawl-engine";
@@ -149,9 +148,9 @@ export function CrawlView({ compact = false }: { compact?: boolean }) {
   // Nothing in the panel is disabled because of it.
   const warded = ward !== null && !ward.done;
   const roomsCleared = (state.floor - 1) * ROOMS_PER_FLOOR + state.room;
-  // Micro draws overflow the hand on purpose, so the row grows past HAND_SIZE
-  // rather than hiding the cards it bought.
-  const handSlots = Math.max(HAND_SIZE, state.hand.length);
+  // Always HAND_LIMIT slots: the row keeps one width, never reflows as you draw,
+  // and the empty slot is an honest signal that there is headroom for one more.
+  const handFull = state.hand.length >= HAND_LIMIT;
 
   return (
     <div className={styles.root}>
@@ -186,14 +185,6 @@ export function CrawlView({ compact = false }: { compact?: boolean }) {
         </span>
       </div>
 
-      {warded && (
-        <div className={`${styles.banner} ${styles.bannerWard}`}>
-          <span className={styles.bannerTitle}>🛡 Warded: {ward.title}</span>
-          <span className={styles.bannerNote}>
-            The enemy absorbs {WARD_AMOUNT} damage a turn until this is done.
-          </span>
-        </div>
-      )}
 
       {state.status === "dead" && (
         <div className={styles.endState}>
@@ -261,11 +252,18 @@ export function CrawlView({ compact = false }: { compact?: boolean }) {
                 <span className={styles.enemyName}>{state.enemy.name}</span>
                 <span className={styles.spacer} />
                 {/* Same 🛡 idiom as the player's own block, because it is the
-                    same thing pointed the other way. */}
+                    same thing pointed the other way. The pinned todo lives in
+                    this tooltip rather than in a banner of its own: the shield
+                    is the part you need at a glance, the reason is the part you
+                    ask for. */}
                 {state.enemy.ward > 0 && (
                   <span
                     className={styles.enemyWard}
-                    title={`Absorbs ${state.enemy.ward} more damage, and comes back every turn while the pinned todo is unfinished.`}
+                    title={
+                      warded
+                        ? `Warded by: ${ward.title}\n\nAbsorbs ${state.enemy.ward} more damage, and comes back every turn until that todo is done.`
+                        : `Absorbs ${state.enemy.ward} more damage.`
+                    }
                   >
                     🛡{state.enemy.ward}
                   </span>
@@ -300,7 +298,7 @@ export function CrawlView({ compact = false }: { compact?: boolean }) {
           </div>
 
           <div className={styles.hand}>
-            {Array.from({ length: handSlots }, (_, i) => {
+            {Array.from({ length: HAND_LIMIT }, (_, i) => {
               const id: CardId | undefined = state.hand[i];
               const card = id ? getCard(id) : undefined;
               if (!card) {
@@ -329,19 +327,21 @@ export function CrawlView({ compact = false }: { compact?: boolean }) {
             })}
           </div>
 
-          {energy === 0 && !state.hand.some((id) => (getCard(id)?.cost ?? 1) === 0) && (
-            <div className={`${styles.banner} ${styles.bannerDry}`}>
-              Out of energy — earn gold to keep going.
-            </div>
-          )}
+          {/* No "out of energy" banner: the ⚡0 in the status strip and a hand of
+              dimmed cards already say it, and a line of prose repeating them is
+              the clutter this panel can least afford. */}
 
           <div className={styles.actions}>
             {drawCredits > 0 && (
               <button
                 className={styles.btn}
-                disabled={busy}
+                disabled={busy || handFull}
                 onClick={() => void act(drawCard)}
-                title={`Spend one micro-gold credit to draw a card, even above ${HAND_SIZE}. Costs no energy and does not give the enemy a turn.`}
+                title={
+                  handFull
+                    ? `Hand is full at ${HAND_LIMIT}. Play a card and the credit is still there.`
+                    : `Spend one micro-gold credit to draw a card, up to ${HAND_LIMIT}. Costs no energy and does not give the enemy a turn.`
+                }
               >
                 🃏 Draw ({drawCredits})
               </button>
