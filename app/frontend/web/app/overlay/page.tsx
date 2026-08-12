@@ -268,13 +268,6 @@ export default function OverlayTaskbarPage() {
     setPanelParam(value === "base" || value === "friends" || value === "crawl" ? value : null);
   }, []);
 
-  // Drop the app's background artwork on this route — see body.overlay-surface.
-  // Without it the window's leftover pixels show the main app's image.
-  useEffect(() => {
-    document.body.classList.add("overlay-surface");
-    return () => document.body.classList.remove("overlay-surface");
-  }, []);
-
   // Keep the hosting window sized to the content.
   useEffect(() => {
     const el = rootRef.current;
@@ -385,7 +378,15 @@ export default function OverlayTaskbarPage() {
   return (
     // minHeight: 0 overrides the module's 100vh so the reported height is the
     // actual content height (the host window hugs the content).
-    <div ref={rootRef} className={styles.root} style={{ padding: 8, overflow: "hidden", minHeight: 0 }}>
+    // background: none lets the flat body colour through. The shared .root paints
+    // a radial gradient that is right for the full-page /base view, but in a panel
+    // it made the interior darker than the strip either side of the WebView, so
+    // the resize band read as two lighter bars rather than as nothing at all.
+    <div
+      ref={rootRef}
+      className={styles.root}
+      style={{ padding: 8, overflow: "hidden", minHeight: 0, background: "none" }}
+    >
       {/* Only on the surfaces that are open while working: the always-on-top
           crawl window and the browser bar. The base/friends windows are
           transient popups, and repeating the step in each one is the clutter

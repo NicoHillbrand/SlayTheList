@@ -335,6 +335,12 @@ internal sealed class OverlayPanelWindow : Window
             VerticalAlignment = VerticalAlignment.Center,
         };
 
+        // What the WebView paints before the document does — set here rather than
+        // after initialization, so it covers the whole gap from the window
+        // appearing to the first frame of the page. Left at its default it flashes
+        // white; the panel colour makes the gap invisible.
+        _webView.DefaultBackgroundColor = System.Drawing.Color.FromArgb(255, 22, 22, 42);
+
         var grid = new Grid();
         grid.Children.Add(_fallbackText);
         grid.Children.Add(_webView);
