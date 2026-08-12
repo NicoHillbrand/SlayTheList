@@ -83,7 +83,7 @@ import {
   drawCrawlCardAction,
   chooseCrawlRewardAction,
   restartCrawlAction,
-  setCrawlLockAction,
+  setCrawlWardAction,
   type CrawlSnapshot,
   getMicroState,
   awardMicroTenths,
@@ -1835,13 +1835,13 @@ app.post("/api/crawl/restart", (_req, res) => {
   crawlRoute(res, () => restartCrawlAction());
 });
 
-// The agent's hook: pin a todo so the run stays frozen until it is done.
-app.post("/api/crawl/lock", (req, res) => {
+// The agent's hook: pin a todo so the current enemy is warded until it is done.
+app.post("/api/crawl/ward", (req, res) => {
   const todoId = req.body?.todoId;
   if (todoId !== null && todoId !== undefined && typeof todoId !== "string") {
     return badRequest(res, "todoId must be a string or null");
   }
-  crawlRoute(res, () => setCrawlLockAction(todoId ?? null));
+  crawlRoute(res, () => setCrawlWardAction(todoId ?? null));
 });
 
 app.get("/api/overlay-state", (_req, res) => {

@@ -13,8 +13,10 @@
  *  - DRAW CREDITS pay for extra cards, and come from micro-actions measured in
  *    tenths of gold. They also expire at midnight. Micro buys OPTIONS (a wider
  *    hand); finished work buys POWER (the energy to play what's in it).
- *  - KEYS are specific todos the agent pins to the run. A pinned run is frozen
- *    until that todo is `done`, however much energy you have.
+ *  - WARDS are specific todos the agent pins to the run. While a pinned todo is
+ *    unfinished the ENEMY is warded — it carries a shield that comes back every
+ *    turn — so the fight is expensive rather than impossible. Finishing the todo
+ *    shatters it. Nothing is ever frozen: see `EnemyState.ward`.
  *
  * Everything here is a pure function of (state, context). No wall-clock
  * simulation and no `Math.random()` — see `rng.ts`.
@@ -66,6 +68,17 @@ export interface EnemyState {
   attack: number;
   /** Accumulated `weaken` from cards; subtracted from `attack`, floored at 1. */
   weakened: number;
+  /**
+   * Damage absorbed before HP, refilled to WARD_AMOUNT on every enemy turn for
+   * as long as a pinned todo is unfinished.
+   *
+   * This is the whole soft-gate mechanism, and it replaced a hard freeze for one
+   * reason: a frozen run means finishing the pinned todo merely *unblocks a
+   * wall*, when the point is for it to *earn a turn*. Warded, you can always
+   * play — your damage is just being eaten, so the pinned work is what makes
+   * your cards land. Clearing it shatters the ward on the spot.
+   */
+  ward: number;
   /**
    * Turns until the telegraphed heavy attack (HEAVY_MULTIPLIER x attack).
    * Counts down on each enemy turn and resets to HEAVY_EVERY after it fires.
@@ -159,13 +172,13 @@ export interface CrawlState {
 
   /**
    * A todo the agent pinned to the run. While it is set and not yet done, the
-   * run is frozen: no card can be played and no room can be left. This is the
-   * hard gate ("unlock the next turn"), not a soft nudge. Cleared once the
-   * player acts on the unlocked run, so a lock is consumed rather than sticky.
+   * enemy is warded (see `EnemyState.ward`) — the fight costs more, but every
+   * action stays available. Cleared once the player leaves the room, so a ward
+   * covers the fight it was pinned during rather than the whole run.
    */
-  lockTodoId: string | null;
+  wardTodoId: string | null;
   /** Denormalized for display, so the panel needs no second lookup. */
-  lockTodoTitle: string | null;
+  wardTodoTitle: string | null;
 
   /** Monotone counter so every shuffle and reward roll draws fresh randomness. */
   rolls: number;
@@ -191,7 +204,7 @@ export interface CrawlContext {
   /** True when a todo was completed recently — worth bonus damage. */
   momentum: boolean;
   /** True when no todo is pinned to the run, or the pinned one is done. */
-  unlocked: boolean;
+  wardCleared: boolean;
   nowMs: number;
 }
 
@@ -201,6 +214,8 @@ export type CrawlEvent =
   | { type: "cardDrawn"; cardId: CardId }
   | { type: "enemySlain"; name: string; boss: boolean }
   | { type: "playerHit"; amount: number; heavy: boolean }
+  /** The pinned todo got done and the enemy's shield broke. */
+  | { type: "wardShattered" }
   | { type: "floorCleared"; floor: number }
   | { type: "died"; floor: number }
   /** The boss fell. `goldReward` is paid by the caller, not the engine. */

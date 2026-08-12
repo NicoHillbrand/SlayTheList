@@ -20,6 +20,7 @@ import {
   MICRO_TENTHS_PER_DRAW,
   MOMENTUM_DAMAGE,
   ROOMS_PER_FLOOR,
+  WARD_AMOUNT,
   getCard,
   type CardId,
 } from "@slaythelist/crawl-engine";
@@ -77,7 +78,8 @@ export function CrawlView({ compact = false }: { compact?: boolean }) {
   }, [load]);
 
   // Live updates: the API broadcasts on every gold and todo mutation, so energy
-  // appears the moment you earn it and a lock clears the moment you tick it off.
+  // appears the moment you earn it and a ward shatters the moment you tick the
+  // pinned todo off — which is the reward, so it must not wait for a poll.
   useEffect(() => {
     let socket: WebSocket | null = null;
     let retry: ReturnType<typeof setTimeout> | undefined;
@@ -142,8 +144,10 @@ export function CrawlView({ compact = false }: { compact?: boolean }) {
     return <div className={styles.root}><div className={styles.loading}>Lighting a torch…</div></div>;
   }
 
-  const { state, energy, lock, drawCredits } = snap;
-  const locked = lock !== null && !lock.done;
+  const { state, energy, ward, drawCredits } = snap;
+  // Warded, not locked: this only tells the player why the enemy is shielded.
+  // Nothing in the panel is disabled because of it.
+  const warded = ward !== null && !ward.done;
   const roomsCleared = (state.floor - 1) * ROOMS_PER_FLOOR + state.room;
   // Micro draws overflow the hand on purpose, so the row grows past HAND_SIZE
   // rather than hiding the cards it bought.
@@ -182,9 +186,12 @@ export function CrawlView({ compact = false }: { compact?: boolean }) {
         </span>
       </div>
 
-      {locked && (
-        <div className={`${styles.banner} ${styles.bannerLock}`}>
-          🔒 {lock.title}
+      {warded && (
+        <div className={`${styles.banner} ${styles.bannerWard}`}>
+          <span className={styles.bannerTitle}>🛡 Warded: {ward.title}</span>
+          <span className={styles.bannerNote}>
+            The enemy absorbs {WARD_AMOUNT} damage a turn until this is done.
+          </span>
         </div>
       )}
 
@@ -223,7 +230,7 @@ export function CrawlView({ compact = false }: { compact?: boolean }) {
                 <button
                   key={id}
                   className={`${styles.card} ${styles.rewardCard}`}
-                  disabled={busy || locked}
+                  disabled={busy}
                   onClick={() => void act(() => chooseReward(id))}
                   title={card.text}
                 >
@@ -238,7 +245,7 @@ export function CrawlView({ compact = false }: { compact?: boolean }) {
             })}
           </div>
           <div className={styles.actions}>
-            <button className={styles.btn} disabled={busy || locked} onClick={() => void act(() => chooseReward(null))}>
+            <button className={styles.btn} disabled={busy} onClick={() => void act(() => chooseReward(null))}>
               Skip
             </button>
           </div>
@@ -253,6 +260,16 @@ export function CrawlView({ compact = false }: { compact?: boolean }) {
               <div className={styles.enemyTop}>
                 <span className={styles.enemyName}>{state.enemy.name}</span>
                 <span className={styles.spacer} />
+                {/* Same 🛡 idiom as the player's own block, because it is the
+                    same thing pointed the other way. */}
+                {state.enemy.ward > 0 && (
+                  <span
+                    className={styles.enemyWard}
+                    title={`Absorbs ${state.enemy.ward} more damage, and comes back every turn while the pinned todo is unfinished.`}
+                  >
+                    🛡{state.enemy.ward}
+                  </span>
+                )}
                 <span className={styles.enemyHp}>
                   {state.enemy.hp}/{state.enemy.maxHp}
                 </span>
@@ -294,7 +311,7 @@ export function CrawlView({ compact = false }: { compact?: boolean }) {
                 <button
                   key={`${id}-${i}`}
                   className={styles.card}
-                  disabled={busy || locked || unaffordable}
+                  disabled={busy || unaffordable}
                   title={
                     unaffordable
                       ? `${card.text} — needs ${card.cost} energy, you have ${energy}. Earn gold to spend it.`
@@ -312,7 +329,7 @@ export function CrawlView({ compact = false }: { compact?: boolean }) {
             })}
           </div>
 
-          {!locked && energy === 0 && !state.hand.some((id) => (getCard(id)?.cost ?? 1) === 0) && (
+          {energy === 0 && !state.hand.some((id) => (getCard(id)?.cost ?? 1) === 0) && (
             <div className={`${styles.banner} ${styles.bannerDry}`}>
               Out of energy — earn gold to keep going.
             </div>
@@ -322,7 +339,7 @@ export function CrawlView({ compact = false }: { compact?: boolean }) {
             {drawCredits > 0 && (
               <button
                 className={styles.btn}
-                disabled={busy || locked}
+                disabled={busy}
                 onClick={() => void act(drawCard)}
                 title={`Spend one micro-gold credit to draw a card, even above ${HAND_SIZE}. Costs no energy and does not give the enemy a turn.`}
               >
@@ -331,7 +348,7 @@ export function CrawlView({ compact = false }: { compact?: boolean }) {
             )}
             <button
               className={`${styles.btn} ${styles.btnPrimary}`}
-              disabled={busy || locked || !state.playedThisTurn}
+              disabled={busy || !state.playedThisTurn}
               onClick={() => void act(endTurn)}
               title={
                 state.playedThisTurn

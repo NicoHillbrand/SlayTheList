@@ -200,6 +200,16 @@
   white-space: nowrap;
 }
 
+/* The enemy's shield, in the same muted blue as the player's block pip: block is
+   block, whoever is holding it. */
+.enemyWard {
+  color: #7fa8cc;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 /* Your own HP takes the bar's colour, so the pair reads as one gauge. */
 .playerHpText {
   color: var(--good);
@@ -388,9 +398,12 @@
   line-height: 1.35;
 }
 
-.bannerLock {
-  border: 1px solid #6a5320;
-  background: rgba(245, 197, 66, 0.08);
+/* Warded, not locked. Gold because it is the agent asking for real work, which
+   is what gold means here — but a quiet fill, since nothing is actually blocked
+   and the panel should not read as an error state. */
+.bannerWard {
+  border: 1px solid #4a3c1c;
+  background: rgba(245, 197, 66, 0.05);
   color: var(--gold);
 }
 

@@ -56,14 +56,23 @@ event was introduced and nothing removed it.
 
 | Tool | Purpose |
 |------|---------|
-| `get_crawl` | Read the run: floor/room, HP, current enemy, hand and deck, energy left today, `drawCredits` / `microTenthsToday` (extra draws bought by `award_micro`), and any pinned lock. |
-| `lock_crawl_on_todo` | Pin a todo to the run. While it is not `done` the run is **frozen** — no card can be played, no room entered, whatever the energy. Pass `todo_id: null` to clear. Create the todo with `create_todo` first. |
+| `get_crawl` | Read the run: floor/room, HP, current enemy, hand and deck, energy left today, `drawCredits` / `microTenthsToday` (extra draws bought by `award_micro`), and any pinned todo (`ward`, plus the enemy's remaining shield in `state.enemy.ward`). |
+| `ward_crawl_on_todo` | Pin a todo to the run. While it is not `done` the **current enemy is warded**: it absorbs `WARD_AMOUNT` (5) damage, refilled every enemy turn. Nothing is blocked — cards still play, rooms still open. Finishing it shatters the shield immediately. Pass `todo_id: null` to clear. Create the todo with `create_todo` first. |
 
 The design in one line: **energy is the gold you earned today** (a mirror of the
 ledger, expiring at midnight — playing never lowers the real balance), and
-**locks are todos**. Both are minted by real work only. Clearing the boss pays 10
+**wards are todos**. Both are minted by real work only. Clearing the boss pays 10
 gold back into the ledger. See `shared/crawl-engine` for the rules and
 `pacing.test.ts` for the balance guards.
+
+**Why a ward and not a lock.** This was a hard freeze until 2026-08-12: a pinned
+todo stopped every action. That got the incentive backwards — with the run frozen,
+finishing the todo only *removes a wall*, when it should be what *earns a good
+turn*. Warding the enemy instead means the player can always act, their damage is
+just being eaten, and the moment the work lands their next card hits at full
+weight. Two guards in `pacing.test.ts` hold the line: a pinned run is never
+blocked, and a warded fight still progresses (just measurably slower). Nothing in
+the crawl freezes on a todo any more.
 
 **Micro-gold buys draws, not energy.** `award_micro` mints draw credits at 3
 tenths each, and spending one (`POST /api/crawl/draw`) pulls a card *above* the
@@ -73,9 +82,10 @@ a day of nothing but micro-actions widens the hand and advances the run not at
 all; `pacing.test.ts` guards exactly that. Micro buys OPTIONS, finished work buys
 POWER.
 
-When suggesting sub-tasks in a session, `lock_crawl_on_todo` is how a suggestion
-becomes the thing that unlocks the next turn. Use it deliberately: a lock the
-user cannot finish today stalls their run.
+When suggesting sub-tasks in a session, `ward_crawl_on_todo` is how a suggestion
+becomes the thing that earns a good turn. It is now safe to use freely — a ward
+the user never finishes costs them damage, not their run, and it retires by itself
+when they leave the room.
 
 ### Current step (overlay display)
 
@@ -86,8 +96,8 @@ user cannot finish today stalls their run.
 | `get_current_step` | Read it back, or `null`. Also returns `age`: `"fresh"` \| `"stale"` (>45 min, shown dimmed) \| `"expired"` (>4 h, not rendered). A non-null `doneAt` means it was completed and is no longer displayed. |
 
 **This is a display, not a gate.** It freezes nothing and gates no card or room.
-`lock_crawl_on_todo` is the hard freeze; this just puts the driver-mode next step
-where the user is already looking instead of only in the chat window.
+`ward_crawl_on_todo` is what makes the run respond; this just puts the driver-mode
+next step where the user is already looking instead of only in the chat window.
 
 **Retiring it is the agent's job.** There is no user dismissal — deliberately, since
 a step the user can swat away says nothing about whether the work happened, and the
@@ -203,9 +213,9 @@ reasoning about a run:
   "hp": 40, "maxHp": 40, "block": 0, "strength": 0,
   "playedThisTurn": false,
   "deck": ["strike", "..."], "hand": ["..."],
-  "enemy": { "name": "Cellar Rat", "hp": 18, "attack": 4, "turnsUntilHeavy": 3, "boss": false },
+  "enemy": { "name": "Cellar Rat", "hp": 18, "attack": 4, "ward": 0, "turnsUntilHeavy": 3, "boss": false },
   "energyDay": "YYYY-MM-DD", "energyUsed": 0, "drawsUsed": 0,
-  "lockTodoId": "uuid | null", "lockTodoTitle": "string | null"
+  "wardTodoId": "uuid | null", "wardTodoTitle": "string | null"
 }
 ```
 

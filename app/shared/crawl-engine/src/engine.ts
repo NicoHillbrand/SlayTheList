@@ -4,7 +4,7 @@
  * Every exported mutator takes `(state, ..., ctx)` and returns a brand new
  * state plus the events that happened. Nothing here reads the clock beyond
  * `ctx.nowMs`, touches gold, or knows what a todo is: the caller resolves all
- * of that and hands down `goldEarnedToday`, `momentum`, and `unlocked`.
+ * of that and hands down `goldEarnedToday`, `momentum`, and `wardCleared`.
  *
  * Two deliberate departures from Slay the Spire, both forced by the fact that
  * this is an overlay you glance at rather than a game you sit down to:
@@ -37,6 +37,7 @@ import {
   ROOMS_PER_FLOOR,
   START_HP,
   STARTING_DECK,
+  WARD_AMOUNT,
   enemyTemplate,
   getCard,
   isBossRoom,
@@ -56,7 +57,7 @@ export function emptyCrawlMeta(): CrawlMeta {
   return { bestFloor: 1, runsWon: 0, runsLost: 0, kills: 0 };
 }
 
-function spawnEnemy(floor: number, room: number): EnemyState {
+function spawnEnemy(floor: number, room: number, warded = false): EnemyState {
   const template = enemyTemplate(floor, room);
   return {
     name: template.name,
@@ -65,8 +66,30 @@ function spawnEnemy(floor: number, room: number): EnemyState {
     maxHp: template.hp,
     attack: template.attack,
     weakened: 0,
+    ward: warded ? WARD_AMOUNT : 0,
     turnsUntilHeavy: HEAVY_EVERY,
     boss: isBossRoom(floor, room),
+  };
+}
+
+/** True while a todo is pinned and not yet finished. */
+function isWarded(state: CrawlState, ctx: CrawlContext): boolean {
+  return state.wardTodoId !== null && !ctx.wardCleared;
+}
+
+/**
+ * Reconcile the enemy's shield with the pinned todo before anything else runs.
+ *
+ * Finishing the todo shatters the ward immediately rather than at the end of the
+ * turn, because that instant is the reason the mechanic exists — the reward for
+ * the real work is your next card suddenly landing in full.
+ */
+function syncWard(state: CrawlState, ctx: CrawlContext): CrawlResult {
+  if (!state.enemy) return { state, events: [] };
+  if (isWarded(state, ctx) || state.enemy.ward === 0) return { state, events: [] };
+  return {
+    state: { ...state, enemy: { ...state.enemy, ward: 0 } },
+    events: [{ type: "wardShattered" }],
   };
 }
 
@@ -101,8 +124,8 @@ export function createCrawlState(
     energyDay: today,
     energyUsed: 0,
     drawsUsed: 0,
-    lockTodoId: null,
-    lockTodoTitle: null,
+    wardTodoId: null,
+    wardTodoTitle: null,
     rolls: 1,
     meta,
   };
@@ -137,11 +160,18 @@ export function drawCreditsAvailable(state: CrawlState, ctx: CrawlContext): numb
   return Math.max(0, earned - day.drawsUsed);
 }
 
-/** Why the player cannot act right now, or null when they can. */
-export function blockedReason(state: CrawlState, ctx: CrawlContext): string | null {
-  if (state.lockTodoId && !ctx.unlocked) {
-    return `Locked: ${state.lockTodoTitle ?? "finish the pinned todo"}`;
-  }
+/**
+ * Why the player cannot act right now, or null when they can.
+ *
+ * A pinned todo is deliberately NOT a reason. It used to be — a pin froze the
+ * whole run — and that got the incentive backwards: with the run frozen,
+ * finishing the todo only removes a wall, where it should be what earns the
+ * turn. The pin now wards the enemy instead, so the answer here is "yes, play"
+ * and the pinned work decides how much your cards are worth.
+ *
+ * The only real blocks left are the two that are simply true: the run is over.
+ */
+export function blockedReason(state: CrawlState, _ctx: CrawlContext): string | null {
   if (state.status === "dead") return "Your run ended. Start a new one.";
   if (state.status === "victory") return "Run cleared. Start a new one.";
   return null;
@@ -187,20 +217,23 @@ function outgoingDamage(base: number, state: CrawlState, ctx: CrawlContext): num
 
 /**
  * Play the card at `handIndex`. Costs energy from today's pool. Rejects (state
- * unchanged, no events) when the run is locked, it is not a fight, or the
- * energy is not there — the UI disables those cases, this is the backstop.
+ * unchanged, no events) when the run is over, it is not a fight, or the energy
+ * is not there — the UI disables those cases, this is the backstop. A pinned todo
+ * is NOT one of them: it shields the enemy, it does not stop the card.
  */
 export function playCard(state: CrawlState, handIndex: number, ctx: CrawlContext): CrawlResult {
-  const base = normalizeDay(state, ctx.today);
-  if (blockedReason(base, ctx) !== null) return { state: base, events: [] };
-  if (base.status !== "fighting" || !base.enemy) return { state: base, events: [] };
+  const dayNormalized = normalizeDay(state, ctx.today);
+  const synced = syncWard(dayNormalized, ctx);
+  const base = synced.state;
+  if (blockedReason(base, ctx) !== null) return { state: base, events: synced.events };
+  if (base.status !== "fighting" || !base.enemy) return { state: base, events: synced.events };
 
   const cardId = base.hand[handIndex];
   const card = cardId ? getCard(cardId) : undefined;
-  if (!card) return { state: base, events: [] };
-  if (card.cost > energyAvailable(base, ctx)) return { state: base, events: [] };
+  if (!card) return { state: base, events: synced.events };
+  if (card.cost > energyAvailable(base, ctx)) return { state: base, events: synced.events };
 
-  const events: CrawlEvent[] = [];
+  const events: CrawlEvent[] = [...synced.events];
   let next: CrawlState = {
     ...base,
     hand: base.hand.filter((_, i) => i !== handIndex),
@@ -213,7 +246,13 @@ export function playCard(state: CrawlState, handIndex: number, ctx: CrawlContext
   const damage = outgoingDamage(effect.damage ?? 0, next, ctx);
   const enemy: EnemyState = { ...next.enemy! };
 
-  if (damage > 0) enemy.hp = Math.max(0, enemy.hp - damage);
+  // The ward eats damage before HP does, so a warded fight still progresses —
+  // just at a fraction of the rate, and only for what spills past the shield.
+  if (damage > 0) {
+    const absorbed = Math.min(enemy.ward, damage);
+    enemy.ward -= absorbed;
+    enemy.hp = Math.max(0, enemy.hp - (damage - absorbed));
+  }
   if (effect.weaken) enemy.weakened += effect.weaken;
   if (effect.block) next.block += effect.block;
   if (effect.heal) next.hp = Math.min(next.maxHp, next.hp + effect.heal);
@@ -302,13 +341,19 @@ export function canEndTurn(state: CrawlState): boolean {
  * there — it never grinds the player down for being away.
  */
 export function endTurn(state: CrawlState, ctx: CrawlContext): CrawlResult {
-  const base = normalizeDay(state, ctx.today);
-  if (blockedReason(base, ctx) !== null) return { state: base, events: [] };
-  if (!canEndTurn(base)) return { state: base, events: [] };
-  if (base.status !== "fighting" || !base.enemy) return { state: base, events: [] };
+  const dayNormalized = normalizeDay(state, ctx.today);
+  const synced = syncWard(dayNormalized, ctx);
+  const base = synced.state;
+  if (blockedReason(base, ctx) !== null) return { state: base, events: synced.events };
+  if (!canEndTurn(base)) return { state: base, events: synced.events };
+  if (base.status !== "fighting" || !base.enemy) return { state: base, events: synced.events };
 
-  const events: CrawlEvent[] = [];
+  const events: CrawlEvent[] = [...synced.events];
   const enemy: EnemyState = { ...base.enemy };
+  // The shield comes back with the enemy's turn while the todo is outstanding.
+  // That is what makes a warded fight a grind rather than a one-turn detour: you
+  // can break through inside a turn, but you cannot bank the progress.
+  if (isWarded(base, ctx)) enemy.ward = WARD_AMOUNT;
   const heavy = enemy.turnsUntilHeavy <= 1;
   const swing = Math.max(1, enemy.attack - enemy.weakened) * (heavy ? HEAVY_MULTIPLIER : 1);
   enemy.turnsUntilHeavy = heavy ? HEAVY_EVERY : enemy.turnsUntilHeavy - 1;
@@ -345,7 +390,8 @@ export function endTurn(state: CrawlState, ctx: CrawlContext): CrawlResult {
 /**
  * Take a reward card and step into the next room. `cardId` may be null to skip
  * the card — keeping the deck lean is a real choice, and skipping is one click
- * rather than a menu. Requires the run to be unlocked.
+ * rather than a menu. Available whether or not a pinned todo is outstanding —
+ * leaving the room is what retires the ward.
  */
 export function chooseReward(
   state: CrawlState,
@@ -356,6 +402,9 @@ export function chooseReward(
   if (blockedReason(base, ctx) !== null) return { state: base, events: [] };
   if (base.status !== "reward") return { state: base, events: [] };
   if (cardId !== null && !base.rewardChoices.includes(cardId)) return { state: base, events: [] };
+  // A ward covers the fight it was pinned during. Walking into the next room
+  // retires the pin, so a todo left undone cannot silently hobble the whole run.
+  const carriedWard = false;
 
   const events: CrawlEvent[] = [];
   const deck = cardId ? [...base.deck, cardId] : base.deck;
@@ -385,10 +434,10 @@ export function chooseReward(
     playedThisTurn: false,
     status: "fighting",
     rewardChoices: [],
-    enemy: spawnEnemy(floor, room),
-    // The lock is consumed once the player has actually moved on.
-    lockTodoId: null,
-    lockTodoTitle: null,
+    enemy: spawnEnemy(floor, room, carriedWard),
+    // The ward is retired once the player has actually moved on.
+    wardTodoId: null,
+    wardTodoTitle: null,
     meta: { ...base.meta, bestFloor: Math.max(base.meta.bestFloor, floor) },
   };
   return { state: drawCards(next, HAND_SIZE), events };
@@ -405,7 +454,18 @@ export function restartRun(state: CrawlState, seed: number, nowMs: number, today
   };
 }
 
-/** Pin a todo to the run. Blocks all actions until that todo is done. */
-export function setLock(state: CrawlState, todoId: string | null, title: string | null): CrawlState {
-  return { ...state, lockTodoId: todoId, lockTodoTitle: todoId ? title : null };
+/**
+ * Pin a todo to the run, warding the current enemy until it is done. Nothing is
+ * blocked — see `EnemyState.ward`. Passing null clears the pin and the shield.
+ */
+export function setWard(state: CrawlState, todoId: string | null, title: string | null): CrawlState {
+  const next: CrawlState = {
+    ...state,
+    wardTodoId: todoId,
+    wardTodoTitle: todoId ? title : null,
+  };
+  if (!state.enemy) return next;
+  // Raise the shield the moment the pin lands, rather than waiting for the
+  // enemy's next turn — otherwise pinning mid-turn does nothing at all.
+  return { ...next, enemy: { ...state.enemy, ward: todoId ? WARD_AMOUNT : 0 } };
 }

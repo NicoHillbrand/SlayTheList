@@ -9,6 +9,7 @@ import {
   ROOMS_PER_FLOOR,
   START_HP,
   STARTING_DECK,
+  WARD_AMOUNT,
   getCard,
 } from "./content.js";
 import {
@@ -22,7 +23,7 @@ import {
   energyAvailable,
   playCard,
   restartRun,
-  setLock,
+  setWard,
 } from "./engine.js";
 import type { CrawlContext, CrawlState } from "./types.js";
 
@@ -35,7 +36,7 @@ function ctx(over: Partial<CrawlContext> = {}): CrawlContext {
     microTenthsToday: 0,
     today: TODAY,
     momentum: false,
-    unlocked: true,
+    wardCleared: true,
     nowMs: NOW,
     ...over,
   };
@@ -154,11 +155,11 @@ describe("micro-gold draw credits", () => {
     expect(result.events).toHaveLength(0);
   });
 
-  it("refuses while the run is locked, however much micro was earned", () => {
-    const locked = setLock(fresh(), "todo-1", "Finish the thing");
-    const result = drawExtraCard(locked, ctx({ microTenthsToday: TENTHS * 5, unlocked: false }));
-    expect(result.state).toEqual(locked);
-    expect(result.events).toHaveLength(0);
+  it("still draws while a todo is pinned — a ward shields the enemy, it does not stop you", () => {
+    const warded = setWard(fresh(), "todo-1", "Finish the thing");
+    const result = drawExtraCard(warded, ctx({ microTenthsToday: TENTHS * 5, wardCleared: false }));
+    expect(result.state.drawsUsed).toBe(1);
+    expect(result.events).toContainEqual({ type: "cardDrawn", cardId: result.state.hand.at(-1) });
   });
 
   it("does not burn the credit when there is nothing left to draw", () => {
@@ -378,29 +379,64 @@ describe("rewards and progression", () => {
   });
 });
 
-describe("todo locks", () => {
-  it("freezes every action until the pinned todo is done", () => {
-    const locked = setLock(withHand(fresh(), ["strike"]), "todo-1", "Write the migration");
-    const blocked = ctx({ unlocked: false });
-    expect(blockedReason(locked, blocked)).toContain("Write the migration");
-    expect(playCard(locked, 0, blocked).state).toEqual(locked);
-    expect(endTurn(locked, blocked).state).toEqual(locked);
-    expect(chooseReward({ ...locked, status: "reward" }, null, blocked).state.room).toBe(
-      locked.room,
-    );
+describe("todo wards", () => {
+  const pinned = () => setWard(withHand(fresh(), ["strike", "lunge"]), "todo-1", "Write the migration");
+  const outstanding = ctx({ wardCleared: false });
+
+  it("shields the enemy instead of freezing the run", () => {
+    const warded = pinned();
+    expect(warded.enemy!.ward).toBe(WARD_AMOUNT);
+    // The whole point of the change: a pin is never a reason you cannot act.
+    expect(blockedReason(warded, outstanding)).toBeNull();
   });
 
-  it("lets play resume once the todo is done", () => {
-    const locked = setLock(withHand(fresh(), ["strike"]), "todo-1", "Write the migration");
-    expect(blockedReason(locked, ctx())).toBeNull();
-    expect(playCard(locked, 0, ctx()).state.enemy!.hp).toBeLessThan(locked.enemy!.maxHp);
+  it("still lets every action through while the todo is outstanding", () => {
+    const warded = pinned();
+    expect(playCard(warded, 0, outstanding).state).not.toEqual(warded);
+    expect(endTurn(armed(warded), outstanding).state).not.toEqual(armed(warded));
+    const atReward = { ...warded, status: "reward" as const, rewardChoices: ["ward"] };
+    expect(chooseReward(atReward, null, outstanding).state.room).not.toBe(warded.room);
   });
 
-  it("consumes the lock when the player moves to the next room", () => {
-    const won = setLock({ ...fresh(), status: "reward", rewardChoices: ["ward"] }, "t", "Ship it");
-    const next = chooseReward(won, "ward", ctx()).state;
-    expect(next.lockTodoId).toBeNull();
-    expect(next.lockTodoTitle).toBeNull();
+  it("eats damage before HP, so a hit lands but barely counts", () => {
+    const warded = pinned();
+    const strike = getCard("strike")!.effect.damage!; // 6 vs a ward of 5
+    const after = playCard(warded, 0, outstanding).state;
+    expect(after.enemy!.ward).toBe(0);
+    expect(after.enemy!.maxHp - after.enemy!.hp).toBe(strike - WARD_AMOUNT);
+  });
+
+  it("regenerates the shield on the enemy's turn — progress cannot be banked", () => {
+    const broken = playCard(pinned(), 0, outstanding).state;
+    expect(broken.enemy!.ward).toBe(0);
+    expect(endTurn(broken, outstanding).state.enemy!.ward).toBe(WARD_AMOUNT);
+  });
+
+  it("shatters the shield the moment the todo is done", () => {
+    const warded = pinned();
+    const { state: next, events } = playCard(warded, 0, ctx()); // ctx() = wardCleared
+    expect(events).toContainEqual({ type: "wardShattered" });
+    // Full damage lands: nothing absorbed it.
+    expect(next.enemy!.maxHp - next.enemy!.hp).toBe(getCard("strike")!.effect.damage);
+  });
+
+  it("stops regenerating once the todo is done", () => {
+    const warded = armed(pinned());
+    expect(endTurn(warded, ctx()).state.enemy!.ward).toBe(0);
+  });
+
+  it("retires the ward when the player moves to the next room", () => {
+    const won = setWard({ ...fresh(), status: "reward", rewardChoices: ["ward"] }, "t", "Ship it");
+    const next = chooseReward(won, "ward", outstanding).state;
+    expect(next.wardTodoId).toBeNull();
+    expect(next.wardTodoTitle).toBeNull();
+    // And the fresh enemy is unshielded, so an unfinished pin cannot follow the
+    // player through the whole run.
+    expect(next.enemy!.ward).toBe(0);
+  });
+
+  it("clears the shield when the pin is removed", () => {
+    expect(setWard(pinned(), null, null).enemy!.ward).toBe(0);
   });
 });
 

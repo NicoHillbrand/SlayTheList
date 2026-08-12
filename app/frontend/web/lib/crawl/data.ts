@@ -32,7 +32,8 @@ export interface CrawlSnapshot {
   momentum: boolean;
   /** Null when the player can act, otherwise why they cannot. */
   blocked: string | null;
-  lock: { todoId: string; title: string; done: boolean } | null;
+  /** The pinned todo warding the current enemy. Null when nothing is pinned. */
+  ward: { todoId: string; title: string; done: boolean } | null;
   events: CrawlEvent[];
 }
 

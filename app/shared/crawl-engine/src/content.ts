@@ -50,6 +50,19 @@ export const MOMENTUM_DAMAGE = 3;
 /** How recent "recently" is, for momentum. */
 export const MOMENTUM_WINDOW_MS = 60 * 60 * 1000;
 
+/**
+ * Shield the enemy carries while a pinned todo is unfinished, refilled on every
+ * enemy turn.
+ *
+ * Tuned to blunt, not to block. A Strike is 6, so a ward of 5 leaves 1 through —
+ * the hit lands, it just barely counts. Two cards in a turn break it and connect
+ * properly, which is the point: the ward makes damage EXPENSIVE rather than
+ * impossible, so a player who has energy can always keep playing and a player
+ * who finishes the pinned todo suddenly hits at full weight. Push it much above
+ * a Strike and it becomes the hard freeze this replaced, in slower clothing.
+ */
+export const WARD_AMOUNT = 5;
+
 /** Enemy turns between telegraphed heavy attacks. */
 export const HEAVY_EVERY = 3;
 export const HEAVY_MULTIPLIER = 2;

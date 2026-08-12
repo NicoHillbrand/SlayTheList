@@ -21,15 +21,18 @@ import {
   ROOMS_PER_FLOOR,
   START_HP,
   TOTAL_ROOMS,
+  WARD_AMOUNT,
   getCard,
 } from "./content.js";
 import {
+  blockedReason,
   canEndTurn,
   chooseReward,
   createCrawlState,
   drawExtraCard,
   endTurn,
   playCard,
+  setWard,
 } from "./engine.js";
 import type { CardId, CrawlContext, CrawlState } from "./types.js";
 
@@ -53,7 +56,7 @@ const REWARD_RANK: CardId[] = [
 const BURST_TARGET = 6;
 
 function ctx(goldEarnedToday: number, microTenthsToday = 0): CrawlContext {
-  return { goldEarnedToday, microTenthsToday, today: TODAY, momentum: false, unlocked: true, nowMs: NOW };
+  return { goldEarnedToday, microTenthsToday, today: TODAY, momentum: false, wardCleared: true, nowMs: NOW };
 }
 
 interface RunOutcome {
@@ -216,6 +219,55 @@ describe("micro-gold buys options, not power", () => {
     const draws = Math.floor(todoWorthInTenths / MICRO_TENTHS_PER_DRAW);
     expect(draws).toBeGreaterThan(HAND_SIZE * 2);
     expect(MICRO_TENTHS_PER_DRAW).toBeLessThan(10);
+  });
+});
+
+describe("a pinned todo is a reward, not a wall", () => {
+  const warded = () => setWard(createCrawlState(42, NOW, TODAY), "todo-1", "Send the email");
+  const outstanding = { ...ctx(25), wardCleared: false };
+
+  it("never stops the player acting, whatever is pinned", () => {
+    // This is the property the hard freeze got wrong. Finishing the pinned todo
+    // has to EARN a good turn; if the run is frozen, it merely removes a wall,
+    // and there is no reward left to feel.
+    let state = warded();
+    let played = 0;
+    for (let i = 0; i < 6 && state.status === "fighting"; i += 1) {
+      const next = playCard(state, 0, outstanding);
+      if (next.state !== state) played += 1;
+      state = next.state;
+      if (canEndTurn(state)) state = endTurn(state, outstanding).state;
+    }
+    expect(played).toBeGreaterThan(0);
+    expect(blockedReason(state, outstanding)).toBeNull();
+  });
+
+  it("makes the fight cost more, so finishing the todo visibly pays", () => {
+    // Same seed, same cards, same energy — the only difference is whether the
+    // pinned work is done. The gap between them IS the reward.
+    const damageOver = (c: CrawlContext) => {
+      let state = warded();
+      for (let i = 0; i < 6 && state.status === "fighting"; i += 1) {
+        const next = playCard(state, 0, c);
+        state = next.state === state ? state : next.state;
+        if (canEndTurn(state)) state = endTurn(state, c).state;
+      }
+      return state.enemy === null ? Infinity : state.enemy.maxHp - state.enemy.hp;
+    };
+    const withWork = damageOver(ctx(25));
+    const withoutWork = damageOver(outstanding);
+    expect(withoutWork).toBeLessThan(withWork);
+    // But not to zero: a warded fight still progresses, it is just expensive.
+    expect(withoutWork).toBeGreaterThan(0);
+  });
+
+  it("cannot be outlasted — the shield returns every turn", () => {
+    let state = warded();
+    for (let i = 0; i < 4; i += 1) {
+      state = playCard(state, 0, outstanding).state;
+      if (canEndTurn(state)) state = endTurn(state, outstanding).state;
+    }
+    expect(state.enemy!.ward).toBe(WARD_AMOUNT);
   });
 });
 

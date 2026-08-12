@@ -23,7 +23,7 @@ import {
   getGoldEarnedToday,
   awardMicroTenths,
   getCrawlSnapshot,
-  setCrawlLockAction,
+  setCrawlWardAction,
   getCurrentStep,
   setCurrentStep,
   completeCurrentStep,
@@ -547,7 +547,7 @@ server.tool(
 
 server.tool(
   "get_crawl",
-  "Read the state of The Crawl, the overlay dungeon run: floor and room, HP, the current enemy, the hand and deck, how much energy is left today (energy = gold earned today, it expires at midnight), how many extra card draws today's micro-actions have bought (drawCredits, from award_micro), and whether a todo is currently pinned as a lock. Use it to see how the run is doing before suggesting what to pin next.",
+  "Read the state of The Crawl, the overlay dungeon run: floor and room, HP, the current enemy, the hand and deck, how much energy is left today (energy = gold earned today, it expires at midnight), how many extra card draws today's micro-actions have bought (drawCredits, from award_micro), and whether a todo is currently pinned (`ward`, plus the enemy's remaining shield in `state.enemy.ward`). Use it to see how the run is doing before suggesting what to pin next.",
   {},
   async () => {
     const snapshot = getCrawlSnapshot();
@@ -556,23 +556,28 @@ server.tool(
 );
 
 server.tool(
-  "lock_crawl_on_todo",
-  "Pin a todo to The Crawl. While the pinned todo is not done, the run is FROZEN — no card can be played and no room can be entered, regardless of energy. This is the hard gate for turning a sub-task you just suggested into the thing that unlocks the next turn. Create the todo with create_todo first, then pass its id here. Pass todo_id: null to clear the lock. Use it deliberately: a lock the user cannot finish today stalls their run.",
+  "ward_crawl_on_todo",
+  "Pin a todo to The Crawl, which WARDS the current enemy until that todo is done: it carries a shield that absorbs damage and comes back every turn, so the fight costs far more while the work is outstanding. Nothing is ever blocked — the user can always play cards and enter rooms — and finishing the todo shatters the shield on the spot, so their next card suddenly lands in full. That is the point: the pinned work should EARN a good turn, not unblock a wall. Create the todo with create_todo first, then pass its id here. Pass todo_id: null to clear the ward. The ward is retired automatically when the user leaves the room, so an unfinished pin cannot hobble the whole run.",
   {
     todo_id: z
       .string()
       .nullable()
-      .describe("Id of the todo that must be completed before the run resumes. Null clears the lock."),
+      .describe("Id of the todo that wards the current enemy until it is done. Null clears the ward."),
   },
   async ({ todo_id }) => {
     try {
-      const snapshot = setCrawlLockAction(todo_id);
+      const snapshot = setCrawlWardAction(todo_id);
       return {
         content: [
           {
             type: "text" as const,
             text: JSON.stringify(
-              { locked: snapshot.lock, blocked: snapshot.blocked, energy: snapshot.energy },
+              {
+                ward: snapshot.ward,
+                enemyWard: snapshot.state.enemy?.ward ?? 0,
+                blocked: snapshot.blocked,
+                energy: snapshot.energy,
+              },
               null,
               2,
             ),
@@ -582,7 +587,7 @@ server.tool(
     } catch (err) {
       return {
         content: [
-          { type: "text" as const, text: err instanceof Error ? err.message : "lock failed" },
+          { type: "text" as const, text: err instanceof Error ? err.message : "ward failed" },
         ],
         isError: true,
       };
@@ -596,7 +601,7 @@ server.tool(
 
 server.tool(
   "set_current_step",
-  "Write the one-line 'what to do right now' shown in the overlay, so the driver-mode next step is visible where the user is already looking instead of only in this chat. Pass text: null to clear it. Setting a new step replaces the old one — there is only ever one. This is a DISPLAY only: it gates nothing and freezes no run (use lock_crawl_on_todo when you actually want a gate). Keep it to one short imperative line; the overlay truncates rather than wraps. YOU are responsible for retiring it: the user cannot dismiss it, so call complete_current_step when the thing is done. It also ages on its own — dimmed after 45 minutes, hidden after 4 hours — but don't rely on that; a finished step still on screen is the main way this becomes noise.",
+  "Write the one-line 'what to do right now' shown in the overlay, so the driver-mode next step is visible where the user is already looking instead of only in this chat. Pass text: null to clear it. Setting a new step replaces the old one — there is only ever one. This is a DISPLAY only: it changes nothing in the game (use ward_crawl_on_todo when you want the run to actually respond). Keep it to one short imperative line; the overlay truncates rather than wraps. YOU are responsible for retiring it: the user cannot dismiss it, so call complete_current_step when the thing is done. It also ages on its own — dimmed after 45 minutes, hidden after 4 hours — but don't rely on that; a finished step still on screen is the main way this becomes noise.",
   {
     text: z
       .string()

@@ -119,8 +119,14 @@ low commitment; once that's understood, the calls don't need extra hedging.
 **Mirror the current `action(...)` into the overlay with `set_current_step`,** so
 the next step is visible where the user is already working instead of only here in
 the chat. One short imperative line, the same one you just issued. It is a display
-only — it gates nothing and nothing checks up on it, so it is not a commitment
-device; `lock_crawl_on_todo` is still the only hard gate.
+only — it changes nothing in the game, so it is not a commitment device.
+
+**To make the run itself respond, pin the todo with `ward_crawl_on_todo`.** That
+wards the current enemy: it absorbs damage and re-shields every turn until the
+todo is done, so the fight is expensive while the work is outstanding and the
+user's next card lands in full the moment it lands. Nothing is ever frozen — they
+can always play. Use it freely for a sub-task you just suggested; an unfinished
+ward costs them damage, not their run, and it retires when they leave the room.
 
 **Retiring it is your job — the user cannot dismiss it.** That is deliberate: a
 step they can swat away says nothing about whether the work happened. So call

@@ -14,7 +14,7 @@ import {
   normalizeDay as normalizeCrawlDay,
   playCard as playCrawlCard,
   restartRun as restartCrawlRun,
-  setLock as setCrawlLock,
+  setWard as setCrawlWard,
   type CardId as CrawlCardId,
   type CrawlContext,
   type CrawlEvent,
@@ -1591,7 +1591,7 @@ export interface CrawlSnapshot {
   /** Null when the player can act, otherwise why they cannot. */
   blocked: string | null;
   /** The pinned todo, resolved for display. Null when nothing is pinned. */
-  lock: { todoId: string; title: string; done: boolean } | null;
+  ward: { todoId: string; title: string; done: boolean } | null;
   /** Events produced by the action that served this snapshot. */
   events: CrawlEvent[];
 }
@@ -1643,15 +1643,15 @@ function todayKey(): string {
 }
 
 /** The pinned todo, or null. Reads the live row so "done" is never stale. */
-function resolveCrawlLock(state: CrawlState): CrawlSnapshot["lock"] {
-  if (!state.lockTodoId) return null;
-  const row = db.prepare("SELECT id, title, status FROM todos WHERE id = ?").get(state.lockTodoId) as
+function resolveCrawlWard(state: CrawlState): CrawlSnapshot["ward"] {
+  if (!state.wardTodoId) return null;
+  const row = db.prepare("SELECT id, title, status FROM todos WHERE id = ?").get(state.wardTodoId) as
     | { id: string; title: string; status: string }
     | undefined;
   if (!row) {
-    // The todo was deleted — treat the lock as satisfied rather than bricking
-    // the run. A lock the player can never clear would be a dead end.
-    return { todoId: state.lockTodoId, title: state.lockTodoTitle ?? "(deleted todo)", done: true };
+    // The todo was deleted — treat the ward as satisfied rather than leaving a
+    // shield the player has no way to bring down.
+    return { todoId: state.wardTodoId, title: state.wardTodoTitle ?? "(deleted todo)", done: true };
   }
   return { todoId: row.id, title: row.title, done: row.status === "done" };
 }
@@ -1670,13 +1670,13 @@ function hasCrawlMomentum(nowMs: number): boolean {
 
 function crawlContext(state: CrawlState): CrawlContext {
   const nowMs = Date.now();
-  const lock = resolveCrawlLock(state);
+  const ward = resolveCrawlWard(state);
   return {
     goldEarnedToday: getGoldEarnedToday(),
     microTenthsToday: getMicroState().tenths,
     today: todayKey(),
     momentum: hasCrawlMomentum(nowMs),
-    unlocked: lock === null || lock.done,
+    wardCleared: ward === null || ward.done,
     nowMs,
   };
 }
@@ -1697,7 +1697,7 @@ function toCrawlSnapshot(state: CrawlState, events: CrawlEvent[]): CrawlSnapshot
     microTenthsToday: ctx.microTenthsToday,
     momentum: ctx.momentum,
     blocked: crawlBlockedReason(state, ctx),
-    lock: resolveCrawlLock(state),
+    ward: resolveCrawlWard(state),
     events,
   };
 }
@@ -1768,10 +1768,11 @@ export function restartCrawlAction(): CrawlSnapshot {
 
 /**
  * Pin a todo to the run (or clear the pin with null). This is the agent's hook:
- * it creates a sub-todo, pins it, and the run stays frozen until that todo is
- * done. Throws when the todo does not exist, so a typo cannot brick the run.
+ * it creates a sub-todo, pins it, and the current enemy is warded until that todo
+ * is done — the fight gets expensive, never impossible. Throws when the todo does
+ * not exist, so a typo cannot leave a shield nothing can bring down.
  */
-export function setCrawlLockAction(todoId: string | null): CrawlSnapshot {
+export function setCrawlWardAction(todoId: string | null): CrawlSnapshot {
   let title: string | null = null;
   if (todoId) {
     const row = db.prepare("SELECT title FROM todos WHERE id = ?").get(todoId) as
@@ -1780,5 +1781,5 @@ export function setCrawlLockAction(todoId: string | null): CrawlSnapshot {
     if (!row) throw new Error("todo not found");
     title = row.title;
   }
-  return runCrawlAction((state) => ({ state: setCrawlLock(state, todoId, title), events: [] }));
+  return runCrawlAction((state) => ({ state: setCrawlWard(state, todoId, title), events: [] }));
 }
