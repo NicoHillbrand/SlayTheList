@@ -89,6 +89,7 @@ import {
   awardMicroTenths,
   getCurrentStep,
   setCurrentStep,
+  completeCurrentStep,
   SHOW_CURRENT_STEP_SETTING,
 } from "./store.js";
 import { referenceImagesDir } from "./db.js";
@@ -171,8 +172,18 @@ function buildOverlayState(): OverlayState & {
     // Rides the overlay-state broadcast rather than getting its own poll: this
     // payload already goes out on every mutation and on socket connect, so the
     // step lands in the overlay without the client ever asking for it.
-    currentStep: getSetting(SHOW_CURRENT_STEP_SETTING) === "false" ? null : getCurrentStep(),
+    //
+    // A completed step is withheld here rather than in the UI: "it disappears
+    // when the agent marks it done" is a rule about the overlay, not a rendering
+    // detail, so the surface never receives one it should not show.
+    currentStep: currentStepForOverlay(),
   };
+}
+
+function currentStepForOverlay(): CurrentStep | null {
+  if (getSetting(SHOW_CURRENT_STEP_SETTING) === "false") return null;
+  const step = getCurrentStep();
+  return step === null || step.doneAt !== null ? null : step;
 }
 
 function ok(res: express.Response, payload: unknown) {
@@ -1850,6 +1861,14 @@ app.post("/api/overlay/refresh", (_req, res) => {
 
 app.get("/api/current-step", (_req, res) => {
   ok(res, { step: getCurrentStep() });
+});
+
+// Mark it done. The only way a step leaves the overlay early — there is no user
+// dismissal, by design.
+app.post("/api/current-step/complete", (_req, res) => {
+  const step = completeCurrentStep();
+  ok(res, { step });
+  broadcastOverlayState();
 });
 
 // `text: null` (or an empty string) clears it. Broadcasts so the overlay updates

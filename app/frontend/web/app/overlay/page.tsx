@@ -196,36 +196,23 @@ function FriendsPanel() {
   );
 }
 
-/** Remembers which step the user waved off, by the exact moment it was set. */
-const STEP_DISMISSED_KEY = "slaythelist.currentStep.dismissedAt";
-
 /**
  * The agent's "do this now" line.
  *
- * Built to lose an attention contest with the run below it, on purpose: the
- * overlay works by keeping Nico in the work, so a second thing shouting is worse
- * than no second thing. Hence one line, truncated not wrapped, muted, no border,
- * no background, and nothing that moves. It is context, not the game.
+ * There is deliberately no dismiss control. A step the user can swat away says
+ * nothing about whether the work happened, so retiring it belongs to the agent
+ * that set it: `complete_current_step` (or the next step replacing it) is what
+ * takes it off screen. The server withholds a completed step from this surface
+ * entirely, so anything that arrives here is still outstanding.
  *
- * Ageing is the other half of that: an instruction from three hours ago is worse
- * than none, so it dims, then stops rendering. Dismissal is keyed to `setAt`, so
- * waving one off does not suppress the next one.
+ * Ageing is the backstop for an agent that forgets: an instruction from three
+ * hours ago is worse than none, so it dims and then stops rendering.
  */
 function CurrentStepLine({ step }: { step: CurrentStep }) {
-  const [dismissedAt, setDismissedAt] = useState<string | null>(null);
-  useEffect(() => {
-    try {
-      setDismissedAt(window.localStorage.getItem(STEP_DISMISSED_KEY));
-    } catch {
-      // Private mode / storage disabled: dismissal just does not persist.
-    }
-  }, []);
-
   // Recomputed on render, which the overlay-state push already triggers — no
   // timer here, nothing in the overlay is allowed to tick on its own.
   const age = currentStepAge(step.setAt, Date.now());
   if (age === "expired") return null;
-  if (dismissedAt === step.setAt) return null;
 
   const dim = age === "stale";
   return (
@@ -236,14 +223,20 @@ function CurrentStepLine({ step }: { step: CurrentStep }) {
         gap: 8,
         marginBottom: 8,
         minWidth: 0,
-        padding: "7px 8px 7px 9px",
+        padding: "7px 9px 7px 10px",
         borderRadius: 7,
         // A card, not a footnote: this is the instruction the panel exists to
-        // carry. It earns a surface and a gold edge — but a FLAT surface with no
-        // shadow and nothing that moves, so it reads as important without
-        // competing with the fight below it for motion or contrast.
-        background: dim ? "rgba(30,30,56,0.5)" : "#1e1e38",
+        // carry, so it earns a surface and a gold edge. Top-lit and ringed like
+        // the enemy plate and the cards below, so it belongs to the same object
+        // family — but with no lift and nothing that moves, since it is the one
+        // element on screen that is never clicked.
+        background: dim
+          ? "#1a1a2e"
+          : "linear-gradient(180deg, #26264a 0%, #1c1c36 100%)",
         borderLeft: `2px solid ${dim ? "#4a4a68" : "#d4aa47"}`,
+        boxShadow: dim
+          ? "inset 0 0 0 1px rgba(44,44,72,0.5)"
+          : "inset 0 1px 0 rgba(255,255,255,0.07), inset 0 0 0 1px rgba(44,44,72,0.7)",
         fontSize: 11,
         lineHeight: 1.4,
         color: dim ? "#6a6a88" : "#8a89a6",
@@ -293,30 +286,6 @@ function CurrentStepLine({ step }: { step: CurrentStep }) {
           </div>
         )}
       </div>
-      <button
-        type="button"
-        title="Hide this step"
-        onClick={() => {
-          try {
-            window.localStorage.setItem(STEP_DISMISSED_KEY, step.setAt);
-          } catch {
-            // Non-persistent dismissal is still worth honouring for this render.
-          }
-          setDismissedAt(step.setAt);
-        }}
-        style={{
-          font: "inherit",
-          fontSize: 13,
-          lineHeight: 1,
-          padding: "1px 2px",
-          border: "none",
-          background: "none",
-          color: "#5a5a78",
-          cursor: "pointer",
-        }}
-      >
-        ×
-      </button>
     </div>
   );
 }

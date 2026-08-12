@@ -81,67 +81,112 @@
   flex: 1;
 }
 
-/* ---------- Bars ---------- */
+/* ---------- Bars ----------
+   One geometry for both bars, with hue carrying WHOSE bar it is: red is the
+   thing hitting you, green is you. They used to be magenta and red-orange, two
+   unrelated ramps that made you read the label to tell them apart at 340px.
+   The track is a recess (inset shadow, no border) and the fill has a top
+   highlight — enough shading to read as a game gauge, not enough to look wet. */
 
 .bar {
   position: relative;
-  height: 7px;
-  border-radius: 4px;
-  background: #0d0d18;
-  border: 1px solid var(--line);
+  height: 8px;
+  border-radius: 5px;
+  background: #0c0c17;
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.7),
+    inset 0 0 0 1px rgba(44, 44, 72, 0.55);
   overflow: hidden;
 }
 
 .barFill {
   height: 100%;
+  border-radius: 5px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25);
   transition: width 220ms ease;
 }
 
 .hpFill {
-  background: linear-gradient(90deg, #d05555, #e88b6a);
+  background: linear-gradient(180deg, #a8e8b6 0%, var(--good) 55%, #4f9a62 100%);
 }
 
 .enemyFill {
-  background: linear-gradient(90deg, #8a4f9e, #c471d6);
+  background: linear-gradient(180deg, #f08a8a 0%, var(--bad) 55%, #b64a4a 100%);
 }
 
 .blockPip {
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  color: #8fc7f0;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #14243a;
+  color: #9ec8f0;
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ---------- Enemy ---------- */
 
+/* The enemy gets a lit plate rather than a flat box — it is the thing you are
+   looking at, and at this size a border alone made it read as another list row.
+   The light comes from the top-left corner only, consistently with the cards. */
 .enemy {
-  padding: 8px;
-  border: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px;
+  border: 0;
   border-radius: 8px;
-  background: linear-gradient(180deg, var(--panel2), var(--panel));
+  background: radial-gradient(125% 145% at 12% 0%, #2a2144 0%, #1a1a30 62%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    inset 0 0 0 1px rgba(44, 44, 72, 0.7);
   margin-bottom: 8px;
 }
 
+/* The right-hand column of the plate: name and HP on one line, then the gauge,
+   then the tell. Keeps the portrait tile beside the whole group instead of
+   stranded above a full-width bar. */
+.enemyMain {
+  flex: 1;
+  min-width: 0;
+}
+
 .enemyBoss {
-  border-color: var(--gold-dim);
-  box-shadow: 0 0 0 1px rgba(245, 197, 66, 0.15) inset;
+  background: radial-gradient(125% 145% at 12% 0%, #3a2c46 0%, #1d182e 62%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 0 0 1px rgba(184, 148, 47, 0.55),
+    0 0 12px rgba(245, 197, 66, 0.07);
 }
 
 .enemyTop {
   display: flex;
-  align-items: center;
-  gap: 6px;
+  align-items: baseline;
+  gap: 8px;
   margin-bottom: 5px;
 }
 
+/* A recessed tile, so the glyph reads as art in a frame rather than a loose
+   emoji sitting on the panel. */
 .enemyGlyph {
-  font-size: 22px;
+  flex: 0 0 38px;
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  font-size: 20px;
   line-height: 1;
+  border-radius: 7px;
+  background: #0f0f1e;
+  box-shadow: inset 0 0 0 1px #32325a;
 }
 
 .enemyName {
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -149,6 +194,16 @@
 
 .enemyHp {
   color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Your own HP takes the bar's colour, so the pair reads as one gauge. */
+.playerHpText {
+  color: var(--good);
+  font-weight: 600;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -185,35 +240,55 @@
   margin-bottom: 8px;
 }
 
+/* Card faces. A real face rather than an outlined box: a soft top-lit gradient,
+   a hairline highlight along the top edge, and the cost as a corner pip so the
+   name gets the middle of the card to itself. */
 .card {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 2px;
-  padding: 6px 3px;
-  border: 1px solid var(--line);
+  justify-content: center;
+  gap: 4px;
+  padding: 9px 4px 8px;
+  border: 0;
   border-radius: 7px;
-  background: linear-gradient(180deg, var(--panel2), #14142a);
+  background: linear-gradient(180deg, #262646 0%, #1a1a32 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 1px 2px rgba(0, 0, 0, 0.45);
   color: var(--ink);
   font: inherit;
   cursor: pointer;
   text-align: center;
   min-height: 74px;
-  transition: transform 120ms ease, border-color 120ms ease;
+  transition: transform 120ms ease, box-shadow 120ms ease;
 }
 
 .card:hover:not(:disabled) {
   transform: translateY(-2px);
-  border-color: var(--gold-dim);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 0 0 1px var(--gold-dim),
+    0 4px 10px rgba(0, 0, 0, 0.5);
 }
 
+.card:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 1px;
+}
+
+/* Unaffordable, not broken: keep the face readable and drop the lift, so the
+   reason (the cost pip) is still legible while the card is clearly out of reach. */
 .card:disabled {
   cursor: not-allowed;
-  opacity: 0.4;
+  opacity: 0.45;
+  box-shadow: inset 0 0 0 1px rgba(44, 44, 72, 0.8);
+  background: #16162a;
 }
 
 .cardGlyph {
-  font-size: 17px;
+  font-size: 18px;
   line-height: 1;
 }
 
@@ -224,9 +299,13 @@
 }
 
 .cardCost {
-  font-size: 10px;
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  font-size: 9px;
   font-weight: 700;
   color: var(--energy);
+  font-variant-numeric: tabular-nums;
 }
 
 .cardCostFree {
@@ -234,9 +313,19 @@
 }
 
 .cardEmpty {
-  border-style: dashed;
-  opacity: 0.3;
+  background: none;
+  box-shadow: inset 0 0 0 1px rgba(44, 44, 72, 0.5);
   cursor: default;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card,
+  .barFill {
+    transition: none;
+  }
+  .card:hover:not(:disabled) {
+    transform: none;
+  }
 }
 
 /* ---------- Buttons ---------- */
@@ -264,14 +353,30 @@
   color: var(--gold);
 }
 
+.btn:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 1px;
+}
+
 .btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
 
+/* The commit action is solid gold, not an outline. There is exactly one of these
+   on screen at a time, which is what lets it be the loudest thing in the panel
+   without the panel getting loud. */
 .btnPrimary {
-  border-color: var(--gold-dim);
-  color: var(--gold);
+  border: 0;
+  background: linear-gradient(180deg, #e0b752 0%, var(--gold-dim) 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  color: #241c02;
+  font-weight: 700;
+}
+
+.btnPrimary:hover:not(:disabled) {
+  background: linear-gradient(180deg, #ecc45e 0%, #c39c33 100%);
+  color: #241c02;
 }
 
 /* ---------- Banners ---------- */

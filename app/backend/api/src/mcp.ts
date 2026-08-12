@@ -26,6 +26,7 @@ import {
   setCrawlLockAction,
   getCurrentStep,
   setCurrentStep,
+  completeCurrentStep,
 } from "./store.js";
 
 const server = new McpServer({ name: "slaythelist", version: "0.1.0" });
@@ -595,7 +596,7 @@ server.tool(
 
 server.tool(
   "set_current_step",
-  "Write the one-line 'what to do right now' shown in the overlay, so the driver-mode next step is visible where the user is already looking instead of only in this chat. Pass text: null to clear it. Setting a new step replaces the old one — there is only ever one. This is a DISPLAY only: it gates nothing, freezes no run, and nothing checks whether it was done (use lock_crawl_on_todo when you actually want a gate). Keep it to one short imperative line; the overlay truncates rather than wraps. It ages on purpose — dimmed after 45 minutes, hidden after 4 hours — so clear or refresh it rather than leaving a stale instruction sitting there.",
+  "Write the one-line 'what to do right now' shown in the overlay, so the driver-mode next step is visible where the user is already looking instead of only in this chat. Pass text: null to clear it. Setting a new step replaces the old one — there is only ever one. This is a DISPLAY only: it gates nothing and freezes no run (use lock_crawl_on_todo when you actually want a gate). Keep it to one short imperative line; the overlay truncates rather than wraps. YOU are responsible for retiring it: the user cannot dismiss it, so call complete_current_step when the thing is done. It also ages on its own — dimmed after 45 minutes, hidden after 4 hours — but don't rely on that; a finished step still on screen is the main way this becomes noise.",
   {
     text: z
       .string()
@@ -627,8 +628,26 @@ server.tool(
 );
 
 server.tool(
+  "complete_current_step",
+  "Mark the current step done, which removes it from the overlay. This is the ONLY way a step goes away early: the user cannot dismiss it, because a step they can swat away says nothing about whether the work happened. So retiring it is your job — call this the moment the thing is actually done, or set_current_step with the next one (which replaces it), or text: null if the direction changed and there is no next step. Leaving a finished step on screen is the main way this feature becomes noise.",
+  {},
+  async () => {
+    const step = completeCurrentStep();
+    await pokeOverlay();
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify(step === null ? { step: null } : step, null, 2),
+        },
+      ],
+    };
+  },
+);
+
+server.tool(
   "get_current_step",
-  "Read the current step line, or null when none is set. Returns `age`: \"fresh\", \"stale\" (over 45 min, shown dimmed) or \"expired\" (over 4 hours, not rendered at all — the value is still stored, so this is your cue to refresh or clear it).",
+  "Read the current step line, or null when none is set. Returns `age`: \"fresh\", \"stale\" (over 45 min, shown dimmed) or \"expired\" (over 4 hours, not rendered at all — the value is still stored, so this is your cue to refresh or clear it). A step with a non-null `doneAt` was completed and is no longer displayed.",
   {},
   async () => {
     const step = getCurrentStep();

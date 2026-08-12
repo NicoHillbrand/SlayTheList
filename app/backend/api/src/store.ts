@@ -1359,6 +1359,26 @@ export function setCurrentStep(
   return step;
 }
 
+/**
+ * Mark the step done. This is the ONLY way it leaves the overlay early — the
+ * user cannot swat it away, because a step that can be dismissed says nothing
+ * about whether the work happened, and the agent that set it is the thing that
+ * knows. Completing it stops it rendering while keeping the row, so `doneAt` is
+ * there for the payout work to hang off later.
+ *
+ * Idempotent: completing an already-done step keeps the first timestamp.
+ */
+export function completeCurrentStep(): CurrentStep | null {
+  const step = getCurrentStep();
+  if (step === null || step.doneAt !== null) return step;
+  const done: CurrentStep = { ...step, doneAt: new Date().toISOString() };
+  db.prepare("UPDATE current_step SET step_json = ?, updated_at = ? WHERE id = 1").run(
+    JSON.stringify(done),
+    done.doneAt,
+  );
+  return done;
+}
+
 // ---------------------------------------------------------------------------
 // Premium currencies (diamonds/emeralds) — awarded by arena combat runs.
 // Balances live on the legacy base_state row; the isometric base builder that

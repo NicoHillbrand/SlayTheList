@@ -248,29 +248,31 @@ export function CrawlView({ compact = false }: { compact?: boolean }) {
       {state.status === "fighting" && state.enemy && (
         <>
           <div className={`${styles.enemy} ${state.enemy.boss ? styles.enemyBoss : ""}`}>
-            <div className={styles.enemyTop}>
-              <span className={styles.enemyGlyph}>{state.enemy.glyph}</span>
-              <span className={styles.enemyName}>{state.enemy.name}</span>
-              <span className={styles.spacer} />
-              <span className={styles.enemyHp}>
-                {state.enemy.hp}/{state.enemy.maxHp}
-              </span>
-            </div>
-            <div className={styles.bar}>
-              <div
-                className={`${styles.barFill} ${styles.enemyFill}`}
-                style={{ width: `${pct(state.enemy.hp, state.enemy.maxHp)}%` }}
-              />
-            </div>
-            <div className={state.enemy.turnsUntilHeavy <= 1 ? `${styles.intent} ${styles.intentHeavy}` : styles.intent}>
-              {state.enemy.turnsUntilHeavy <= 1
-                ? `⚠ Winding up: ${Math.max(1, state.enemy.attack - state.enemy.weakened) * 2} damage next turn`
-                : `Attacks for ${Math.max(1, state.enemy.attack - state.enemy.weakened)} · heavy in ${state.enemy.turnsUntilHeavy - 1}`}
+            <span className={styles.enemyGlyph}>{state.enemy.glyph}</span>
+            <div className={styles.enemyMain}>
+              <div className={styles.enemyTop}>
+                <span className={styles.enemyName}>{state.enemy.name}</span>
+                <span className={styles.spacer} />
+                <span className={styles.enemyHp}>
+                  {state.enemy.hp}/{state.enemy.maxHp}
+                </span>
+              </div>
+              <div className={styles.bar}>
+                <div
+                  className={`${styles.barFill} ${styles.enemyFill}`}
+                  style={{ width: `${pct(state.enemy.hp, state.enemy.maxHp)}%` }}
+                />
+              </div>
+              <div className={state.enemy.turnsUntilHeavy <= 1 ? `${styles.intent} ${styles.intentHeavy}` : styles.intent}>
+                {state.enemy.turnsUntilHeavy <= 1
+                  ? `⚠ Winding up: ${Math.max(1, state.enemy.attack - state.enemy.weakened) * 2} damage next turn`
+                  : `Attacks for ${Math.max(1, state.enemy.attack - state.enemy.weakened)} · heavy in ${state.enemy.turnsUntilHeavy - 1}`}
+              </div>
             </div>
           </div>
 
           <div className={styles.player}>
-            <span className={styles.enemyHp}>
+            <span className={styles.playerHpText}>
               ❤ {state.hp}/{state.maxHp}
             </span>
             <div className={`${styles.bar} ${styles.playerHp}`}>
@@ -328,7 +330,7 @@ export function CrawlView({ compact = false }: { compact?: boolean }) {
               </button>
             )}
             <button
-              className={styles.btn}
+              className={`${styles.btn} ${styles.btnPrimary}`}
               disabled={busy || locked || !state.playedThisTurn}
               onClick={() => void act(endTurn)}
               title={
