@@ -312,6 +312,16 @@ tool. The point is fast, visible feedback on momentum.
   when in doubt, award. Don't silently under-award, if you notice you've been
   withholding, credit the missed messages retroactively.
 
+  **Sub-steps with an actual output are worth 0.5, not 0.1** (decided
+  2026-08-14). The test is whether the step left an artifact outside the chat:
+  a sent message, a saved or edited file, a dialed number, a filled-in row, a
+  screenshot of something made elsewhere. If yes, `award_micro` with
+  `tenths: 5`. A chat message that clarifies, brainstorms, or answers a sensor
+  query is not an output and stays at 0.1. Accepted side effect: 5 tenths also
+  buy an extra draw, so real outputs do widen the hand. That's intended, the
+  currency split exists to stop chatter from powering the run, and an actual
+  output isn't chatter.
+
   **Use `award_micro` for this, one call per batch, `tenths` = the number of
   0.1 increments** (three messages → `tenths: 3`). The server owns the counter,
   so there is no tally to keep in the chat and nothing to flush at a whole
