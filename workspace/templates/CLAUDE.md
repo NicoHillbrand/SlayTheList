@@ -296,6 +296,13 @@ tool. The point is fast, visible feedback on momentum.
 - **Side tasks:** when the user reports an untracked task that has no UI
   completion path, award gold directly via `award_gold`, scaled to difficulty
   (small ~2, larger ~5).
+- **What an amount is worth:** the axis is self-management vs productive output,
+  more than planned vs unplanned. **5** is for productive output, something
+  planned beforehand and then finished (an email written to someone, or a
+  comparable completion). **1 or 2** is for things that come up naturally in the
+  moment and are self-management rather than output, like eating, even when
+  they're important. **Micro** is for actions that move closer to something
+  rather than complete it.
 - **Session gold footer:** at the bottom of non-trivial messages, show a single
   running total, italicized, e.g. `*session gold: 6.3*`: the gold earned so far
   *in the current chat*, starting from 0 at the top of each new chat, plus the
