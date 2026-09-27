@@ -6,15 +6,18 @@ import {
   blockedReason as crawlBlockedReason,
   chooseReward as chooseCrawlReward,
   createCrawlState,
+  HAND_SIZE,
+  descend as descendCrawl,
   drawCreditsAvailable as crawlDrawCreditsAvailable,
-  drawExtraCard as drawCrawlExtraCard,
   emptyCrawlMeta,
-  endTurn as endCrawlTurn,
   energyAvailable as crawlEnergyAvailable,
+  msUntilNextSwing as crawlMsUntilNextSwing,
   normalizeDay as normalizeCrawlDay,
   playCard as playCrawlCard,
+  refillFromCredits as refillCrawlFromCredits,
   restartRun as restartCrawlRun,
   setWard as setCrawlWard,
+  tickClock as tickCrawlClock,
   type CardId as CrawlCardId,
   type CrawlContext,
   type CrawlEvent,
@@ -31,7 +34,7 @@ import {
   type DefenseParams,
   type DefenseState,
 } from "@slaythelist/defense-engine";
-import { db, referenceImagesDir } from "./db.js";
+import { db, dataDir, referenceImagesDir } from "./db.js";
 import { currentStepSchema } from "@slaythelist/contracts";
 import type {
   AccountabilityState,
@@ -1302,6 +1305,34 @@ export function setSetting(key: string, value: string): void {
   db.prepare("INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, value);
 }
 
+/**
+ * Settings key for the browser tab the launchers open once the web server is
+ * up. Absent/anything-but-"false" = open it, so an install that never touches
+ * the setting keeps the old behaviour.
+ */
+export const OPEN_BROWSER_ON_STARTUP_SETTING = "openBrowserOnStartup";
+
+/** Where the launchers look for the mirrored settings. */
+export const launcherPrefsPath = path.join(dataDir, "launcher-prefs.json");
+
+/**
+ * The launchers (start.bat, launcher.ps1, start.sh, the WinForms launcher) run
+ * before the API is up, so they cannot ask it anything. Mirror the handful of
+ * settings they need into a plain JSON file next to the database, which a shell
+ * script can read without speaking SQLite.
+ */
+export function writeLauncherPrefs(): void {
+  const prefs = {
+    openBrowserOnStartup: getSetting(OPEN_BROWSER_ON_STARTUP_SETTING) !== "false",
+  };
+  try {
+    fs.writeFileSync(launcherPrefsPath, JSON.stringify(prefs, null, 2) + "\n");
+  } catch {
+    // A read-only data dir is not worth taking the server down for — the
+    // launchers just fall back to their default.
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Current step — the one line an agent writes for the overlay. See
 // `currentStepSchema` in contracts for what it is and, more importantly, what
@@ -1592,6 +1623,8 @@ export interface CrawlSnapshot {
   blocked: string | null;
   /** The pinned todo, resolved for display. Null when nothing is pinned. */
   ward: { todoId: string; title: string; done: boolean } | null;
+  /** Ms until the enemy's next swing. Null when nothing is on the clock. */
+  msUntilSwing: number | null;
   /** Events produced by the action that served this snapshot. */
   events: CrawlEvent[];
 }
@@ -1615,13 +1648,32 @@ function loadCrawlRow(): CrawlState {
         todayKey(),
         parsed.meta ?? emptyCrawlMeta(),
       );
-      return { ...defaults, ...parsed };
+      return trimCrawlHand({ ...defaults, ...parsed });
     }
     // Unknown engine version — start over but keep whatever meta survived.
     const meta = parsed.meta && typeof parsed.meta.bestFloor === "number" ? parsed.meta : emptyCrawlMeta();
     return createCrawlState(freshCrawlSeed(), Date.now(), todayKey(), meta);
   }
   return createCrawlState(freshCrawlSeed(), Date.now(), todayKey(), emptyCrawlMeta());
+}
+
+/**
+ * Fold a hand that is wider than the current HAND_SIZE back into the discard.
+ *
+ * The hand used to hold four, and five with a micro-gold overflow draw. It holds
+ * three now, and the panel renders exactly HAND_SIZE slots — so without this a
+ * run saved under the old caps would keep cards the player can see no way to
+ * play, and the indices the UI sends would quietly point at the wrong ones.
+ * Extras go to the discard rather than being deleted: they are still in the
+ * deck, and they come back on the next reshuffle.
+ */
+function trimCrawlHand(state: CrawlState): CrawlState {
+  if (state.hand.length <= HAND_SIZE) return state;
+  return {
+    ...state,
+    hand: state.hand.slice(0, HAND_SIZE),
+    discard: [...state.discard, ...state.hand.slice(HAND_SIZE)],
+  };
 }
 
 function saveCrawlRow(state: CrawlState): void {
@@ -1698,6 +1750,7 @@ function toCrawlSnapshot(state: CrawlState, events: CrawlEvent[]): CrawlSnapshot
     momentum: ctx.momentum,
     blocked: crawlBlockedReason(state, ctx),
     ward: resolveCrawlWard(state),
+    msUntilSwing: crawlMsUntilNextSwing(state, ctx),
     events,
   };
 }
@@ -1715,7 +1768,23 @@ function runCrawlAction(
   // Apply the midnight reset even when the action itself is a no-op, so an idle
   // read still rolls the energy pool over to today.
   const normalized = normalizeCrawlDay(loaded, ctx.today);
-  const { state, events } = mutate(normalized, ctx);
+
+  // The enemy is on a wall clock now, and nothing in this process ticks — so
+  // the swings it owes are settled lazily, here, before anything the player
+  // asked for. A plain read counts: `getCrawlSnapshot` is how an idle panel
+  // discovers it has been hit, and putting the tick on the read path is what
+  // lets the whole feature exist without a timer anywhere in the stack.
+  const ticked = tickCrawlClock(normalized, ctx);
+  const acted = mutate(ticked.state, ctx);
+
+  // Then spend any micro-gold credits on the empty slots the action left. This
+  // is what replaced the Draw button: the credit's only value was ever getting
+  // a card back sooner than the clock would, so making the player click for it
+  // was asking them to do the game's arithmetic.
+  const refilled = refillCrawlFromCredits(acted.state, ctx);
+
+  const state = refilled.state;
+  const events = [...ticked.events, ...acted.events, ...refilled.events];
 
   for (const event of events) {
     if (event.type === "runWon") {
@@ -1747,13 +1816,9 @@ export function playCrawlCardAction(handIndex: number): CrawlSnapshot {
   return runCrawlAction((state, ctx) => playCrawlCard(state, handIndex, ctx));
 }
 
-export function endCrawlTurnAction(): CrawlSnapshot {
-  return runCrawlAction((state, ctx) => endCrawlTurn(state, ctx));
-}
-
-/** Spend one micro-gold draw credit for an extra card. */
-export function drawCrawlCardAction(): CrawlSnapshot {
-  return runCrawlAction((state, ctx) => drawCrawlExtraCard(state, ctx));
+/** Walk down from the floor-cleared screen into the next floor's first room. */
+export function descendCrawlAction(): CrawlSnapshot {
+  return runCrawlAction((state, ctx) => descendCrawl(state, ctx));
 }
 
 export function chooseCrawlRewardAction(cardId: CrawlCardId | null): CrawlSnapshot {

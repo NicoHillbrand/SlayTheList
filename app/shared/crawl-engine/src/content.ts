@@ -15,45 +15,64 @@ export const ROOMS_PER_FLOOR = 2;
 
 export const START_HP = 40;
 /**
- * Cards a TURN refills to. Small: the panel is ~340px wide.
- *
- * This is not the maximum a hand may contain — micro-gold draws go past it, up
- * to HAND_LIMIT.
+ * Cards in a hand, and the number of slots the panel draws. Three, not five:
+ * the row is the widest thing in a 272px panel, and every slot removed makes the
+ * cards themselves bigger and the decision smaller. There is no second, higher
+ * cap any more — a hand is three, full stop, so a slot is either a card or an
+ * opening for one.
  */
-export const HAND_SIZE = 4;
-/**
- * The hard ceiling, micro draws included. Draws are refused at this point rather
- * than growing the hand further.
- *
- * Five because that is what still fits on ONE ROW at 340px. A hand that wraps to
- * a second row makes the panel taller every time you draw, and this thing sits on
- * top of real work — height is the most expensive thing it can spend. So the
- * "extend your turn" effect is one extra card, not an unbounded pile.
- */
-export const HAND_LIMIT = 5;
-/**
- * Cards drawn after the enemy's swing. This refills the hand rather than
- * topping it up by one, and that has to stay true: drawing one per turn caps
- * sustained output at about one card per enemy swing, so a long fight becomes
- * unwinnable arithmetic no matter how much energy is banked. Refilling makes
- * ENERGY the only thing limiting damage per turn, which is the whole point —
- * how hard you hit should track how much real work you did.
- *
- * Cards you did not play still persist; this only tops the hand back up.
- */
-export const DRAW_PER_TURN = HAND_SIZE;
+export const HAND_SIZE = 3;
 
 /**
- * Micro-action tenths that buy one extra card draw.
+ * Micro-action tenths that buy one refill of an empty hand slot.
  *
  * Three micro-actions per card. The ratio has to sit below the ten tenths that
  * make a whole gold, or micro-gold would be strictly worse than waiting for the
  * rollover: at 3 a day's micro trickle hands out options several times before it
  * has produced a single point of energy, which is the faster loop this exists
  * for. Raise it and micro stops registering between todos; lower it and the hand
- * fills up faster than energy can ever empty it.
+ * refills faster than energy can ever empty it.
  */
 export const MICRO_TENTHS_PER_DRAW = 3;
+
+// ---------------------------------------------------------------------------
+// The clock — what replaced turns.
+// ---------------------------------------------------------------------------
+
+/**
+ * Wall-clock time between enemy swings.
+ *
+ * There is no "end turn" any more. The enemy is on a timer, and the player acts
+ * whenever they like in between — which is the honest shape for a panel that is
+ * glanced at for seconds: a turn you had to close out was a chore the game asked
+ * for, and the only thing it was really measuring was elapsed attention.
+ */
+export const ENEMY_SWING_INTERVAL_MS = 30 * 60 * 1000;
+
+/**
+ * The most full-strength swings that can be owed after an absence.
+ *
+ * Uncapped real time would mean an afternoon out equals a dead run, every time,
+ * with no play involved — the run would be decided by your calendar. Two swings
+ * is the soft cap: come back from a long meeting and you have taken a real bite
+ * of damage, not a death sentence.
+ */
+export const MAX_PENDING_SWINGS = 2;
+
+/**
+ * Damage per interval once the swing budget is spent — the slow bleed of a run
+ * left alone.
+ *
+ * The cap alone would make an abandoned run perfectly safe, and a fight you can
+ * walk away from forever is not a fight. So attention still decays, just an
+ * order of magnitude slower than the enemy hits. The numbers are chosen against
+ * the 40 HP pool: the worst case, the boss at 11 attack, is 2x11 + 10 bleed = 32
+ * over six hours — a bad afternoon survives on every floor, and a full night
+ * does not.
+ *
+ * Bleed ignores block. Block answers a swing; nothing answers neglect.
+ */
+export const BLEED_DAMAGE = 1;
 
 /** Bonus damage on every attack while a todo was completed recently. */
 export const MOMENTUM_DAMAGE = 3;
@@ -62,20 +81,16 @@ export const MOMENTUM_WINDOW_MS = 60 * 60 * 1000;
 
 /**
  * Shield the enemy carries while a pinned todo is unfinished, refilled on every
- * enemy turn.
+ * enemy swing.
  *
  * Tuned to blunt, not to block. A Strike is 6, so a ward of 5 leaves 1 through —
- * the hit lands, it just barely counts. Two cards in a turn break it and connect
- * properly, which is the point: the ward makes damage EXPENSIVE rather than
- * impossible, so a player who has energy can always keep playing and a player
- * who finishes the pinned todo suddenly hits at full weight. Push it much above
- * a Strike and it becomes the hard freeze this replaced, in slower clothing.
+ * the hit lands, it just barely counts. Two cards between swings break it and
+ * connect properly, which is the point: the ward makes damage EXPENSIVE rather
+ * than impossible, so a player who has energy can always keep playing and a
+ * player who finishes the pinned todo suddenly hits at full weight. Push it much
+ * above a Strike and it becomes the hard freeze this replaced, in slower clothing.
  */
 export const WARD_AMOUNT = 5;
-
-/** Enemy turns between telegraphed heavy attacks. */
-export const HEAVY_EVERY = 3;
-export const HEAVY_MULTIPLIER = 2;
 
 /** Gold paid into the real ledger for clearing the boss. */
 export const BOSS_GOLD_REWARD = 10;

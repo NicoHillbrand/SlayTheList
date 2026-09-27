@@ -79,8 +79,7 @@ import {
   setDefenseDeathMode,
   getCrawlSnapshot,
   playCrawlCardAction,
-  endCrawlTurnAction,
-  drawCrawlCardAction,
+  descendCrawlAction,
   chooseCrawlRewardAction,
   restartCrawlAction,
   setCrawlWardAction,
@@ -91,6 +90,8 @@ import {
   setCurrentStep,
   completeCurrentStep,
   SHOW_CURRENT_STEP_SETTING,
+  OPEN_BROWSER_ON_STARTUP_SETTING,
+  writeLauncherPrefs,
 } from "./store.js";
 import { referenceImagesDir } from "./db.js";
 import { testDetection, clearRefPixelCache, getDetectionRefs, DETECTION_COMPARE_SIZE, DETECTION_TEMPLATE_WIDTH, DETECTION_TEMPLATE_HEIGHT } from "./image-match.js";
@@ -139,6 +140,17 @@ app.use(
 app.use(express.json({ limit: "50mb" }));
 app.use(requestLogger);
 
+/**
+ * Which overlay surfaces a fresh start puts back on screen. Session visibility
+ * lives in `showGoldToday` / `showBaseOverlay`; these are the sticky answer the
+ * session state is reset TO at boot. The Crawl has no session setting of its
+ * own — its window is opened by hotkey and closed by its own grip, entirely
+ * inside the agent — so its key is read straight off the overlay payload.
+ */
+const GOLD_STARTUP_SETTING = "showGoldTodayOnStartup";
+const BAR_STARTUP_SETTING = "showBaseOverlayOnStartup";
+const CRAWL_STARTUP_SETTING = "showCrawlOnStartup";
+
 function buildOverlayState(): OverlayState & {
   showDetectionIndicator: boolean;
   detectionIntervalMs: number;
@@ -146,6 +158,7 @@ function buildOverlayState(): OverlayState & {
   showGoldToday: boolean;
   goldEarnedToday: number;
   showBaseOverlay: boolean;
+  showCrawlOnStartup: boolean;
   overlayToggleHotkey: string;
   crawlToggleHotkey: string;
   currentStep: CurrentStep | null;
@@ -167,6 +180,9 @@ function buildOverlayState(): OverlayState & {
     showGoldToday,
     goldEarnedToday: showGoldToday ? getGoldEarnedToday() : 0,
     showBaseOverlay: getSetting("showBaseOverlay") === "true",
+    // Read once by the agent, the first time it hears from us — see the startup
+    // block at the bottom of this file for why the other two are not like this.
+    showCrawlOnStartup: getSetting(CRAWL_STARTUP_SETTING) !== "false",
     overlayToggleHotkey: getSetting("overlayToggleHotkey") ?? "",
     crawlToggleHotkey: getSetting("crawlToggleHotkey") ?? "",
     // Rides the overlay-state broadcast rather than getting its own poll: this
@@ -801,7 +817,7 @@ app.get("/api/micro", (_req, res) => {
 });
 
 // Record micro-actions in tenths of a gold. Ten tenths roll into one real gold
-// automatically; three buy a card draw in the crawl.
+// automatically; three buy one card refill in the crawl.
 app.post("/api/micro/award", (req, res) => {
   const tenths = req.body?.tenths;
   const withSound = req.body?.withSound === true;
@@ -1571,6 +1587,10 @@ app.put("/api/settings/:key", (req, res) => {
   if (req.params.key === "screenDetectionEnabled" && value === "false") {
     setDetectedGameState(null, 0);
   }
+  // The launchers read this one off disk, long before the server exists.
+  if (req.params.key === OPEN_BROWSER_ON_STARTUP_SETTING) {
+    writeLauncherPrefs();
+  }
   broadcastOverlayState();
   ok(res, { updated: true });
 });
@@ -1813,13 +1833,12 @@ app.post("/api/crawl/play", (req, res) => {
   crawlRoute(res, () => playCrawlCardAction(handIndex));
 });
 
-app.post("/api/crawl/end-turn", (_req, res) => {
-  crawlRoute(res, () => endCrawlTurnAction());
-});
-
-// Spend one micro-gold draw credit. No body: a draw is always exactly one card.
-app.post("/api/crawl/draw", (_req, res) => {
-  crawlRoute(res, () => drawCrawlCardAction());
+// Leave the floor-cleared screen for the next floor. There is no "end turn" any
+// more (the enemy is on a wall clock) and no "draw" (micro-gold credits fill
+// empty slots automatically), so this is the only button the run still needs
+// beyond playing a card.
+app.post("/api/crawl/descend", (_req, res) => {
+  crawlRoute(res, () => descendCrawlAction());
 });
 
 app.post("/api/crawl/reward", (req, res) => {
@@ -1952,12 +1971,24 @@ setInterval(() => {
 
 app.use(errorLogger);
 
-// Overlay visibility is session state, not a sticky preference: hiding the
-// overlay (toggle hotkey or the Settings checkboxes) lasts until the app is
-// restarted, and a fresh start always brings it back. Without this, one hotkey
-// press hides the overlay for good and it is easy to forget it exists.
-setSetting("showGoldToday", "true");
-setSetting("showBaseOverlay", "true");
+// Overlay visibility is session state, not a sticky preference: hiding a
+// surface (toggle hotkey or the Settings checkboxes) lasts until the app is
+// restarted, and a fresh start puts it back wherever the startup preference
+// says. Without this, one hotkey press hides the overlay for good and it is
+// easy to forget it exists.
+//
+// What a fresh start restores is the user's call, per surface, because the
+// three want different answers: the gold chip is ambient and wants to be there,
+// the Base/Friends bar is a thing you go and open, and the Crawl is the one
+// that should be waiting when you sit down. Hence three settings rather than
+// one — the defaults below are those answers, and Settings can change any of
+// them.
+setSetting("showGoldToday", getSetting(GOLD_STARTUP_SETTING) === "false" ? "false" : "true");
+setSetting("showBaseOverlay", getSetting(BAR_STARTUP_SETTING) === "true" ? "true" : "false");
+
+// Keep the launchers' copy of the settings they read at boot honest, including
+// for an install where the setting was never touched.
+writeLauncherPrefs();
 
 server.listen(port, () => {
   console.log(`[api] listening on http://localhost:${port}`);

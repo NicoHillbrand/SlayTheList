@@ -1,7 +1,18 @@
 /* ============================================================
    The Crawl — overlay dungeon run.
-   Built for a ~340px panel first; the /crawl page just gives it
-   more breathing room. Dark + gold, self-contained, no assets.
+
+   Built for a 272px panel first; the /crawl page just gives it
+   more breathing room. That number is PanelWidth in
+   OverlayBarWindow.cs — the page always lays out at exactly that
+   many CSS pixels and the host scales the result, so every size
+   below is tuned against it and the two have to move together.
+
+   It used to be 340. Losing the depth strip, the energy counter,
+   the intent row and both action buttons left the panel wider
+   than its contents, so the width came off rather than being
+   spent on air.
+
+   Dark + gold, self-contained, no assets.
    ============================================================ */
 
 .root {
@@ -61,9 +72,9 @@
   color: var(--muted);
 }
 
-/* Draw credits are micro-GOLD, so they stay in the gold family — dimmed, since
-   they are tenths. Deliberately not --energy blue: that colour means "spendable
-   on a play", and these are not. */
+/* Banked slot refills are micro-GOLD, so they stay in the gold family — dimmed,
+   since they are tenths. Deliberately not --energy blue: that colour means
+   "spendable on a play", and these are not. */
 .drawCredits {
   display: inline-flex;
   align-items: center;
@@ -84,7 +95,7 @@
 /* ---------- Bars ----------
    One geometry for both bars, with hue carrying WHOSE bar it is: red is the
    thing hitting you, green is you. They used to be magenta and red-orange, two
-   unrelated ramps that made you read the label to tell them apart at 340px.
+   unrelated ramps that made you read the label to tell them apart at this size.
    The track is a recess (inset shadow, no border) and the fill has a top
    highlight — enough shading to read as a game gauge, not enough to look wet. */
 
@@ -138,8 +149,8 @@
 .enemy {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 9px;
+  gap: 7px;
+  padding: 8px;
   border: 0;
   border-radius: 8px;
   background: linear-gradient(180deg, #1f1f36 0%, #1a1a2e 100%);
@@ -162,22 +173,25 @@
   box-shadow: inset 0 0 0 1px rgba(184, 148, 47, 0.6);
 }
 
+/* Tighter gaps than the rest of the panel: this row packs a name, two or three
+   numeric chips and an ellipsis budget into ~215px, and the gaps are the only
+   part of it that is not load-bearing. */
 .enemyTop {
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: 6px;
   margin-bottom: 5px;
 }
 
 /* A recessed tile, so the glyph reads as art in a frame rather than a loose
    emoji sitting on the panel. */
 .enemyGlyph {
-  flex: 0 0 38px;
-  width: 38px;
-  height: 38px;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
   display: grid;
   place-items: center;
-  font-size: 20px;
+  font-size: 18px;
   line-height: 1;
   border-radius: 7px;
   background: #12121f;
@@ -185,7 +199,7 @@
 }
 
 .enemyName {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
   letter-spacing: -0.01em;
   overflow: hidden;
@@ -219,14 +233,16 @@
   white-space: nowrap;
 }
 
-.intent {
-  margin-top: 5px;
-  color: var(--muted);
-}
-
-.intentHeavy {
-  color: var(--bad);
+/* What the enemy hits for, sitting with the HP it is racing rather than in a
+   sentence underneath. It takes the enemy bar's rose so the pair reads as one
+   object — the same trick the player's HP text plays with the green bar — and
+   it is deliberately quieter than the name: it is a constant, not news. */
+.enemyAttack {
+  color: #b9737b;
+  font-size: 11px;
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 /* ---------- Player ---------- */
@@ -244,11 +260,15 @@
 
 /* ---------- Hand ---------- */
 
-/* Five fixed columns for HAND_LIMIT. One row, always the same width, so drawing a
-   card never reflows the panel or makes the window taller. */
+/* Three fixed columns for HAND_SIZE. One row, always the same width, so a card
+   arriving never reflows the panel or makes the window taller.
+   Three rather than five is what made the redesign worth doing: the same row
+   width split three ways gives each card half again as much face, so the glyph
+   and the name are legible at a glance instead of on inspection — and three
+   choices is what a panel you look at for eight seconds can actually hold. */
 .hand {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 4px;
   margin-bottom: 8px;
 }
@@ -263,7 +283,7 @@
   align-items: center;
   justify-content: center;
   gap: 4px;
-  padding: 9px 4px 8px;
+  padding: 8px 3px 7px;
   border: 0;
   border-radius: 7px;
   background: linear-gradient(180deg, #1f1f36 0%, #17172c 100%);
@@ -274,7 +294,7 @@
   font: inherit;
   cursor: pointer;
   text-align: center;
-  min-height: 74px;
+  min-height: 70px;
   transition: transform 120ms ease, box-shadow 120ms ease;
 }
 
@@ -324,9 +344,13 @@
   color: var(--good);
 }
 
+/* An opening, not a hole. Dashed rather than solid so it reads as "a card
+   belongs here shortly" — which is exactly true: the next swing fills it for
+   free, and a banked micro-action refill fills it sooner. */
 .cardEmpty {
   background: none;
-  box-shadow: inset 0 0 0 1px rgba(44, 44, 72, 0.5);
+  box-shadow: none;
+  border: 1px dashed rgba(44, 44, 72, 0.9);
   cursor: default;
 }
 
@@ -391,11 +415,12 @@
   background: #262642;
 }
 
-/* No banner styles. Both banners this panel used to have were prose restating
-   something already on screen — the ward is the 🛡 on the enemy (hover it for the
-   todo), and being out of energy is the ⚡0 plus a hand of dimmed cards. In a
-   340px panel parked over real work, a row of explanation costs more than it
-   explains. */
+/* No banner styles, and in a fight no button styles either. Everything this
+   panel used to say in prose is now said by something already on screen — the
+   ward is the 🛡 on the enemy (hover it for the todo), the enemy's damage is the
+   ⚔ beside its HP, and being out of energy is a hand of dimmed cards. In a
+   272px panel parked over real work, a row of explanation costs more than it
+   explains, and a row of buttons costs more than that. */
 
 /* ---------- Reward / end states ---------- */
 
@@ -408,12 +433,15 @@
 .rewardRow {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 5px;
+  gap: 4px;
   margin-bottom: 8px;
 }
 
+/* Taller than the hand's cards because these carry a sentence, and a narrower
+   card wraps it onto more lines. Height here is cheap: the reward screen is the
+   one moment the panel has nothing else to show. */
 .rewardCard {
-  min-height: 96px;
+  min-height: 110px;
   justify-content: flex-start;
 }
 

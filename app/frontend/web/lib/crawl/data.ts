@@ -13,8 +13,10 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8788"
 
 /**
  * The API's event socket. It broadcasts `overlay_state` on every mutation that
- * can move gold or todos, which is precisely what changes the run's energy,
- * locks, and momentum — so the panel listens instead of waiting for a poll.
+ * can move gold or todos — precisely what changes the run's energy, wards, and
+ * momentum — and on a short heartbeat besides, so the panel listens instead of
+ * waiting for a poll. The heartbeat is also how a swing that landed while the
+ * player was reading shows up without anyone touching anything.
  */
 export const EVENTS_URL = `${API_BASE.replace(/^http/, "ws")}/ws`;
 
@@ -24,7 +26,7 @@ export interface CrawlSnapshot {
   energy: number;
   /** Today's earned gold — the full size of today's pool. */
   goldEarnedToday: number;
-  /** Extra card draws still available off today's micro-actions. */
+  /** Slot refills still available off today's micro-actions. */
   drawCredits: number;
   /** Today's micro-action tenths — the full size of the draw pool. */
   microTenthsToday: number;
@@ -34,6 +36,8 @@ export interface CrawlSnapshot {
   blocked: string | null;
   /** The pinned todo warding the current enemy. Null when nothing is pinned. */
   ward: { todoId: string; title: string; done: boolean } | null;
+  /** Ms until the enemy's next swing. Null when nothing is on the clock. */
+  msUntilSwing: number | null;
   events: CrawlEvent[];
 }
 
@@ -69,13 +73,9 @@ export function playCard(handIndex: number): Promise<CrawlSnapshot> {
   });
 }
 
-export function endTurn(): Promise<CrawlSnapshot> {
-  return api<CrawlSnapshot>("/api/crawl/end-turn", { method: "POST" });
-}
-
-/** Spend one micro-gold draw credit on an extra card. */
-export function drawCard(): Promise<CrawlSnapshot> {
-  return api<CrawlSnapshot>("/api/crawl/draw", { method: "POST" });
+/** Leave the floor-cleared screen for the first room of the next floor. */
+export function descend(): Promise<CrawlSnapshot> {
+  return api<CrawlSnapshot>("/api/crawl/descend", { method: "POST" });
 }
 
 /** `cardId` null skips the reward and keeps the deck lean. */

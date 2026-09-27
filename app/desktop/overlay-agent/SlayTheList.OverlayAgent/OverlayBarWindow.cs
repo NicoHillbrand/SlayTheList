@@ -226,10 +226,21 @@ internal sealed class OverlayPanelWindow : Window
     /// <summary>The width the page is designed for. A standalone panel keeps
     /// rendering at exactly this many CSS pixels and is scaled to whatever width
     /// the user drags it to, so shrinking the window shrinks the whole panel
-    /// instead of introducing a scrollbar.</summary>
-    private const double PanelWidth = 340;
-    private const double MinPanelWidth = 190;
-    private const double MaxPanelWidth = 510;
+    /// instead of introducing a scrollbar.
+    ///
+    /// This is the knob for "make the panel narrower", and it is NOT the same as
+    /// dragging the window in. Dragging only changes the zoom, so the layout is
+    /// identical and merely smaller — text included. Lowering this number makes
+    /// the LAYOUT tighter at the same zoom, which is what buys real estate back
+    /// without making anything harder to read. It went 340 -> 272 (20% off) once
+    /// the panel had shed its depth strip, energy counter, intent row and both
+    /// action buttons: what was left did not need the width.
+    ///
+    /// The page's CSS is tuned against this value — see crawl.module.css, which
+    /// names it. The two have to move together.</summary>
+    private const double PanelWidth = 272;
+    private const double MinPanelWidth = 152;
+    private const double MaxPanelWidth = 408;
     /// <summary>
     /// Window width consumed by things that are not the page: the 1px frame on
     /// each side, plus the resize band the WebView is held off (resizable windows

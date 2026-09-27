@@ -18,6 +18,22 @@ warn()    { printf '\033[1;33m⚠\033[0m  %s\n' "$*"; }
 fail()    { printf '\033[1;31m✗\033[0m  %s\n' "$*"; }
 die()     { fail "$*"; exit 1; }
 
+# Reads one of the settings the API mirrors to disk for the launchers, which
+# run before it is up. See writeLauncherPrefs in backend/api/src/store.ts.
+# Usage: launcher_pref <name> <default>
+launcher_pref() {
+  local name="$1" default="$2" file value
+  for file in "backend/api/data/launcher-prefs.json" "../data/launcher-prefs.json"; do
+    [ -f "$file" ] || continue
+    value=$(tr -d ' 	",' < "$file" | grep "^${name}:" | head -n 1 | cut -d: -f2)
+    if [ "$value" = "true" ] || [ "$value" = "false" ]; then
+      printf '%s' "$value"
+      return
+    fi
+  done
+  printf '%s' "$default"
+}
+
 # ── Kill previous SlayTheList processes ─────────────────────────────────────
 kill_previous() {
   info "Stopping previous SlayTheList processes..."
@@ -143,7 +159,9 @@ else
   for i in $(seq 1 45); do
     if curl -sf "$APP_URL" &>/dev/null; then
       success "App is up!"
-      if [ "$(uname -s)" = "Darwin" ]; then
+      if [ "$(launcher_pref openBrowserOnStartup true)" = "false" ]; then
+        info "Browser tab skipped (Settings > Startup)."
+      elif [ "$(uname -s)" = "Darwin" ]; then
         open "$APP_URL"
       else
         xdg-open "$APP_URL" 2>/dev/null \

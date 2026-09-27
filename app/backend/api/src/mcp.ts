@@ -261,7 +261,7 @@ server.tool(
 
 server.tool(
   "award_micro",
-  "Record micro-actions in tenths of a gold — the fast sub-tick between finished todos. Use it for the small stuff a session generates (a decision made, a message sent, a file read) instead of tracking 0.1 increments yourself: the count lives on the server, so it survives the session and is exact. Every 3 tenths buys one extra card draw in The Crawl (micro buys OPTIONS), and every 10 tenths roll over into 1 real gold automatically (do not call award_gold for the rollover). Unspent tenths expire at midnight.",
+  "Record micro-actions in tenths of a gold — the fast sub-tick between finished todos. Use it for the small stuff a session generates (a decision made, a message sent, a file read) instead of tracking 0.1 increments yourself: the count lives on the server, so it survives the session and is exact. Every 3 tenths buys one card refill in The Crawl — an empty hand slot fills the moment a card leaves it, instead of waiting up to half an hour for the enemy's next swing (micro buys OPTIONS), and every 10 tenths roll over into 1 real gold automatically (do not call award_gold for the rollover). Unspent tenths expire at midnight.",
   {
     tenths: z
       .number()
@@ -547,7 +547,7 @@ server.tool(
 
 server.tool(
   "get_crawl",
-  "Read the state of The Crawl, the overlay dungeon run: floor and room, HP, the current enemy, the hand and deck, how much energy is left today (energy = gold earned today, it expires at midnight), how many extra card draws today's micro-actions have bought (drawCredits, from award_micro), and whether a todo is currently pinned (`ward`, plus the enemy's remaining shield in `state.enemy.ward`). Use it to see how the run is doing before suggesting what to pin next.",
+  "Read the state of The Crawl, the overlay dungeon run: floor and room, HP, the current enemy, the hand and deck, how much energy is left today (energy = gold earned today, it expires at midnight), how many card refills today's micro-actions have bought (drawCredits, from award_micro), how long until the enemy's next swing (msUntilSwing — it attacks on a 30-minute wall clock, not in response to the player), and whether a todo is currently pinned (`ward`, plus the enemy's remaining shield in `state.enemy.ward`). Use it to see how the run is doing before suggesting what to pin next.",
   {},
   async () => {
     const snapshot = getCrawlSnapshot();
@@ -557,7 +557,7 @@ server.tool(
 
 server.tool(
   "ward_crawl_on_todo",
-  "Pin a todo to The Crawl, which WARDS the current enemy until that todo is done: it carries a shield that absorbs damage and comes back every turn, so the fight costs far more while the work is outstanding. Nothing is ever blocked — the user can always play cards and enter rooms — and finishing the todo shatters the shield on the spot, so their next card suddenly lands in full. That is the point: the pinned work should EARN a good turn, not unblock a wall. Create the todo with create_todo first, then pass its id here. Pass todo_id: null to clear the ward. The ward is retired automatically when the user leaves the room, so an unfinished pin cannot hobble the whole run.",
+  "Pin a todo to The Crawl, which WARDS the current enemy until that todo is done: it carries a shield that absorbs damage and comes back on every enemy swing, so the fight costs far more while the work is outstanding. Nothing is ever blocked — the user can always play cards and enter rooms — and finishing the todo shatters the shield on the spot, so their next card suddenly lands in full. That is the point: the pinned work should EARN a good hit, not unblock a wall. Create the todo with create_todo first, then pass its id here. Pass todo_id: null to clear the ward. The ward is retired automatically when the user leaves the room, so an unfinished pin cannot hobble the whole run.",
   {
     todo_id: z
       .string()

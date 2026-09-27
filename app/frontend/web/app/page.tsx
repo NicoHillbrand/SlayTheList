@@ -1068,6 +1068,15 @@ export default function Page() {
   const [showGoldToday, setShowGoldTodayState] = useState(false);
   const [showBaseOverlay, setShowBaseOverlayState] = useState(false);
   const [showCurrentStep, setShowCurrentStepState] = useState(true);
+  // What a fresh start puts back on screen, per surface. Separate from the
+  // three above, which are only this session — see the "Show on startup" block.
+  const [goldOnStartup, setGoldOnStartup] = useState(true);
+  const [barOnStartup, setBarOnStartup] = useState(false);
+  const [crawlOnStartup, setCrawlOnStartup] = useState(true);
+  // Whether a launcher opens a browser tab once the web server is up. Lives
+  // server-side (not localStorage) because the launchers read it off disk
+  // before any browser exists — see writeLauncherPrefs in the API store.
+  const [openBrowserOnStartup, setOpenBrowserOnStartup] = useState(true);
   const [overlayToggleHotkey, setOverlayToggleHotkey] = useState("");
   const [crawlToggleHotkey, setCrawlToggleHotkey] = useState("");
   const [detectionIntervalMs, setDetectionIntervalMs] = useState(100);
@@ -1328,6 +1337,16 @@ export default function Page() {
         // an unset key should not mean "silently off".
         const currentStepSetting = await getAppSetting(SHOW_CURRENT_STEP_SETTING_KEY);
         setShowCurrentStepState(currentStepSetting.value !== "false");
+        // Startup preferences. Defaults mirror the server's: the gold chip and
+        // the Crawl come back on their own, the bar waits to be asked for.
+        const goldStartupSetting = await getAppSetting("showGoldTodayOnStartup");
+        setGoldOnStartup(goldStartupSetting.value !== "false");
+        const barStartupSetting = await getAppSetting("showBaseOverlayOnStartup");
+        setBarOnStartup(barStartupSetting.value === "true");
+        const crawlStartupSetting = await getAppSetting("showCrawlOnStartup");
+        setCrawlOnStartup(crawlStartupSetting.value !== "false");
+        const openBrowserSetting = await getAppSetting("openBrowserOnStartup");
+        setOpenBrowserOnStartup(openBrowserSetting.value !== "false");
         const hotkeySetting = await getAppSetting("overlayToggleHotkey");
         setOverlayToggleHotkey(hotkeySetting.value ?? "");
         const crawlHotkeySetting = await getAppSetting("crawlToggleHotkey");
@@ -2074,6 +2093,7 @@ export default function Page() {
       window.localStorage.setItem(SHOW_TODO_DURATION_STORAGE_KEY, String(showTodoDuration));
       window.localStorage.setItem(SHOW_COMPLETION_PROGRESS_STORAGE_KEY, String(showCompletionProgress));
       window.localStorage.setItem(SPLIT_DAILY_BY_PRIORITY_STORAGE_KEY, String(splitDailyByPriority));
+      void setAppSetting("openBrowserOnStartup", String(openBrowserOnStartup));
       setError(null);
       setShowSettingsModal(false);
     } catch {
@@ -6593,8 +6613,52 @@ export default function Page() {
                 Show the agent&apos;s current step line in the overlay
               </label>
               <p className="settings-hint">
-                Hiding the overlay (here or with the shortcut) lasts for this session — it comes back the next time the app starts.
+                Hiding the overlay (here or with the shortcut) lasts for this session — the next start
+                puts back whatever is ticked below.
               </p>
+
+              <p className="settings-section-title">Show on startup</p>
+              <label className="settings-checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={crawlOnStartup}
+                  onChange={async (event) => {
+                    const val = event.target.checked;
+                    setCrawlOnStartup(val);
+                    await setAppSetting("showCrawlOnStartup", String(val));
+                  }}
+                />
+                The Crawl, when the computer starts
+              </label>
+              <label className="settings-checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={goldOnStartup}
+                  onChange={async (event) => {
+                    const val = event.target.checked;
+                    setGoldOnStartup(val);
+                    await setAppSetting("showGoldTodayOnStartup", String(val));
+                  }}
+                />
+                Today&apos;s gold chip
+              </label>
+              <label className="settings-checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={barOnStartup}
+                  onChange={async (event) => {
+                    const val = event.target.checked;
+                    setBarOnStartup(val);
+                    await setAppSetting("showBaseOverlayOnStartup", String(val));
+                  }}
+                />
+                Overlay bar (base + friends)
+              </label>
+              <p className="settings-hint">
+                Each surface is independent, and each has its own shortcut below — so anything left
+                unticked is one keypress away rather than gone. Takes effect on the next start.
+              </p>
+
               <HotkeyCaptureRow
                 label="Overlay bar show/hide shortcut"
                 settingKey="overlayToggleHotkey"
@@ -6740,6 +6804,23 @@ export default function Page() {
                   {autostart?.reason ?? "Auto-start is only available in the Windows desktop install."}
                 </p>
               )}
+              <label className="settings-checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={openBrowserOnStartup}
+                  onChange={async (event) => {
+                    const val = event.target.checked;
+                    setOpenBrowserOnStartup(val);
+                    await setAppSetting("openBrowserOnStartup", String(val));
+                  }}
+                />
+                Open the app in a browser tab when SlayTheList starts
+              </label>
+              <p className="settings-section-copy" style={{ marginLeft: "1.6rem" }}>
+                Untick to start silently — the servers and the overlay still come up, so the gold
+                chip and the Crawl work as usual, you just don&apos;t get a browser page. Takes
+                effect on the next start.
+              </p>
             </section>
             <section className="settings-section">
               <p className="settings-section-title">AI expansion</p>

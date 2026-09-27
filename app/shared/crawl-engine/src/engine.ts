@@ -1,35 +1,38 @@
 /**
- * The Crawl — pure turn engine.
+ * The Crawl — pure engine.
  *
  * Every exported mutator takes `(state, ..., ctx)` and returns a brand new
- * state plus the events that happened. Nothing here reads the clock beyond
- * `ctx.nowMs`, touches gold, or knows what a todo is: the caller resolves all
- * of that and hands down `goldEarnedToday`, `momentum`, and `wardCleared`.
+ * state plus the events that happened. Nothing here touches gold or knows what
+ * a todo is: the caller resolves all of that and hands down `goldEarnedToday`,
+ * `momentum`, and `wardCleared`. The one thing the engine does read is
+ * `ctx.nowMs`, and only through `tickClock`.
  *
- * Two deliberate departures from Slay the Spire, both forced by the fact that
+ * Three deliberate departures from Slay the Spire, all forced by the fact that
  * this is an overlay you glance at rather than a game you sit down to:
  *
- *  1. THE HAND PERSISTS. StS discards your hand every turn and redraws. Here
- *     energy is real-world scarce, and you may end a turn on Tuesday and take
- *     the next one on Thursday — throwing the hand away would burn work you
- *     already did. You draw one card per turn instead, up to the cap.
- *  2. ENERGY IS NOT PER-TURN. It is a shared daily pool (today's earned gold),
- *     so a turn is only as big as the work behind it, and a productive day
- *     buys a long push rather than a fixed three actions.
+ *  1. THERE ARE NO TURNS. The enemy swings on a wall clock every
+ *     ENEMY_SWING_INTERVAL_MS; the player acts whenever they like in between.
+ *     "End turn" was a button whose only job was to ask the player to admit
+ *     they were finished, and in a panel that is open for eight seconds at a
+ *     time that is a chore, not a decision.
+ *  2. THE HAND PERSISTS. StS discards your hand every turn and redraws. Here
+ *     energy is real-world scarce and you may play one card on Tuesday and the
+ *     next on Thursday — throwing the hand away would burn work you already did.
+ *  3. ENERGY IS NOT PER-TURN. It is a shared daily pool (today's earned gold),
+ *     so a productive day buys a long push rather than a fixed three actions.
  *
- * A third, smaller pool sits alongside energy: DRAW CREDITS, minted by
- * micro-actions in tenths of gold. They buy cards rather than plays, so the fast
- * trickle of small wins widens what you can choose from without ever standing in
- * for the finished work that pays to actually swing.
+ * A smaller pool sits alongside energy: DRAW CREDITS, minted by micro-actions in
+ * tenths of gold. They refill an empty hand slot immediately instead of waiting
+ * for the next swing — the fast trickle of small wins keeps your options open
+ * without ever standing in for the finished work that pays to actually swing.
  */
 import {
+  BLEED_DAMAGE,
   BOSS_GOLD_REWARD,
-  DRAW_PER_TURN,
+  ENEMY_SWING_INTERVAL_MS,
   FLOORS,
-  HAND_LIMIT,
   HAND_SIZE,
-  HEAVY_EVERY,
-  HEAVY_MULTIPLIER,
+  MAX_PENDING_SWINGS,
   MICRO_TENTHS_PER_DRAW,
   MOMENTUM_DAMAGE,
   REWARD_CHOICES,
@@ -68,7 +71,6 @@ function spawnEnemy(floor: number, room: number, warded = false): EnemyState {
     attack: template.attack,
     weakened: 0,
     ward: warded ? WARD_AMOUNT : 0,
-    turnsUntilHeavy: HEAVY_EVERY,
     boss: isBossRoom(floor, room),
   };
 }
@@ -81,8 +83,8 @@ function isWarded(state: CrawlState, ctx: CrawlContext): boolean {
 /**
  * Reconcile the enemy's shield with the pinned todo before anything else runs.
  *
- * Finishing the todo shatters the ward immediately rather than at the end of the
- * turn, because that instant is the reason the mechanic exists — the reward for
+ * Finishing the todo shatters the ward immediately rather than on the next
+ * swing, because that instant is the reason the mechanic exists — the reward for
  * the real work is your next card suddenly landing in full.
  */
 function syncWard(state: CrawlState, ctx: CrawlContext): CrawlResult {
@@ -115,7 +117,7 @@ export function createCrawlState(
     maxHp: START_HP,
     block: 0,
     strength: 0,
-    playedThisTurn: false,
+    lastSwingMs: nowMs,
     deck: [...STARTING_DECK],
     hand,
     drawPile,
@@ -148,9 +150,9 @@ export function energyAvailable(state: CrawlState, ctx: CrawlContext): number {
 }
 
 /**
- * Extra card draws still available today: what today's micro-actions bought,
- * minus what this run already pulled. Mirrors `energyAvailable` exactly, against
- * the other pool.
+ * Slot refills still available today: what today's micro-actions bought, minus
+ * what this run already pulled. Mirrors `energyAvailable` exactly, against the
+ * other pool.
  */
 export function drawCreditsAvailable(state: CrawlState, ctx: CrawlContext): number {
   const day = normalizeDay(state, ctx.today);
@@ -180,19 +182,17 @@ export function blockedReason(state: CrawlState, _ctx: CrawlContext): string | n
 
 /**
  * Move `count` cards from the draw pile into the hand, reshuffling the discard
- * when the pile runs dry. Stops at HAND_SIZE, or at the hard HAND_LIMIT when
- * `overflow` is set — which is how a micro-gold draw goes past the turn refill
- * without letting the hand grow without end.
+ * when the pile runs dry. Never grows the hand past HAND_SIZE — there is no
+ * second, higher ceiling any more, so a slot is either a card or an opening.
  */
-function drawCards(state: CrawlState, count: number, overflow = false): CrawlState {
+function drawCards(state: CrawlState, count: number): CrawlState {
   let { hand, drawPile, discard, rolls } = state;
   hand = [...hand];
   drawPile = [...drawPile];
   discard = [...discard];
 
-  const cap = overflow ? HAND_LIMIT : HAND_SIZE;
   for (let i = 0; i < count; i += 1) {
-    if (hand.length >= cap) break;
+    if (hand.length >= HAND_SIZE) break;
     if (drawPile.length === 0) {
       if (discard.length === 0) break;
       rolls += 1;
@@ -218,10 +218,108 @@ function outgoingDamage(base: number, state: CrawlState, ctx: CrawlContext): num
   return base + state.strength + (ctx.momentum ? MOMENTUM_DAMAGE : 0);
 }
 
+// ---------------------------------------------------------------------------
+// The clock
+// ---------------------------------------------------------------------------
+
+/**
+ * How many swing intervals have elapsed but not yet been resolved. Zero unless
+ * an enemy is actually alive in front of the player — the clock does not run on
+ * the reward screen, the floor-cleared screen, or after the run is over.
+ */
+export function intervalsElapsed(state: CrawlState, ctx: CrawlContext): number {
+  if (state.status !== "fighting" || !state.enemy) return 0;
+  const elapsed = ctx.nowMs - state.lastSwingMs;
+  if (!Number.isFinite(elapsed) || elapsed < ENEMY_SWING_INTERVAL_MS) return 0;
+  return Math.floor(elapsed / ENEMY_SWING_INTERVAL_MS);
+}
+
+/** Ms until the next swing lands. Null when no enemy is on the clock. */
+export function msUntilNextSwing(state: CrawlState, ctx: CrawlContext): number | null {
+  if (state.status !== "fighting" || !state.enemy) return null;
+  const since = (ctx.nowMs - state.lastSwingMs) % ENEMY_SWING_INTERVAL_MS;
+  return Math.max(0, ENEMY_SWING_INTERVAL_MS - since);
+}
+
+/** One full-strength swing. Block absorbs it and is then spent. */
+function resolveSwing(state: CrawlState, ctx: CrawlContext): CrawlResult {
+  const enemy: EnemyState = { ...state.enemy! };
+  // The shield comes back with the enemy's swing while the todo is outstanding.
+  // That is what makes a warded fight a grind rather than a one-swing detour:
+  // you can break through between swings, but you cannot bank the progress.
+  if (isWarded(state, ctx)) enemy.ward = WARD_AMOUNT;
+
+  const swing = Math.max(1, enemy.attack - enemy.weakened);
+  const absorbed = Math.min(state.block, swing);
+  const through = swing - absorbed;
+
+  // Refills the hand rather than topping it up by one. Cards you did not play
+  // persist; this only fills the openings, so ENERGY stays the only thing
+  // limiting how hard you hit.
+  const next = drawCards(
+    { ...state, enemy, block: 0, hp: state.hp - through },
+    HAND_SIZE,
+  );
+  return { state: next, events: [{ type: "playerHit", amount: through }] };
+}
+
+/** One bleed tick: the run was left past its swing budget. Ignores block. */
+function resolveBleed(state: CrawlState): CrawlResult {
+  return {
+    state: { ...state, hp: state.hp - BLEED_DAMAGE },
+    events: [{ type: "bled", amount: BLEED_DAMAGE }],
+  };
+}
+
+/**
+ * Resolve everything the wall clock owes since the last read.
+ *
+ * The first MAX_PENDING_SWINGS unresolved intervals are real swings; every
+ * interval past that is a bleed tick. That soft cap is the whole reason this is
+ * playable: uncapped, an afternoon in meetings would end a run before the player
+ * touched a card, and the run would be decided by their calendar rather than
+ * their work. Capped hard, an abandoned run would be perfectly safe forever,
+ * which is not a fight. Two swings then a trickle is the shape in between.
+ *
+ * `lastSwingMs` advances by whole intervals, never to `now`, so swings stay on
+ * their original cadence instead of resetting every time the panel is opened.
+ */
+export function tickClock(state: CrawlState, ctx: CrawlContext): CrawlResult {
+  const intervals = intervalsElapsed(state, ctx);
+  if (intervals <= 0) return { state, events: [] };
+
+  const events: CrawlEvent[] = [];
+  let next: CrawlState = { ...state, lastSwingMs: state.lastSwingMs + intervals * ENEMY_SWING_INTERVAL_MS };
+
+  for (let i = 0; i < intervals; i += 1) {
+    const result = i < MAX_PENDING_SWINGS ? resolveSwing(next, ctx) : resolveBleed(next);
+    next = result.state;
+    events.push(...result.events);
+    if (next.hp <= 0) {
+      events.push({ type: "died", floor: next.floor });
+      return {
+        state: {
+          ...next,
+          hp: 0,
+          status: "dead",
+          meta: { ...next.meta, runsLost: next.meta.runsLost + 1 },
+        },
+        events,
+      };
+    }
+  }
+
+  return { state: next, events };
+}
+
+// ---------------------------------------------------------------------------
+// Player actions
+// ---------------------------------------------------------------------------
+
 /**
  * Play the card at `handIndex`. Costs energy from today's pool. Rejects (state
  * unchanged, no events) when the run is over, it is not a fight, or the energy
- * is not there — the UI disables those cases, this is the backstop. A pinned todo
+ * is not there — the UI dims those cases, this is the backstop. A pinned todo
  * is NOT one of them: it shields the enemy, it does not stop the card.
  */
 export function playCard(state: CrawlState, handIndex: number, ctx: CrawlContext): CrawlResult {
@@ -242,7 +340,6 @@ export function playCard(state: CrawlState, handIndex: number, ctx: CrawlContext
     hand: base.hand.filter((_, i) => i !== handIndex),
     discard: [...base.discard, card.id],
     energyUsed: base.energyUsed + card.cost,
-    playedThisTurn: true,
   };
 
   const effect = card.effect;
@@ -271,38 +368,38 @@ export function playCard(state: CrawlState, handIndex: number, ctx: CrawlContext
 }
 
 /**
- * Spend one micro-gold draw credit to pull a single extra card.
+ * Spend micro-gold credits to refill the hand's empty slots, one credit each.
  *
- * Deliberately allowed to push the hand past HAND_SIZE — that overflow IS the
- * effect, the "extend your turn" the credits are for — but only as far as
- * HAND_LIMIT, so the card row never wraps and the panel never grows. A run whose
- * energy is spent gains nothing from this, which is the intended shape:
- * micro-actions widen the choice, finished work is still the only thing that pays
- * to act.
+ * This replaced the "Draw" button. The button was asking the player to notice a
+ * counter, decide, and click — three steps to get back a card the swing clock
+ * would have handed over for free anyway. The credit's real value is only ever
+ * IMMEDIACY, so the honest form is automatic: play a card, and the slot fills
+ * behind it while you still have credits.
  *
- * Does not touch `playedThisTurn`, so drawing never provokes the enemy: a credit
- * spent is not a move made.
+ * Costs no energy and never touches the clock: a credit spent is not a move
+ * made. A run whose energy is spent gains nothing from this, which is the
+ * intended shape — micro-actions keep your options open, finished work is still
+ * the only thing that pays to act.
  */
-export function drawExtraCard(state: CrawlState, ctx: CrawlContext): CrawlResult {
-  const base = normalizeDay(state, ctx.today);
-  if (blockedReason(base, ctx) !== null) return { state: base, events: [] };
-  if (base.status !== "fighting") return { state: base, events: [] };
-  if (drawCreditsAvailable(base, ctx) < 1) return { state: base, events: [] };
-  // Hand already full: refuse before spending the credit, so it stays banked for
-  // after the next card is played.
-  if (base.hand.length >= HAND_LIMIT) return { state: base, events: [] };
-  // Nothing left anywhere to draw: refuse rather than burn the credit on a no-op.
-  if (base.drawPile.length === 0 && base.discard.length === 0) return { state: base, events: [] };
+export function refillFromCredits(state: CrawlState, ctx: CrawlContext): CrawlResult {
+  if (blockedReason(state, ctx) !== null) return { state, events: [] };
+  if (state.status !== "fighting") return { state, events: [] };
 
-  const drawn = drawCards(base, 1, true);
-  const cardId = drawn.hand[drawn.hand.length - 1];
-  if (drawn.hand.length === base.hand.length || cardId === undefined) {
-    return { state: base, events: [] };
+  const events: CrawlEvent[] = [];
+  let next = state;
+  let credits = drawCreditsAvailable(state, ctx);
+
+  while (credits > 0 && next.hand.length < HAND_SIZE) {
+    // Nothing left anywhere to draw: stop rather than burn a credit on a no-op.
+    if (next.drawPile.length === 0 && next.discard.length === 0) break;
+    const drawn = drawCards(next, 1);
+    if (drawn.hand.length === next.hand.length) break;
+    next = { ...drawn, drawsUsed: next.drawsUsed + 1 };
+    credits -= 1;
+    events.push({ type: "cardDrawn", cardId: next.hand[next.hand.length - 1] });
   }
-  return {
-    state: { ...drawn, drawsUsed: base.drawsUsed + 1 },
-    events: [{ type: "cardDrawn", cardId }],
-  };
+
+  return { state: next, events };
 }
 
 /** Enemy at 0 HP: hand the player their reward, or end the run on the boss. */
@@ -332,74 +429,43 @@ function resolveEnemyDeath(state: CrawlState, events: CrawlEvent[]): CrawlResult
   };
 }
 
-/**
- * True when the enemy is allowed to swing: the player has spent something this
- * turn. The UI disables the button on false; the engine refuses on false too.
- */
-export function canEndTurn(state: CrawlState): boolean {
-  return state.status === "fighting" && state.enemy !== null && state.playedThisTurn;
-}
-
-/**
- * End the turn: the enemy swings, block absorbs it and is then spent, and the
- * player draws back up. A heavy attack is telegraphed by `turnsUntilHeavy`.
- *
- * Does nothing at all until a card has been played. The enemy responds to the
- * player rather than to a clock, so a run with no energy behind it simply sits
- * there — it never grinds the player down for being away.
- */
-export function endTurn(state: CrawlState, ctx: CrawlContext): CrawlResult {
-  const dayNormalized = normalizeDay(state, ctx.today);
-  const synced = syncWard(dayNormalized, ctx);
-  const base = synced.state;
-  if (blockedReason(base, ctx) !== null) return { state: base, events: synced.events };
-  if (!canEndTurn(base)) return { state: base, events: synced.events };
-  if (base.status !== "fighting" || !base.enemy) return { state: base, events: synced.events };
-
-  const events: CrawlEvent[] = [...synced.events];
-  const enemy: EnemyState = { ...base.enemy };
-  // The shield comes back with the enemy's turn while the todo is outstanding.
-  // That is what makes a warded fight a grind rather than a one-turn detour: you
-  // can break through inside a turn, but you cannot bank the progress.
-  if (isWarded(base, ctx)) enemy.ward = WARD_AMOUNT;
-  const heavy = enemy.turnsUntilHeavy <= 1;
-  const swing = Math.max(1, enemy.attack - enemy.weakened) * (heavy ? HEAVY_MULTIPLIER : 1);
-  enemy.turnsUntilHeavy = heavy ? HEAVY_EVERY : enemy.turnsUntilHeavy - 1;
-
-  const absorbed = Math.min(base.block, swing);
-  const through = swing - absorbed;
-  events.push({ type: "playerHit", amount: through, heavy });
-
-  let next: CrawlState = {
-    ...base,
-    enemy,
+/** Everything a fresh room resets, shared by `chooseReward` and `descend`. */
+function enterRoom(state: CrawlState, floor: number, room: number, nowMs: number): CrawlState {
+  // You always walk into a room whole — HP is a per-fight resource, not a
+  // run-long one. See ROOM_ENTRY_HEAL_FRACTION for why.
+  const hp = Math.min(state.maxHp, Math.round(state.maxHp * ROOM_ENTRY_HEAL_FRACTION));
+  const next: CrawlState = {
+    ...state,
+    floor,
+    room,
+    hp,
     block: 0,
-    hp: base.hp - through,
-    playedThisTurn: false,
+    // Strength is a per-fight buff; a new room means a fresh enemy.
+    strength: 0,
+    status: "fighting",
+    rewardChoices: [],
+    // A ward covers the fight it was pinned during, so walking into the next
+    // room retires the pin — a todo left undone cannot silently hobble the run.
+    enemy: spawnEnemy(floor, room, false),
+    wardTodoId: null,
+    wardTodoTitle: null,
+    // The new enemy starts its clock now, not whenever the last one died.
+    lastSwingMs: nowMs,
+    meta: { ...state.meta, bestFloor: Math.max(state.meta.bestFloor, floor) },
   };
-
-  if (next.hp <= 0) {
-    events.push({ type: "died", floor: next.floor });
-    return {
-      state: {
-        ...next,
-        hp: 0,
-        status: "dead",
-        meta: { ...next.meta, runsLost: next.meta.runsLost + 1 },
-      },
-      events,
-    };
-  }
-
-  next = drawCards(next, DRAW_PER_TURN);
-  return { state: next, events };
+  return drawCards(next, HAND_SIZE);
 }
 
 /**
- * Take a reward card and step into the next room. `cardId` may be null to skip
- * the card — keeping the deck lean is a real choice, and skipping is one click
- * rather than a menu. Available whether or not a pinned todo is outstanding —
- * leaving the room is what retires the ward.
+ * Take a reward card and step out of the room. `cardId` may be null to skip the
+ * card — keeping the deck lean is a real choice, and skipping is one click
+ * rather than a menu.
+ *
+ * Clearing the last room of a floor lands on the floor-cleared screen instead of
+ * the next fight. That screen is the ONLY place the run's depth is announced,
+ * which is the trade that let the panel drop its permanent floor/room strip: a
+ * number that is true all day earns nothing, the moment it changes earns a
+ * whole screen.
  */
 export function chooseReward(
   state: CrawlState,
@@ -410,45 +476,43 @@ export function chooseReward(
   if (blockedReason(base, ctx) !== null) return { state: base, events: [] };
   if (base.status !== "reward") return { state: base, events: [] };
   if (cardId !== null && !base.rewardChoices.includes(cardId)) return { state: base, events: [] };
-  // A ward covers the fight it was pinned during. Walking into the next room
-  // retires the pin, so a todo left undone cannot silently hobble the whole run.
-  const carriedWard = false;
 
   const events: CrawlEvent[] = [];
-  const deck = cardId ? [...base.deck, cardId] : base.deck;
-  const discard = cardId ? [...base.discard, cardId] : base.discard;
-
-  let floor = base.floor;
-  let room = base.room + 1;
-  if (room >= ROOMS_PER_FLOOR) {
-    room = 0;
-    floor += 1;
-    events.push({ type: "floorCleared", floor: base.floor });
-  }
-  // You always walk into a room whole — HP is a per-fight resource, not a
-  // run-long one. See ROOM_ENTRY_HEAL_FRACTION for why.
-  const hp = Math.min(base.maxHp, Math.round(base.maxHp * ROOM_ENTRY_HEAL_FRACTION));
-
-  const next: CrawlState = {
+  const withCard: CrawlState = {
     ...base,
-    deck,
-    discard,
-    floor,
-    room,
-    hp,
-    block: 0,
-    // Strength is a per-fight buff; a new room means a fresh enemy.
-    strength: 0,
-    playedThisTurn: false,
-    status: "fighting",
-    rewardChoices: [],
-    enemy: spawnEnemy(floor, room, carriedWard),
-    // The ward is retired once the player has actually moved on.
-    wardTodoId: null,
-    wardTodoTitle: null,
-    meta: { ...base.meta, bestFloor: Math.max(base.meta.bestFloor, floor) },
+    deck: cardId ? [...base.deck, cardId] : base.deck,
+    discard: cardId ? [...base.discard, cardId] : base.discard,
   };
-  return { state: drawCards(next, HAND_SIZE), events };
+
+  if (base.room + 1 < ROOMS_PER_FLOOR) {
+    return { state: enterRoom(withCard, base.floor, base.room + 1, ctx.nowMs), events };
+  }
+
+  events.push({ type: "floorCleared", floor: base.floor });
+  const floor = base.floor + 1;
+  return {
+    state: {
+      ...withCard,
+      floor,
+      room: 0,
+      status: "floorCleared",
+      enemy: null,
+      rewardChoices: [],
+      wardTodoId: null,
+      wardTodoTitle: null,
+      meta: { ...withCard.meta, bestFloor: Math.max(withCard.meta.bestFloor, floor) },
+    },
+    events,
+  };
+}
+
+/**
+ * Walk down from the floor-cleared screen into the first room of the next floor.
+ * The floor number was already banked by `chooseReward`; this only opens the door.
+ */
+export function descend(state: CrawlState, ctx: CrawlContext): CrawlResult {
+  if (state.status !== "floorCleared") return { state, events: [] };
+  return { state: enterRoom(state, state.floor, 0, ctx.nowMs), events: [] };
 }
 
 /** Start a fresh run, carrying meta forward. Free: death costs progress, not gold. */
@@ -474,6 +538,6 @@ export function setWard(state: CrawlState, todoId: string | null, title: string 
   };
   if (!state.enemy) return next;
   // Raise the shield the moment the pin lands, rather than waiting for the
-  // enemy's next turn — otherwise pinning mid-turn does nothing at all.
+  // enemy's next swing — otherwise pinning does nothing for half an hour.
   return { ...next, enemy: { ...state.enemy, ward: todoId ? WARD_AMOUNT : 0 } };
 }

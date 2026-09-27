@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  BLEED_DAMAGE,
+  ENEMY_SWING_INTERVAL_MS,
   FLOORS,
-  HAND_LIMIT,
   HAND_SIZE,
-  HEAVY_EVERY,
-  HEAVY_MULTIPLIER,
+  MAX_PENDING_SWINGS,
   MICRO_TENTHS_PER_DRAW,
   MOMENTUM_DAMAGE,
   ROOMS_PER_FLOOR,
@@ -15,16 +15,18 @@ import {
 } from "./content.js";
 import {
   blockedReason,
-  canEndTurn,
   chooseReward,
   createCrawlState,
+  descend,
   drawCreditsAvailable,
-  drawExtraCard,
-  endTurn,
   energyAvailable,
+  intervalsElapsed,
+  msUntilNextSwing,
   playCard,
+  refillFromCredits,
   restartRun,
   setWard,
+  tickClock,
 } from "./engine.js";
 import type { CrawlContext, CrawlState } from "./types.js";
 
@@ -52,9 +54,9 @@ function withHand(state: CrawlState, hand: string[]): CrawlState {
   return { ...state, hand };
 }
 
-/** Pretend a card was already played, so the enemy is allowed to swing. */
-function armed(state: CrawlState): CrawlState {
-  return { ...state, playedThisTurn: true };
+/** Let `intervals` swing intervals elapse and resolve whatever the clock owes. */
+function after(state: CrawlState, intervals: number, over: Partial<CrawlContext> = {}) {
+  return tickClock(state, ctx({ nowMs: NOW + intervals * ENEMY_SWING_INTERVAL_MS, ...over }));
 }
 
 describe("createCrawlState", () => {
@@ -67,6 +69,11 @@ describe("createCrawlState", () => {
     expect(state.hp).toBe(START_HP);
   });
 
+  it("starts the swing clock at the moment the run begins", () => {
+    expect(fresh().lastSwingMs).toBe(NOW);
+    expect(intervalsElapsed(fresh(), ctx())).toBe(0);
+  });
+
   it("is deterministic for a given seed", () => {
     expect(createCrawlState(99, NOW, TODAY).hand).toEqual(createCrawlState(99, NOW, TODAY).hand);
   });
@@ -74,7 +81,7 @@ describe("createCrawlState", () => {
 
 describe("energy", () => {
   it("is today's earned gold minus what the run already spent", () => {
-    const state = withHand(fresh(), ["strike", "strike", "guard", "guard"]);
+    const state = withHand(fresh(), ["strike", "strike", "guard"]);
     expect(energyAvailable(state, ctx())).toBe(25);
     const played = playCard(state, 0, ctx()).state;
     expect(played.energyUsed).toBe(getCard("strike")!.cost);
@@ -103,7 +110,7 @@ describe("energy", () => {
   });
 });
 
-describe("micro-gold draw credits", () => {
+describe("micro-gold slot refills", () => {
   const TENTHS = MICRO_TENTHS_PER_DRAW;
 
   it("is today's tenths over the ratio, minus what the run already drew", () => {
@@ -125,73 +132,64 @@ describe("micro-gold draw credits", () => {
     ).toBe(1);
   });
 
-  it("draws a card and spends exactly one credit", () => {
-    const state = withHand(fresh(), ["strike"]);
-    const { state: next, events } = drawExtraCard(state, ctx({ microTenthsToday: TENTHS }));
-    expect(next.hand).toHaveLength(2);
+  it("fills an empty slot and spends exactly one credit", () => {
+    const state = withHand(fresh(), ["strike", "guard"]);
+    const { state: next, events } = refillFromCredits(state, ctx({ microTenthsToday: TENTHS }));
+    expect(next.hand).toHaveLength(HAND_SIZE);
     expect(next.drawsUsed).toBe(1);
-    expect(events[0]).toMatchObject({ type: "cardDrawn", cardId: next.hand[1] });
+    expect(events[0]).toMatchObject({ type: "cardDrawn", cardId: next.hand[HAND_SIZE - 1] });
     expect(drawCreditsAvailable(next, ctx({ microTenthsToday: TENTHS }))).toBe(0);
   });
 
-  it("overflows past the turn refill — that is the whole effect", () => {
-    const full = fresh();
-    expect(full.hand).toHaveLength(HAND_SIZE);
-    const { state: next } = drawExtraCard(full, ctx({ microTenthsToday: TENTHS }));
-    expect(next.hand).toHaveLength(HAND_SIZE + 1);
+  it("fills every empty slot it can afford, in one go", () => {
+    const state = withHand(fresh(), []);
+    const { state: next } = refillFromCredits(state, ctx({ microTenthsToday: TENTHS * 2 }));
+    expect(next.hand).toHaveLength(2);
+    expect(next.drawsUsed).toBe(2);
   });
 
-  it("stops at HAND_LIMIT and keeps the unspent credit banked", () => {
-    // The row has to stay one row: five cards is what fits at 340px, so drawing
-    // past it would make the panel taller instead of better.
-    let state = fresh();
+  it("never grows the hand past HAND_SIZE, and banks the unspent credits", () => {
+    // Three cards is the hand, full stop: there is no overflow ceiling above it
+    // any more, so a pile of micro-actions cannot make the panel taller.
     const rich = ctx({ microTenthsToday: TENTHS * 6 });
-    for (let i = 0; i < 6; i += 1) state = drawExtraCard(state, rich).state;
-    expect(state.hand).toHaveLength(HAND_LIMIT);
-    // Refused before the credit was taken, so it is still there for later.
-    expect(state.drawsUsed).toBe(HAND_LIMIT - HAND_SIZE);
-    expect(drawCreditsAvailable(state, rich)).toBeGreaterThan(0);
+    const { state: next } = refillFromCredits(fresh(), rich);
+    expect(next.hand).toHaveLength(HAND_SIZE);
+    expect(next.drawsUsed).toBe(0);
+    expect(drawCreditsAvailable(next, rich)).toBe(6);
   });
 
-  it("a turn refill never reaches the overflow limit on its own", () => {
-    // Only micro-gold can push a hand to five; ending a turn tops up to four.
-    const emptied = { ...armed(fresh()), hand: [] };
-    expect(endTurn(emptied, ctx()).state.hand).toHaveLength(HAND_SIZE);
-  });
-
-  it("costs no energy and does not provoke the enemy", () => {
-    const state = fresh();
-    const { state: next } = drawExtraCard(state, ctx({ microTenthsToday: TENTHS }));
+  it("costs no energy and does not move the swing clock", () => {
+    const state = withHand(fresh(), ["strike"]);
+    const { state: next } = refillFromCredits(state, ctx({ microTenthsToday: TENTHS * 2 }));
     expect(next.energyUsed).toBe(state.energyUsed);
-    expect(next.playedThisTurn).toBe(false);
-    expect(canEndTurn(next)).toBe(false);
+    expect(next.lastSwingMs).toBe(state.lastSwingMs);
   });
 
-  it("refuses without a full credit", () => {
-    const state = fresh();
-    const result = drawExtraCard(state, ctx({ microTenthsToday: TENTHS - 1 }));
+  it("does nothing without a full credit", () => {
+    const state = withHand(fresh(), ["strike"]);
+    const result = refillFromCredits(state, ctx({ microTenthsToday: TENTHS - 1 }));
     expect(result.state).toEqual(state);
     expect(result.events).toHaveLength(0);
   });
 
-  it("still draws while a todo is pinned — a ward shields the enemy, it does not stop you", () => {
-    const warded = setWard(fresh(), "todo-1", "Finish the thing");
-    const result = drawExtraCard(warded, ctx({ microTenthsToday: TENTHS * 5, wardCleared: false }));
-    expect(result.state.drawsUsed).toBe(1);
-    expect(result.events).toContainEqual({ type: "cardDrawn", cardId: result.state.hand.at(-1) });
+  it("still refills while a todo is pinned — a ward shields the enemy, it does not stop you", () => {
+    const warded = setWard(withHand(fresh(), ["strike"]), "todo-1", "Finish the thing");
+    const result = refillFromCredits(warded, ctx({ microTenthsToday: TENTHS * 5, wardCleared: false }));
+    expect(result.state.drawsUsed).toBe(2);
+    expect(result.state.hand).toHaveLength(HAND_SIZE);
   });
 
-  it("does not burn the credit when there is nothing left to draw", () => {
-    const empty = { ...fresh(), drawPile: [], discard: [] };
-    const result = drawExtraCard(empty, ctx({ microTenthsToday: TENTHS }));
+  it("does not burn a credit when there is nothing left to draw", () => {
+    const empty = { ...fresh(), hand: ["strike"], drawPile: [], discard: [] };
+    const result = refillFromCredits(empty, ctx({ microTenthsToday: TENTHS }));
     expect(result.state.drawsUsed).toBe(0);
     expect(result.events).toHaveLength(0);
   });
 
   it("reshuffles the discard when the draw pile is dry", () => {
-    const state = { ...fresh(), drawPile: [], discard: ["ember", "hex"] };
-    const { state: next } = drawExtraCard(state, ctx({ microTenthsToday: TENTHS }));
-    expect(next.hand).toHaveLength(state.hand.length + 1);
+    const state = { ...fresh(), hand: ["strike"], drawPile: [], discard: ["ember", "hex"] };
+    const { state: next } = refillFromCredits(state, ctx({ microTenthsToday: TENTHS }));
+    expect(next.hand).toHaveLength(2);
     expect(next.discard).toHaveLength(0);
   });
 
@@ -210,6 +208,18 @@ describe("playCard", () => {
     expect(next.hand).toEqual(["guard"]);
     expect(next.discard).toEqual(["strike"]);
     expect(events[0]).toMatchObject({ type: "cardPlayed", damage: 6 });
+  });
+
+  it("leaves the empty slot alone — refilling is the caller's next step", () => {
+    // The engine keeps the two apart so the API can decide whether a credit is
+    // available. Nothing here silently conjures a card.
+    const state = withHand(fresh(), ["strike", "guard", "lunge"]);
+    expect(playCard(state, 0, ctx()).state.hand).toHaveLength(HAND_SIZE - 1);
+  });
+
+  it("does not move the swing clock: playing is not a turn", () => {
+    const state = withHand(fresh(), ["strike"]);
+    expect(playCard(state, 0, ctx()).state.lastSwingMs).toBe(state.lastSwingMs);
   });
 
   it("adds momentum damage when a todo was just completed", () => {
@@ -237,7 +247,7 @@ describe("playCard", () => {
 
   it("never draws past the hand cap", () => {
     const state = {
-      ...withHand(fresh(), ["scout", "strike", "guard", "lunge"]),
+      ...withHand(fresh(), ["scout", "strike", "guard"]),
       drawPile: ["strike", "strike", "strike"],
     };
     const next = playCard(state, 0, ctx()).state;
@@ -245,76 +255,105 @@ describe("playCard", () => {
   });
 });
 
-describe("enemy turns", () => {
-  it("spends block before HP", () => {
+describe("the swing clock", () => {
+  it("does nothing until a full interval has passed", () => {
+    const state = fresh();
+    const early = tickClock(state, ctx({ nowMs: NOW + ENEMY_SWING_INTERVAL_MS - 1 }));
+    expect(early.state).toEqual(state);
+    expect(early.events).toHaveLength(0);
+  });
+
+  it("swings once per interval and spends block before HP", () => {
     let state = withHand(fresh(), ["guard"]); // 5 block
     state = playCard(state, 0, ctx()).state;
     const attack = state.enemy!.attack;
-    const next = endTurn(state, ctx()).state;
+    const next = after(state, 1).state;
     expect(next.block).toBe(0);
     expect(next.hp).toBe(START_HP - Math.max(0, attack - 5));
   });
 
-  it("telegraphs a heavy hit and doubles it", () => {
-    let state = armed(fresh());
-    const attack = state.enemy!.attack;
-    expect(state.enemy!.turnsUntilHeavy).toBe(HEAVY_EVERY);
-    for (let i = 1; i < HEAVY_EVERY; i += 1) state = armed(endTurn(state, ctx()).state);
-    expect(state.enemy!.turnsUntilHeavy).toBe(1);
-    const before = state.hp;
-    const { state: hit, events } = endTurn(armed(state), ctx());
-    expect(before - hit.hp).toBe(attack * HEAVY_MULTIPLIER);
-    expect(events.some((e) => e.type === "playerHit" && e.heavy)).toBe(true);
-    expect(hit.enemy!.turnsUntilHeavy).toBe(HEAVY_EVERY);
+  it("refills the hand on the swing, for free", () => {
+    const state = { ...fresh(), hand: [], drawPile: ["strike", "guard", "lunge", "ward"] };
+    const next = after(state, 1).state;
+    expect(next.hand).toHaveLength(HAND_SIZE);
+    expect(next.drawsUsed).toBe(0);
+  });
+
+  it("advances the clock by whole intervals, so swings keep their cadence", () => {
+    // Not to `now`: opening the panel at 0:45 must not buy a fresh 30 minutes.
+    const state = fresh();
+    const next = tickClock(state, ctx({ nowMs: NOW + ENEMY_SWING_INTERVAL_MS * 1.5 })).state;
+    expect(next.lastSwingMs).toBe(NOW + ENEMY_SWING_INTERVAL_MS);
+    expect(msUntilNextSwing(next, ctx({ nowMs: NOW + ENEMY_SWING_INTERVAL_MS * 1.5 }))).toBe(
+      ENEMY_SWING_INTERVAL_MS / 2,
+    );
   });
 
   it("weaken softens the swing but never below 1", () => {
-    const state = armed({ ...fresh(), enemy: { ...fresh().enemy!, attack: 2, weakened: 10 } });
-    const next = endTurn(state, ctx()).state;
-    expect(START_HP - next.hp).toBe(1);
+    const state = { ...fresh(), enemy: { ...fresh().enemy!, attack: 2, weakened: 10 } };
+    expect(START_HP - after(state, 1).state.hp).toBe(1);
   });
 
   it("ends the run at zero HP and counts the loss", () => {
-    const state = armed({ ...fresh(), hp: 1 });
-    const { state: dead, events } = endTurn(state, ctx());
+    const { state: dead, events } = after({ ...fresh(), hp: 1 }, 1);
     expect(dead.status).toBe("dead");
     expect(dead.hp).toBe(0);
     expect(dead.meta.runsLost).toBe(1);
     expect(events.some((e) => e.type === "died")).toBe(true);
   });
 
-  it("never forces a turn: an energy-less player just stops, they do not lose", () => {
-    // With no energy and no free cards, the fight simply pauses. Nothing in the
-    // engine advances it, so an unproductive week cannot kill a run.
-    const state = withHand(fresh(), ["strike", "strike", "lunge", "guard"]);
-    const result = playCard(state, 0, ctx({ goldEarnedToday: 0 }));
-    expect(result.state).toEqual(state);
+  it("caps full-strength swings at MAX_PENDING_SWINGS, then bleeds", () => {
+    // The soft cap is the reason a calendar cannot end a run. An afternoon out
+    // costs two real hits and then a trickle, not one hit every half hour.
+    const state = fresh();
+    const attack = state.enemy!.attack;
+    const intervals = MAX_PENDING_SWINGS + 6;
+    const { state: next, events } = after(state, intervals);
+    const swings = events.filter((e) => e.type === "playerHit").length;
+    const bleeds = events.filter((e) => e.type === "bled").length;
+    expect(swings).toBe(MAX_PENDING_SWINGS);
+    expect(bleeds).toBe(6);
+    expect(START_HP - next.hp).toBe(attack * MAX_PENDING_SWINGS + BLEED_DAMAGE * 6);
   });
 
-  it("refuses to swing until the player has played something", () => {
-    // The death spiral this closes: drawing needs a turn, a turn costs HP, so a
-    // player with no energy could otherwise be ground down doing nothing.
-    const idle = fresh();
-    expect(canEndTurn(idle)).toBe(false);
-    const result = endTurn(idle, ctx());
-    expect(result.state).toEqual(idle);
-    expect(result.events).toHaveLength(0);
+  it("bleeds slowly enough that a six-hour absence is survivable on any floor", () => {
+    // The guard behind the cap's tuning: the boss hits hardest, so if the boss
+    // fight survives half a day away, every fight does.
+    const boss = { ...fresh(), enemy: { ...fresh().enemy!, attack: 11, boss: true } };
+    const sixHours = (6 * 60 * 60 * 1000) / ENEMY_SWING_INTERVAL_MS;
+    const next = after(boss, sixHours).state;
+    expect(next.status).toBe("fighting");
+    expect(next.hp).toBeGreaterThan(0);
   });
 
-  it("arms the enemy the moment a card is played, and disarms it after the swing", () => {
-    const played = playCard(withHand(fresh(), ["strike"]), 0, ctx()).state;
-    expect(canEndTurn(played)).toBe(true);
-    const after = endTurn(played, ctx()).state;
-    expect(after.playedThisTurn).toBe(false);
-    expect(canEndTurn(after)).toBe(false);
+  it("a full night alone ends a deep run, but spares the opening fight", () => {
+    // The other half of the tuning: an abandoned fight is not a safe one. The
+    // curve falls out of the swing cap rather than being written anywhere —
+    // two hits off a boss is most of the pool, two off a rat is nothing — and
+    // that is the right shape. A newcomer's first fight forgives a night away;
+    // floor five does not.
+    const twelveHours = (12 * 60 * 60 * 1000) / ENEMY_SWING_INTERVAL_MS;
+    const boss = { ...fresh(), enemy: { ...fresh().enemy!, attack: 11, boss: true } };
+    expect(after(boss, twelveHours).state.status).toBe("dead");
+    expect(after(fresh(), twelveHours).state.status).toBe("fighting");
   });
 
-  it("cannot be ground down by repeated end-turn spam", () => {
-    let state = playCard(withHand(fresh(), ["strike"]), 0, ctx()).state;
-    const afterOne = endTurn(state, ctx()).state;
-    state = afterOne;
-    for (let i = 0; i < 20; i += 1) state = endTurn(state, ctx()).state;
-    expect(state.hp).toBe(afterOne.hp);
+  it("is frozen on every screen that is not a fight", () => {
+    // A player who leaves the panel on the reward screen owes nothing when they
+    // come back — the clock belongs to the enemy in front of them.
+    const week = (7 * 24 * 60 * 60 * 1000) / ENEMY_SWING_INTERVAL_MS;
+    for (const status of ["reward", "floorCleared", "dead", "victory"] as const) {
+      const parked = { ...fresh(), status, enemy: status === "reward" ? fresh().enemy : null };
+      expect(after(parked, week).state, status).toEqual(parked);
+    }
+  });
+
+  it("starts the next fight's clock fresh, not from the last one", () => {
+    const won = { ...fresh(), status: "reward" as const, rewardChoices: ["ward"], enemy: null };
+    const later = NOW + 5 * ENEMY_SWING_INTERVAL_MS;
+    const next = chooseReward(won, null, ctx({ nowMs: later })).state;
+    expect(next.lastSwingMs).toBe(later);
+    expect(intervalsElapsed(next, ctx({ nowMs: later }))).toBe(0);
   });
 });
 
@@ -358,17 +397,42 @@ describe("rewards and progression", () => {
     expect(chooseReward(won, notOffered, ctx()).state).toEqual(won);
   });
 
-  it("banks the floor when the last room of a floor falls", () => {
+  it("stops on the floor-cleared screen instead of walking straight into the next floor", () => {
+    // The panel has no permanent depth readout any more, so this screen is the
+    // one moment the run tells the player how deep they are. It has to be a
+    // stop, not a flash.
     let state = fresh();
     for (let i = 0; i < ROOMS_PER_FLOOR - 1; i += 1) {
       state = chooseReward(killEnemy(state), null, ctx()).state;
     }
-    const hurt = { ...killEnemy({ ...state, hp: 10 }) };
-    const { state: next, events } = chooseReward(hurt, null, ctx());
+    const { state: cleared, events } = chooseReward(killEnemy(state), null, ctx());
+    expect(cleared.status).toBe("floorCleared");
+    expect(cleared.enemy).toBeNull();
+    expect(cleared.floor).toBe(2);
+    expect(cleared.room).toBe(0);
+    expect(cleared.meta.bestFloor).toBe(2);
+    expect(events.some((e) => e.type === "floorCleared")).toBe(true);
+  });
+
+  it("descend opens the first room of the banked floor at full HP", () => {
+    let state = fresh();
+    for (let i = 0; i < ROOMS_PER_FLOOR - 1; i += 1) {
+      state = chooseReward(killEnemy(state), null, ctx()).state;
+    }
+    const cleared = chooseReward(killEnemy({ ...state, hp: 4 }), null, ctx()).state;
+    const later = NOW + 9 * ENEMY_SWING_INTERVAL_MS;
+    const next = descend(cleared, ctx({ nowMs: later })).state;
+    expect(next.status).toBe("fighting");
     expect(next.floor).toBe(2);
     expect(next.room).toBe(0);
     expect(next.hp).toBe(next.maxHp);
-    expect(events.some((e) => e.type === "floorCleared")).toBe(true);
+    expect(next.hand).toHaveLength(HAND_SIZE);
+    expect(next.lastSwingMs).toBe(later);
+  });
+
+  it("descend does nothing from anywhere else", () => {
+    const state = fresh();
+    expect(descend(state, ctx()).state).toEqual(state);
   });
 
   it("restores full HP on entering any room, so HP is a per-fight resource", () => {
@@ -412,7 +476,6 @@ describe("todo wards", () => {
   it("still lets every action through while the todo is outstanding", () => {
     const warded = pinned();
     expect(playCard(warded, 0, outstanding).state).not.toEqual(warded);
-    expect(endTurn(armed(warded), outstanding).state).not.toEqual(armed(warded));
     const atReward = { ...warded, status: "reward" as const, rewardChoices: ["ward"] };
     expect(chooseReward(atReward, null, outstanding).state.room).not.toBe(warded.room);
   });
@@ -425,10 +488,10 @@ describe("todo wards", () => {
     expect(after.enemy!.maxHp - after.enemy!.hp).toBe(strike - WARD_AMOUNT);
   });
 
-  it("regenerates the shield on the enemy's turn — progress cannot be banked", () => {
+  it("regenerates the shield on the enemy's swing — progress cannot be banked", () => {
     const broken = playCard(pinned(), 0, outstanding).state;
     expect(broken.enemy!.ward).toBe(0);
-    expect(endTurn(broken, outstanding).state.enemy!.ward).toBe(WARD_AMOUNT);
+    expect(after(broken, 1, { wardCleared: false }).state.enemy!.ward).toBe(WARD_AMOUNT);
   });
 
   it("shatters the shield the moment the todo is done", () => {
@@ -440,8 +503,9 @@ describe("todo wards", () => {
   });
 
   it("stops regenerating once the todo is done", () => {
-    const warded = armed(pinned());
-    expect(endTurn(warded, ctx()).state.enemy!.ward).toBe(0);
+    expect(after(pinned(), 1).state.enemy!.ward).toBe(WARD_AMOUNT);
+    // syncWard runs on the player's next action, which is what actually clears it.
+    expect(playCard(pinned(), 0, ctx()).state.enemy!.ward).toBe(0);
   });
 
   it("retires the ward when the player moves to the next room", () => {
@@ -475,6 +539,14 @@ describe("restartRun", () => {
     expect(next.meta).toEqual(dead.meta);
   });
 
+  it("starts the swing clock fresh, so a restart is not instantly hit", () => {
+    const dead = { ...fresh(), status: "dead" as const, lastSwingMs: NOW - 99 * ENEMY_SWING_INTERVAL_MS };
+    const later = NOW + 4 * ENEMY_SWING_INTERVAL_MS;
+    const next = restartRun(dead, 555, later, TODAY).state;
+    expect(next.lastSwingMs).toBe(later);
+    expect(intervalsElapsed(next, ctx({ nowMs: later }))).toBe(0);
+  });
+
   it("starts the new day clean when the restart crosses midnight", () => {
     const dead = { ...fresh(), status: "dead" as const, energyUsed: 12 };
     const next = restartRun(dead, 555, NOW, "2026-08-10").state;
@@ -484,33 +556,23 @@ describe("restartRun", () => {
 
 describe("draw pile", () => {
   it("reshuffles the discard when the draw pile runs dry", () => {
-    const state = armed({
-      ...fresh(),
-      hand: [],
-      drawPile: [],
-      discard: ["strike", "guard", "lunge"],
-    });
-    const next = endTurn(state, ctx()).state;
-    // The hand refills, so all three come back out of the reshuffled discard.
+    const state = { ...fresh(), hand: [], drawPile: [], discard: ["strike", "guard", "lunge"] };
+    const next = after(state, 1).state;
+    // The swing refills the hand, so all three come back out of the reshuffle.
     expect(next.hand).toHaveLength(3);
     expect(next.drawPile.length + next.discard.length).toBe(0);
   });
 
   it("refills the hand rather than topping it up by one", () => {
-    const state = armed({
-      ...fresh(),
-      hand: ["strike"],
-      drawPile: ["guard", "lunge", "ward", "hex"],
-      discard: [],
-    });
-    const next = endTurn(state, ctx()).state;
+    const state = { ...fresh(), hand: ["strike"], drawPile: ["guard", "lunge", "ward"], discard: [] };
+    const next = after(state, 1).state;
     expect(next.hand).toHaveLength(HAND_SIZE);
     // The card that was already in hand is still there — nothing is discarded.
     expect(next.hand[0]).toBe("strike");
   });
 
   it("does not hang when there is nothing left to draw", () => {
-    const state = armed({ ...fresh(), hand: [], drawPile: [], discard: [] });
-    expect(endTurn(state, ctx()).state.hand).toEqual([]);
+    const state = { ...fresh(), hand: [], drawPile: [], discard: [] };
+    expect(after(state, 1).state.hand).toEqual([]);
   });
 });

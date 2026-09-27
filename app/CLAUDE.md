@@ -43,7 +43,7 @@ Individual rows with full CRUD:
 | `get_gold` | Returns the current `GoldState` (`gold` balance + `rewardedTodoIds`). |
 | `list_gold_activity` | Read the gold-activity ledger — what actually earned/spent gold, with per-entry `delta`, `createdAt`, `sourceType`, and `label`. Returns `earnedToday`, `balance`, and `days` (grouped by local day, newest first). `days`: how many recent days (default 7, max 365). `since` (ISO 8601): also returns `sinceEntries` (flat list, `createdAt >= since`) and `earnedSince` (sum of their positive deltas) — use to reconcile UI completions into a session footer. |
 | `award_gold` | Add gold. Requires `amount` (non-negative integer). Optional: `title` — records a named achievement in the daily/shareable log (omit for a silent balance-only bump); `category` — `"Tasks"` \| `"Habits"` \| `"Encouragements"` \| `"Micro"` (small engagement rewards; collapsed into one running "⚡ Micro actions" total in the Tasks section of the log) (unknown/missing → `"Other"`); `source` — which agent submitted it (e.g. `"claude-code"`); `timestamp` — ISO 8601 to backdate; `with_sound: true` plays the gold coin sound — see the caveat below. |
-| `award_micro` | Record micro-actions in **tenths** of a gold — the fast sub-tick between finished todos. Requires `tenths` (positive integer). Optional `label`, `source`, `with_sound`. Ten tenths **roll over into 1 real gold automatically** (do not follow up with `award_gold`); every `MICRO_TENTHS_PER_DRAW` (3) buys one extra card draw in The Crawl. Unspent tenths expire at midnight. Returns `tenths`, `goldPaid` (today's rollover watermark), `goldAwarded` (paid by this call), and the resulting `gold`. |
+| `award_micro` | Record micro-actions in **tenths** of a gold — the fast sub-tick between finished todos. Requires `tenths` (positive integer). Optional `label`, `source`, `with_sound`. Ten tenths **roll over into 1 real gold automatically** (do not follow up with `award_gold`); every `MICRO_TENTHS_PER_DRAW` (3) buys one card refill in The Crawl. Unspent tenths expire at midnight. Returns `tenths`, `goldPaid` (today's rollover watermark), `goldAwarded` (paid by this call), and the resulting `gold`. |
 | `spend_gold` | Deduct gold (clamps at zero, never negative). Requires `amount`. Optional `with_sound` like above. |
 
 **`with_sound` caveat:** it broadcasts a `play_sound` event over the API's
@@ -56,7 +56,7 @@ event was introduced and nothing removed it.
 
 | Tool | Purpose |
 |------|---------|
-| `get_crawl` | Read the run: floor/room, HP, current enemy, hand and deck, energy left today, `drawCredits` / `microTenthsToday` (extra draws bought by `award_micro`), and any pinned todo (`ward`, plus the enemy's remaining shield in `state.enemy.ward`). |
+| `get_crawl` | Read the run: floor/room, HP, current enemy, hand and deck, energy left today, `drawCredits` / `microTenthsToday` (card refills bought by `award_micro`), `msUntilSwing` (the enemy's clock), and any pinned todo (`ward`, plus the enemy's remaining shield in `state.enemy.ward`). |
 | `ward_crawl_on_todo` | Pin a todo to the run. While it is not `done` the **current enemy is warded**: it absorbs `WARD_AMOUNT` (5) damage, refilled every enemy turn. Nothing is blocked — cards still play, rooms still open. Finishing it shatters the shield immediately. Pass `todo_id: null` to clear. Create the todo with `create_todo` first. |
 
 The design in one line: **energy is the gold you earned today** (a mirror of the
@@ -64,6 +64,49 @@ ledger, expiring at midnight — playing never lowers the real balance), and
 **wards are todos**. Both are minted by real work only. Clearing the boss pays 10
 gold back into the ledger. See `shared/crawl-engine` for the rules and
 `pacing.test.ts` for the balance guards.
+
+**There are no turns — the enemy is on a wall clock.** It swings every
+`ENEMY_SWING_INTERVAL_MS` (30 min) whether or not anyone is watching, and the
+player plays whenever they like in between. "End turn" was a button whose only
+job was to ask the player to admit they were finished, which in a panel open for
+eight seconds at a time is a chore rather than a decision. `POST
+/api/crawl/end-turn` is gone.
+
+Nothing in the stack ticks: `runCrawlAction` resolves whatever the clock owes
+before every action *and every read*, so an idle panel discovers it was hit the
+next time it asks. That is why `getCrawlSnapshot()` is a mutation in disguise —
+do not "optimise" it into a pure read.
+
+**Absence is soft-capped.** The first `MAX_PENDING_SWINGS` (2) intervals owed are
+full-strength swings; every interval past that is `BLEED_DAMAGE` (1), which
+ignores block. Uncapped, a run would be decided by the player's calendar — every
+meeting over half an hour another full hit. Capped hard, an abandoned run would
+be perfectly safe forever, which is not a fight. The numbers are tuned against
+the 40 HP pool so a six-hour absence is survivable on every floor (worst case,
+the boss: 2x11 + 10 = 32) and a full night is not, on the deeper ones.
+`pacing.test.ts` guards both ends.
+
+**Clearing a floor is a screen, not a transition.** `chooseReward` on the last
+room of a floor lands on `status: "floorCleared"` and waits for `POST
+/api/crawl/descend`. The clock is frozen there (and on the reward screen), so it
+is a safe place to leave the run. This is the only place the run announces its
+depth — the compact panel dropped the permanent floor/room strip, because a
+number that is true all day says nothing while it is, and the moment it changes
+is worth a whole screen.
+
+**Micro-gold refills slots; it no longer has a button.** `award_micro` mints
+refill credits at 3 tenths each, and `runCrawlAction` spends them automatically
+on whatever hand slots are empty after an action. `POST /api/crawl/draw` is gone.
+A credit's only value was ever getting a card back sooner than the swing clock
+would, so making the user click for it was asking them to do the game's
+arithmetic. Cards still cost energy to play, so a day of nothing but
+micro-actions keeps a full hand and advances the run not at all;
+`pacing.test.ts` guards exactly that. **Micro buys OPTIONS, finished work buys
+POWER.**
+
+The hand is `HAND_SIZE` (3) slots, flat — there is no second, higher ceiling any
+more. Three is not a balance number: it is what lets each card be wide enough to
+read at a glance in a 340px panel.
 
 **Why a ward and not a lock.** This was a hard freeze until 2026-08-12: a pinned
 todo stopped every action. That got the incentive backwards — with the run frozen,
@@ -74,20 +117,8 @@ weight. Two guards in `pacing.test.ts` hold the line: a pinned run is never
 blocked, and a warded fight still progresses (just measurably slower). Nothing in
 the crawl freezes on a todo any more.
 
-**Micro-gold buys draws, not energy.** `award_micro` mints draw credits at 3
-tenths each, and spending one (`POST /api/crawl/draw`) pulls a card *above* the
-`HAND_SIZE` (4) a turn refills to — that overflow is the "extend your turn"
-effect. It costs no energy and does not give the enemy a turn. Cards still cost
-energy to play, so a day of nothing but micro-actions widens the hand and advances
-the run not at all; `pacing.test.ts` guards exactly that. Micro buys OPTIONS,
-finished work buys POWER.
-
-Draws stop at `HAND_LIMIT` (5) and refuse rather than spending the credit, so it
-stays banked. Five is not a balance number — it is what fits on one row at 340px,
-and a hand that wraps makes the window taller every time you draw.
-
 When suggesting sub-tasks in a session, `ward_crawl_on_todo` is how a suggestion
-becomes the thing that earns a good turn. It is now safe to use freely — a ward
+becomes the thing that earns a good hit. It is now safe to use freely — a ward
 the user never finishes costs them damage, not their run, and it retires by itself
 when they leave the room.
 
@@ -213,20 +244,20 @@ reasoning about a run:
 ```json
 {
   "floor": 1, "room": 0,
-  "status": "fighting | reward | dead | victory",
+  "status": "fighting | reward | floorCleared | dead | victory",
   "hp": 40, "maxHp": 40, "block": 0, "strength": 0,
-  "playedThisTurn": false,
+  "lastSwingMs": 1770000000000,
   "deck": ["strike", "..."], "hand": ["..."],
-  "enemy": { "name": "Cellar Rat", "hp": 18, "attack": 4, "ward": 0, "turnsUntilHeavy": 3, "boss": false },
+  "enemy": { "name": "Cellar Rat", "hp": 18, "attack": 4, "ward": 0, "boss": false },
   "energyDay": "YYYY-MM-DD", "energyUsed": 0, "drawsUsed": 0,
   "wardTodoId": "uuid | null", "wardTodoTitle": "string | null"
 }
 ```
 
 Two rules that are easy to get wrong: HP resets in full every room (it measures
-one fight, not the run), and the enemy only swings in response to a played card
-— `playedThisTurn: false` means nothing can hurt the player, so an idle run is
-never in danger.
+one fight, not the run), and `lastSwingMs` is the only wall-clock state in the
+engine — `status` other than `"fighting"` freezes it, so a run parked on the
+reward or floor-cleared screen owes nothing however long it sits there.
 
 `energyDay` covers both daily pools: `energyUsed` and `drawsUsed` are zeroed
 together when the day rolls over.

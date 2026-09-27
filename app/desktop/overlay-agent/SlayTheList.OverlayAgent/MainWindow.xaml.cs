@@ -71,6 +71,11 @@ public partial class MainWindow : Window
     // hotkeys are independent, so showing the crawl must not drag the gold chip
     // and bar on screen with it, and hiding the bar must not take the crawl down.
     private OverlayPanelWindow? _crawlWindow;
+    // The startup preference is acted on exactly once per launch. The overlay
+    // payload arrives on connect AND on every later mutation, so without this
+    // an API restart — or any todo the user ticks — would drag the window back
+    // up after they closed it.
+    private bool _crawlStartupHandled;
 
     [DllImport("winmm.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool PlaySound(string? soundName, IntPtr moduleHandle, uint soundFlags);
@@ -777,7 +782,26 @@ public partial class MainWindow : Window
         UpdateDetectionIndicator();
         UpdateGoldIndicator();
         UpdateBaseOverlay();
+        MaybeShowCrawlOnStartup();
         UpdateOverlayToggleHotkey();
+    }
+
+    /// <summary>Opens the Crawl once, on the first overlay payload of this
+    /// launch, if the user asked for it. Waiting for the payload rather than
+    /// opening in the constructor is deliberate: the payload only arrives once
+    /// the API is up, and the panel's own retry timer covers the web server
+    /// still starting behind it.</summary>
+    private void MaybeShowCrawlOnStartup()
+    {
+        if (_crawlStartupHandled || _lastOverlayState is null)
+        {
+            return;
+        }
+        _crawlStartupHandled = true;
+        if (_lastOverlayState.ShowCrawlOnStartup)
+        {
+            EnsureCrawlWindow().Show();
+        }
     }
 
     /// <summary>Registers (or re-registers) the global hotkeys. Called whenever
@@ -822,23 +846,29 @@ public partial class MainWindow : Window
     /// hotkey never takes the run away.</summary>
     private void ToggleCrawlPanel()
     {
+        var window = EnsureCrawlWindow();
+        if (window.IsVisible)
+        {
+            window.Hide();
+            return;
+        }
+
+        window.Show();
+    }
+
+    /// <summary>The Crawl window, created on first use. Its own drag grip and
+    /// its own remembered position — it does not dock to the bar, so it never
+    /// moves when the bar is toggled.</summary>
+    private OverlayPanelWindow EnsureCrawlWindow()
+    {
         if (_crawlWindow is null)
         {
             var webBaseUrl = Environment.GetEnvironmentVariable("SLAYTHELIST_WEB_URL") ?? "http://localhost:4000";
-            // Its own drag grip and its own remembered position — it does not
-            // dock to the bar, so it never moves when the bar is toggled.
             _crawlWindow = new OverlayPanelWindow(webBaseUrl, "The Crawl", "crawl-window.json");
             _crawlWindow.NavigatePanel("crawl");
             _crawlWindow.Closed += (_, _) => _crawlWindow = null;
         }
-
-        if (_crawlWindow.IsVisible)
-        {
-            _crawlWindow.Hide();
-            return;
-        }
-
-        _crawlWindow.Show();
+        return _crawlWindow;
     }
 
     /// <summary>Toggles the whole overlay — the Base/Friends bar and the gold

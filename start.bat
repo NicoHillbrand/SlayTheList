@@ -114,9 +114,14 @@ set "GUI_OVERLAY_FLAG="
 if "%HAS_OVERLAY%"=="1" set "GUI_OVERLAY_FLAG=-HasOverlay"
 start "" powershell -NoProfile -ExecutionPolicy Bypass -File "%APP%scripts\startup-status.ps1" -WebPort %WEB_PORT% -ApiPort 8788 %GUI_OVERLAY_FLAG%
 
-REM Open browser after a short delay (ping works in hidden consoles, timeout does not)
-ping 127.0.0.1 -n 4 >nul
-start "" "http://localhost:%WEB_PORT%"
+REM Open browser after a short delay (ping works in hidden consoles, timeout does not),
+REM unless Settings > Startup has the browser tab switched off.
+set "OPEN_BROWSER=true"
+for /f %%B in ('powershell -NoProfile -ExecutionPolicy Bypass -File "%APP%scripts\launcher-prefs.ps1" -Name openBrowserOnStartup -Root "%APP:~0,-1%"') do set "OPEN_BROWSER=%%B"
+if /I not "%OPEN_BROWSER%"=="false" (
+  ping 127.0.0.1 -n 4 >nul
+  start "" "http://localhost:%WEB_PORT%"
+)
 exit /b 0
 
 REM -- Desktop mode ----------------------------------------------------------

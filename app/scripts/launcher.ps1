@@ -316,6 +316,9 @@ $statusArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
 if ($HasOverlay) { $statusArgs += "-HasOverlay" }
 Start-Process powershell -ArgumentList $statusArgs
 
-# Open browser after a delay
-Start-Sleep -Seconds 3
-Start-Process "http://localhost:$WebPort"
+# Open browser after a delay, unless Settings > Startup says not to.
+$openBrowser = & (Join-Path $Root "scripts\launcher-prefs.ps1") -Name openBrowserOnStartup -Root $Root.TrimEnd('\')
+if ("$openBrowser".Trim() -ne 'false') {
+  Start-Sleep -Seconds 3
+  Start-Process "http://localhost:$WebPort"
+}

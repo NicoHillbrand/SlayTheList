@@ -3,6 +3,7 @@ using System.Net.Http;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.Json;
 using System.Windows.Forms;
 
 namespace SlayTheList.Launcher;
@@ -131,7 +132,14 @@ internal sealed class LauncherForm : Form
             _stopButton.Enabled = true;
 
             Log("Stack started successfully.");
-            OpenBrowser(GetWebAppUrl());
+            if (ShouldOpenBrowserOnStartup())
+            {
+                OpenBrowser(GetWebAppUrl());
+            }
+            else
+            {
+                Log("Browser tab skipped (Settings > Startup). Use Open to bring it up.");
+            }
         }
         catch (Exception ex)
         {
@@ -316,6 +324,50 @@ internal sealed class LauncherForm : Form
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Reads the browser-tab preference the API mirrors to disk for the
+    /// launchers, which run before it is up. See writeLauncherPrefs in
+    /// backend/api/src/store.ts. Anything unreadable means "open it", so a
+    /// missing file keeps the old behaviour.
+    /// </summary>
+    private bool ShouldOpenBrowserOnStartup()
+    {
+        if (_repoRoot is null)
+        {
+            return true;
+        }
+
+        string[] candidates =
+        [
+            Path.Combine(_repoRoot, "backend", "api", "data", "launcher-prefs.json"),
+            Path.Combine(_repoRoot, "data", "launcher-prefs.json"),
+        ];
+
+        foreach (var file in candidates)
+        {
+            if (!File.Exists(file))
+            {
+                continue;
+            }
+
+            try
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(file));
+                if (doc.RootElement.TryGetProperty("openBrowserOnStartup", out var value)
+                    && value.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                {
+                    return value.GetBoolean();
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"Could not read {Path.GetFileName(file)}: {ex.Message}");
+            }
+        }
+
+        return true;
     }
 
     private void OpenBrowser(string url)

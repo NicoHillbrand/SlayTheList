@@ -58,6 +58,16 @@ public sealed class OverlayPayload
     /// overlay first if it is hidden. Empty = no hotkey.</summary>
     [JsonPropertyName("crawlToggleHotkey")]
     public string CrawlToggleHotkey { get; set; } = string.Empty;
+
+    /// <summary>Whether the Crawl window opens by itself when the agent starts.
+    /// Unlike the bar and the gold chip this is not session state that the API
+    /// resets at boot — the Crawl window lives entirely in this process, so the
+    /// setting is read once, on the first payload of a launch.
+    /// Defaults to false rather than to the server's own default: a payload
+    /// without the field means an API that predates it, and a window nobody
+    /// asked for is a worse failure than one that did not open.</summary>
+    [JsonPropertyName("showCrawlOnStartup")]
+    public bool ShowCrawlOnStartup { get; set; }
 }
 
 public sealed class GameWindowHint

@@ -1,18 +1,21 @@
 /**
  * The Crawl — headless dungeon-crawler types.
  *
- * A run is a persistent object, not a session: it survives closing the app,
- * spans days, and can be left mid-fight without losing anything. That is the
- * whole point — the overlay is glanced at for seconds at a time, so no state
- * may depend on the player staying present.
+ * A run is a persistent object, not a session: it survives closing the app and
+ * spans days. The overlay is glanced at for seconds at a time, so nothing may
+ * depend on the player staying present — but time itself is no longer free. The
+ * enemy swings on a wall clock (see `lastSwingMs`), softly capped so an absence
+ * costs health rather than the run.
  *
  * Three scarce resources, all minted by real work and none by playing:
  *  - ENERGY pays for cards, and equals the gold you earned *today* (it expires
  *    at midnight and never banks). This is a mirror of the ledger, not a
  *    deduction: playing never lowers your real gold balance.
- *  - DRAW CREDITS pay for extra cards, and come from micro-actions measured in
- *    tenths of gold. They also expire at midnight. Micro buys OPTIONS (a wider
- *    hand); finished work buys POWER (the energy to play what's in it).
+ *  - DRAW CREDITS refill an empty hand slot the moment a card leaves it, and come
+ *    from micro-actions measured in tenths of gold. They also expire at midnight.
+ *    Micro buys OPTIONS (a hand that keeps up with you); finished work buys POWER
+ *    (the energy to play what is in it). Without a credit the slot simply waits
+ *    for the enemy's next swing, which refills the hand for free.
  *  - WARDS are specific todos the agent pins to the run. While a pinned todo is
  *    unfinished the ENEMY is warded — it carries a shield that comes back every
  *    turn — so the fight is expensive rather than impossible. Finishing the todo
@@ -53,7 +56,7 @@ export interface CrawlCard {
   cost: number;
   effect: CardEffect;
   rarity: CardRarity;
-  /** Single glyph used as the card's art in the 340px panel. */
+  /** Single glyph used as the card's art in the narrow panel. */
   glyph: string;
   /** One short line shown under the name. */
   text: string;
@@ -64,7 +67,12 @@ export interface EnemyState {
   glyph: string;
   hp: number;
   maxHp: number;
-  /** Damage per normal attack, before `weakened`. */
+  /**
+   * Damage per swing, before `weakened`. Every swing is this size — there is no
+   * telegraphed heavy any more. A heavy needed a countdown on screen to be fair,
+   * and the panel no longer has a row to spend on one; a single honest number
+   * next to the enemy's HP says everything the countdown used to.
+   */
   attack: number;
   /** Accumulated `weaken` from cards; subtracted from `attack`, floored at 1. */
   weakened: number;
@@ -79,12 +87,6 @@ export interface EnemyState {
    * your cards land. Clearing it shatters the ward on the spot.
    */
   ward: number;
-  /**
-   * Turns until the telegraphed heavy attack (HEAVY_MULTIPLIER x attack).
-   * Counts down on each enemy turn and resets to HEAVY_EVERY after it fires.
-   * Telegraphing is what makes a turn worth thinking about for three seconds.
-   */
-  turnsUntilHeavy: number;
   boss: boolean;
 }
 
@@ -101,10 +103,18 @@ export interface CrawlMeta {
 }
 
 export type CrawlStatus =
-  /** An enemy is alive and it is the player's turn. */
+  /** An enemy is alive. The swing clock runs only in this state. */
   | "fighting"
   /** Enemy dead, the player owes a one-click card pick before moving on. */
   | "reward"
+  /**
+   * The last room of a floor is done and the next floor is waiting on one
+   * click. This is the only place the run's depth is ever announced: the panel
+   * dropped the permanent "floor 2 / room 1" strip, because a number that is
+   * true all day is not worth the line it sits on, and the moment it CHANGES is
+   * the only moment it means anything.
+   */
+  | "floorCleared"
   /** Run over, the player died. Restarting is free. */
   | "dead"
   /** Boss cleared. */
@@ -130,16 +140,23 @@ export interface CrawlState {
   strength: number;
 
   /**
-   * Whether a card has been played since the last enemy swing.
+   * Wall-clock ms of the enemy's last resolved swing. Every ENEMY_SWING_INTERVAL_MS
+   * past it owes one more, resolved lazily whenever the run is next read.
    *
-   * The enemy only ever acts in RESPONSE to the player, never on a clock: with
-   * no card played, `endTurn` does nothing at all. Without this the game has a
-   * death spiral, because drawing requires ending a turn and ending a turn
-   * costs HP — so a player short on energy would be forced to bleed out doing
-   * nothing. Since energy is real work, that would mean a slow week kills the
-   * run, which is the opposite of what this game is for.
+   * This is the one place the engine is allowed to care about real time, and it
+   * replaced `playedThisTurn` — a flag that made the enemy respond to the player
+   * rather than to a clock. That was the right answer while there were turns:
+   * ending a turn cost HP and drawing required ending one, so a player short on
+   * energy would have been forced to bleed out doing nothing. With no turns
+   * there is nothing to end, so the pressure can come from time instead, and the
+   * soft cap (MAX_PENDING_SWINGS, then BLEED_DAMAGE) is what keeps a slow week
+   * from killing a run outright.
+   *
+   * Only meaningful while `status` is "fighting". Every path back into a fight
+   * stamps it fresh, so the clock is genuinely paused on the reward and
+   * floor-cleared screens rather than quietly accruing behind them.
    */
-  playedThisTurn: boolean;
+  lastSwingMs: number;
 
   /** Every card owned, including those in the piles. The run's identity. */
   deck: CardId[];
@@ -160,13 +177,14 @@ export interface CrawlState {
   /** Energy already spent today. Available = goldEarnedToday - energyUsed. */
   energyUsed: number;
   /**
-   * Extra cards already drawn today off micro-gold. Credits available =
+   * Slot refills already bought today off micro-gold. Credits available =
    * floor(microTenthsToday / MICRO_TENTHS_PER_DRAW) - drawsUsed.
    *
    * Counted separately from `energyUsed` because the two buy different things:
-   * spending energy is a move in the fight, spending a draw credit only widens
-   * the hand you make that move from. Keeping them apart is what stops a pile of
-   * micro-actions from substituting for finishing something.
+   * spending energy is a move in the fight, spending a draw credit only decides
+   * how soon you have a card to make that move with — the swing clock would have
+   * handed it over eventually for nothing. Keeping them apart is what stops a
+   * pile of micro-actions from substituting for finishing something.
    */
   drawsUsed: number;
 
@@ -213,7 +231,9 @@ export type CrawlEvent =
   /** An extra card pulled off a micro-gold draw credit, not off a turn. */
   | { type: "cardDrawn"; cardId: CardId }
   | { type: "enemySlain"; name: string; boss: boolean }
-  | { type: "playerHit"; amount: number; heavy: boolean }
+  | { type: "playerHit"; amount: number }
+  /** A bleed tick: the run was left alone past its swing budget. */
+  | { type: "bled"; amount: number }
   /** The pinned todo got done and the enemy's shield broke. */
   | { type: "wardShattered" }
   | { type: "floorCleared"; floor: number }
